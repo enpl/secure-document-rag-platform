@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:postgres}:${DB_PORT:5432}/${DB_NAME:sdv}
+    username: ${DB_USERNAME:sdv_user}
+    password: ${DB_PASSWORD:sdv_password}
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:29092}
+
+sdv:
+  keycloak:
+    issuer-uri: ${KEYCLOAK_ISSUER_URI:http://keycloak:8080/realms/sdv}
+    audience: ${KEYCLOAK_AUDIENCE:sdv-backend}
+
+  ai-service:
+    url: ${AI_SERVICE_URL:http://ai-service:8000}
+
+  ollama:
+    base-url: ${OLLAMA_BASE_URL:http://ollama:11434}
