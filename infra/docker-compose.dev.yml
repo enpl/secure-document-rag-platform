@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18
+    container_name: sdv-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: sdv
+      POSTGRES_USER: sdv_user
+      POSTGRES_PASSWORD: sdv_password
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - sdv-postgres-data:/var/lib/postgresql
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sdv_user -d sdv"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  kafka:
+    image: apache/kafka:4.3.1
+    container_name: sdv-kafka
+    restart: unless-stopped
+
+    ports:
+      - "9092:9092"
+
+    volumes:
+      - sdv-kafka-data:/var/lib/kafka/data
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.3
+    container_name: sdv-keycloak
+    restart: unless-stopped
+
+    command: start-dev
+
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+
+    ports:
+      - "8180:8080"
+
+    volumes:
+      - sdv-keycloak-data:/opt/keycloak/data
+volumes:
+  sdv-postgres-data:
+  sdv-kafka-data:
+  sdv-keycloak-data:
