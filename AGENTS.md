@@ -10,6 +10,50 @@
 - 최신 v3.2 상세명세를 최우선 Source of Truth로 사용
 - README와 상세명세가 충돌하면 v3.2 상세명세를 우선한다.
 
+## Specification Source of Truth
+
+SDV 기능의 Plan, 구현, 수정, 리뷰 전에 다음 순서로 확인한다.
+
+1. `docs/spec/SDV_v3.2_CORE_SPEC.md`
+2. `docs/spec/SDV_v3.2_FILE_MANIFEST.md`
+3. 관련 Flyway Migration
+4. 현재 Repository 구현 코드
+
+우선순위:
+
+1. `SDV_v3.2_CORE_SPEC.md`
+2. `SDV_v3.2_FILE_MANIFEST.md`
+3. 적용된 Flyway Schema
+4. `CLAUDE.md` / `AGENTS.md` 작업 규칙
+5. 현재 구현 코드
+6. README / 과거 문서
+7. Agent의 추측
+
+규칙:
+
+- v3.2 명세에 이미 정의된 package path, class/interface 이름, enum 값, 책임, 기능 범위, Phase를 임의로 변경하거나 재정의하지 않는다.
+- 현재 구현 코드와 v3.2 명세가 충돌하면 현재 코드가 정답이라고 가정하지 않는다. 차이를 사용자에게 먼저 보고한다.
+- 일반적인 Best Practice나 Hexagonal/DDD 관례가 v3.2 명세와 다르더라도 자동으로 새로운 계층이나 파일을 만들지 않는다.
+- 명세에 없는 새로운 Interface, Port, Adapter, Abstract Class, Repository 또는 Service가 필요하다고 판단하면 구현 전에 반드시 다음 형식으로 보고한다.
+
+  ```
+  SPEC GAP / DESIGN DECISION REQUIRED
+
+  Proposed file:
+  Reason:
+  Benefit:
+  Cost:
+  Existing v3.2 alternative:
+  ```
+
+- 특히 현재 v3.2에는 `SourceConnectionRepository`와 `SourceConnectionPersistenceAdapter`가 공식 파일로 정의되어 있지 않으므로 임의 생성하지 않는다.
+- `SourcePersistenceMapper`의 공식 위치는 `com.sdv.source.infrastructure.persistence.mapper`이다.
+- Google Drive infrastructure의 공식 위치는 `com.sdv.source.infrastructure.google`이다.
+- 구현 전에 항상 실제 Repository를 먼저 조사한다.
+- 존재하지 않는 파일이나 구조를 추측하지 않는다.
+- 적용된 Flyway Migration은 수정하지 않는다.
+- 명세가 불명확하면 추측 대신 명세 공백으로 보고한다.
+
 ## 기술 스택
 
 - Java 21
