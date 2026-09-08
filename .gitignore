@@ -68,3 +68,6 @@ Thumbs.db
 # Python virtual environment files
 ai-service/.venv
 ./venv
+
+# Local AI handoff reports
+.claude-handoff/
