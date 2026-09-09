@@ -465,6 +465,30 @@ DB schema
 - 작업 완료 후 변경 파일, 변경 이유, 테스트 결과, 남은 작업을 보고한다.
 - 다음과 같은 오래된 가정을 되풀이하지 않는다: PDF 전용 문서 처리, Prompt Injection을 선택적 확장으로 취급, 범용 Chatbot 가정, Client가 LLM Provider를 선택하는 방식, 과거(구) Development Order.
 
+### Mandatory Claude Handoff
+
+- Claude Code로 수행하는 모든 작업은 종료 시, 사용자에게 최종 응답을 보내기 전에 `.claude-handoff/latest.md`를 해당 작업의 최신 결과로 덮어쓴다.
+- 이 규칙은 구현, Plan 수립, 읽기 전용 조사, 코드 Review, 분석, 검증, 문서 작업뿐 아니라 실패한 작업, 차단된(Blocked) 작업, Repository에 아무 변경도 없는 작업에도 동일하게 적용된다.
+- 작업이 "읽기 전용" 또는 "Repository 파일을 수정하지 않음"으로 지정되었더라도, 사용자가 Handoff 파일 쓰기를 명시적으로 금지하지 않는 한, 지정된 보고 산출물인 `.claude-handoff/latest.md` 갱신은 항상 허용된다.
+- `.claude-handoff/latest.md`는 Git에서 Ignore되는 작업용(Working) Handoff이며, Stage하거나 Commit하지 않는다.
+- Handoff에는 다음을 포함한다.
+  - 작업 제목과 상태(Status)
+  - 날짜와 시간
+  - 확인 가능한 경우 현재 Branch와 HEAD
+  - 요청사항과 작업 범위
+  - 추가·수정·삭제된 파일, 그리고 의도적으로 변경하지 않은 파일
+  - 실제로 실행한 명령과 테스트
+  - 결과와 실패 내용
+  - 관련된 경우 보안, DB, Migration, Regression 영향
+  - 가정(Assumption)과 명시적인 미검증(Unverified) 주장
+  - 남은 작업(Remaining Work)
+  - 권장 다음 단계(Recommended Next Steps)
+  - 관련된 경우 Git Commit 범위와 시점
+- 비밀번호, 토큰, Secret 값, 문서 원문 또는 그 밖의 민감정보를 Handoff에 저장하지 않는다.
+- 해당 작업에서 실제로 실행하지 않은 테스트나 명령을 실행했다고 보고하지 않는다.
+- Claude가 Handoff 파일을 작성할 수 없는 경우, 최종 응답에 정확한 사유를 명시하고, 작성했어야 할 Handoff 전체 내용을 응답에 그대로 제공한다.
+- Claude의 최종 응답에는 Handoff 파일 갱신 여부와 경로를 명시한다.
+
 ## Learning Rule
 
 - 새로운 JPA, Flyway, Spring Security, Kafka, Kubernetes 패턴을 도입할 때는 왜 필요한지 간단히 설명한다.
