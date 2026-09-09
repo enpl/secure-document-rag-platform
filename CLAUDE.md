@@ -426,17 +426,22 @@ DB schema
 
 현재 활성 작업은 여전히 `Environment / Specification Alignment`이다.
 
-잔여 작업:
+잔여 작업 상태:
 
-1. `AGENTS.md` / `CLAUDE.md` 동기화 — 본 작업
-2. `.env.example` 최종화
-3. datasource 설정 drift 해결 — canonical Excel은 `SPRING_DATASOURCE_*`, 현재 YAML(`application-local.yml`, `application-compose.yml`)은 여전히 `DB_*` 사용
-4. 루트 `compose.yaml` 정렬 (현재 저장소 루트에 `compose.yaml`이 존재하지 않음 — F-INF-001과 차이가 있어 별도 확인 필요)
-5. 메인 애플리케이션 클래스명을 `SecureDocumentVaultApplication`으로 변경 (현재 `com.sdv.BackendApplication`)
-6. Repository Markdown Spec(`docs/spec/SDV_v3.2_CORE_SPEC.md`, `SDV_v3.2_FILE_MANIFEST.md`)의 `DOCUMENTATION DRIFT` 해소 — 최신 Excel과 재동기화
-7. 이후 V003 Migration 시작
+1. `AGENTS.md` / `CLAUDE.md` 동기화 — DONE
+2. `.env.example` 최종화 — DONE
+3. datasource 자격증명/설정 drift 해결 — DONE (`SPRING_DATASOURCE_*`/`SPRING_FLYWAY_*`로 정리, `sdv_user`(bootstrap/local Flyway)와 `sdv`(제한된 runtime) 권한 분리 포함)
+4. 루트 `compose.yaml` canonical entrypoint 추가 — 기존 PostgreSQL/Kafka/Keycloak 3-service baseline 대상으로 이번 작업에서 DONE.
+   - `compose.yaml`은 `name: infra` + `include: [./infra/docker-compose.dev.yml]`로 기존 `infra/docker-compose.dev.yml`을 그대로 위임하며, 서비스 정의를 이동·복제하지 않고 `infra`/`infra_sdv-postgres-data` 등 기존 Project/Resource 이름을 정적으로 보존한다(`docker compose config` 정적 검증으로 확인).
+   - Ollama 및 Backend/AI Service/Frontend 등 Application 서비스는 여전히 F-INF-001의 미완료(incremental) 작업이다.
+   - `application-compose.yml`이 기대하는 `kafka:29092`와 현재 `infra/docker-compose.dev.yml`의 `9092:9092` 설정 불일치는 아직 해소되지 않았다.
+   - 이번 작업에서 Compose Runtime 실행(`up`/`start`/`build` 등)이나 기존 Volume에 대한 어떤 작업도 수행하지 않았다 — `docker compose config` 등 정적 검증만 수행했다.
+   - F-INF-001 전체가 완료된 것으로 간주하지 않는다.
+5. 메인 애플리케이션 클래스명을 `SecureDocumentVaultApplication`으로 변경 (현재 `com.sdv.BackendApplication`) — NEXT
+6. Repository Markdown Spec(`docs/spec/SDV_v3.2_CORE_SPEC.md`, `SDV_v3.2_FILE_MANIFEST.md`)의 `DOCUMENTATION DRIFT` 해소 — 최신 Excel과 재동기화 — remaining
+7. 이후 V003 Migration 시작 — Environment / Specification Alignment 완료 이후
 
-2~7번 항목은 이 작업(AGENTS.md/CLAUDE.md 동기화)에서 수행하지 않는다.
+5~7번 항목은 이 작업(루트 `compose.yaml` canonical entrypoint 추가)에서 수행하지 않는다.
 
 ## Git Workflow
 
