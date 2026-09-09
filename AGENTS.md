@@ -437,11 +437,11 @@ DB schema
    - `application-compose.yml`이 기대하는 `kafka:29092`와 현재 `infra/docker-compose.dev.yml`의 `9092:9092` 설정 불일치는 아직 해소되지 않았다.
    - 이번 작업에서 Compose Runtime 실행(`up`/`start`/`build` 등)이나 기존 Volume에 대한 어떤 작업도 수행하지 않았다 — `docker compose config` 등 정적 검증만 수행했다.
    - F-INF-001 전체가 완료된 것으로 간주하지 않는다.
-5. 메인 애플리케이션 클래스명을 `SecureDocumentVaultApplication`으로 변경 (현재 `com.sdv.BackendApplication`) — NEXT
-6. Repository Markdown Spec(`docs/spec/SDV_v3.2_CORE_SPEC.md`, `SDV_v3.2_FILE_MANIFEST.md`)의 `DOCUMENTATION DRIFT` 해소 — 최신 Excel과 재동기화 — remaining
+5. 메인 애플리케이션 클래스명을 `SecureDocumentVaultApplication`으로 변경 — 이번 작업에서 DONE (F-BE-001에 맞춰 `backend/src/main/java/com/sdv/SecureDocumentVaultApplication.java` / `backend/src/test/java/com/sdv/SecureDocumentVaultApplicationTests.java`로 Rename, 패키지·동작·`@SpringBootTest`/`@Import(TestcontainersConfiguration.class)`/`contextLoads()` 유지, 이전 메인 클래스는 남아있지 않음)
+6. Repository Markdown Spec(`docs/spec/SDV_v3.2_CORE_SPEC.md`, `SDV_v3.2_FILE_MANIFEST.md`)의 `DOCUMENTATION DRIFT` 해소 — 최신 Excel과 재동기화 — NEXT
 7. 이후 V003 Migration 시작 — Environment / Specification Alignment 완료 이후
 
-5~7번 항목은 이 작업(루트 `compose.yaml` canonical entrypoint 추가)에서 수행하지 않는다.
+6~7번 항목은 이 작업(메인 애플리케이션 클래스명 `SecureDocumentVaultApplication` 변경)에서 수행하지 않는다.
 
 ## Git Workflow
 
