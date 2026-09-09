@@ -13,7 +13,7 @@ import org.springframework.context.annotation.Import;
  */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
-class BackendApplicationTests {
+class SecureDocumentVaultApplicationTests {
 
     @Test
     void contextLoads() {
