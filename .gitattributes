@@ -1,0 +1,5 @@
+# Narrowly scoped to what SDV PostgreSQL account-separation actually needs.
+# infra/initdb/*.sh is executed (or sourced) by the official PostgreSQL image's
+# entrypoint inside a Linux container; a POSIX shell rejects a CRLF-terminated
+# shebang/script. Force LF regardless of core.autocrlf on any checkout.
+infra/initdb/*.sh text eol=lf

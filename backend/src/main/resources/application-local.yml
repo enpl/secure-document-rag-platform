@@ -1,8 +1,19 @@
 spring:
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:sdv}
-    username: ${DB_USERNAME:sdv_user}
-    password: ${DB_PASSWORD:sdv_password}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/sdv}
+    username: ${SPRING_DATASOURCE_USERNAME:sdv}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+
+  # sdv_user는 기존 bootstrap 관리자이자 로컬 Flyway Migration 식별자로 유지된다.
+  # 런타임 애플리케이션 커넥션(spring.datasource)과는 별도 자격증명이다.
+  # NOTE: 이는 로컬 개발 한정 타협이다 - 애플리케이션 프로세스가 자신의 설정/메모리 안에
+  # sdv_user(보존된 Bootstrap Superuser - sdv보다 넓은 권한이 아니라 실제 Superuser) 자격증명을
+  # 함께 들고 있게 된다.
+  # 운영 환경에서는 Migration을 애플리케이션이 받지 않는 별도 프로세스/CI 단계로 분리해야 한다.
+  flyway:
+    user: ${SPRING_FLYWAY_USER:sdv_user}
+    password: ${SPRING_FLYWAY_PASSWORD}
+    locations: classpath:db/migration,classpath:db/callback
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}

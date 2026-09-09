@@ -6,14 +6,25 @@ services:
 
     environment:
       POSTGRES_DB: sdv
+      # POSTGRES_USER는 컨테이너 초기화 시 undemotable bootstrap superuser가 된다.
+      # 이 값을 런타임 역할(sdv)로 바꾸면 sdv가 superuser가 되어 최소 권한 요구사항과
+      # 충돌하므로 sdv_user로 유지한다. 제한된 런타임 역할 sdv는
+      # infra/initdb/10-create-runtime-role.sh가 별도로 생성한다.
       POSTGRES_USER: sdv_user
-      POSTGRES_PASSWORD: sdv_password
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
 
     ports:
       - "5432:5432"
 
     volumes:
       - sdv-postgres-data:/var/lib/postgresql
+      # 최초(빈 데이터 디렉터리) 기동 시에만 실행된다. 이미 데이터가 있는 볼륨에는
+      # 자동으로 재실행되지 않는다 - infra/secrets/README.md의 복구 절차 참고.
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+
+    secrets:
+      - postgres_password
+      - sdv_runtime_password
 
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sdv_user -d sdv"]
@@ -50,3 +61,9 @@ volumes:
   sdv-postgres-data:
   sdv-kafka-data:
   sdv-keycloak-data:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  sdv_runtime_password:
+    file: ./secrets/sdv_runtime_password.txt
