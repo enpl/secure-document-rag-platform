@@ -19,14 +19,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * backend/src/main/resources/db/callback/afterMigrate__grant_runtime_privileges.sql
- * (실제 운영 콜백 파일, 수정 없이 그대로 사용)를 수정되지 않은 V001/V002와 함께
+ * (실제 운영 콜백 파일, 수정 없이 그대로 사용)를 수정되지 않은 V001/V002/V003과 함께
  * 격리된 disposable Testcontainers PostgreSQL/pgvector 위에서 검증한다.
  *
  * 기존 sdv-postgres 개발 컨테이너/볼륨은 절대 사용하지 않는다 - 이 클래스가 시작하는
  * 컨테이너는 이 테스트 전용이며 클래스 종료 시 자동으로 제거된다.
  *
  * 시나리오(요구된 "Existing-schema path"를 그대로 재현):
- *   1. classpath:db/migration 만으로 Flyway 실행 - V001/V002가 적용되지만
+ *   1. classpath:db/migration 만으로 Flyway 실행 - V001/V002/V003이 적용되지만
  *      아직 sdv 런타임 권한 부여(Grant)는 없다("기존 스키마, 아직 Runtime Grant 없음" 상태).
  *   2. sdv 역할을 생성한다(최소권한 - NOSUPERUSER/NOCREATEDB/NOCREATEROLE/
  *      NOREPLICATION/NOBYPASSRLS. 실제 fresh-volume 경로에서는
@@ -68,13 +68,13 @@ class RuntimeRoleGrantCallbackTest {
 
     @Test
     void existingSchemaReconciliationGrantsExactRuntimePrivileges() throws Exception {
-        // 1. 기존 스키마 상태 재현: 콜백 없이 V001/V002만 적용한다(수정 없는 실제 파일 사용).
+        // 1. 기존 스키마 상태 재현: 콜백 없이 V001/V002/V003만 적용한다(수정 없는 실제 파일 사용).
         Flyway migrationOnly = Flyway.configure()
                 .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
                 .locations("classpath:db/migration")
                 .load();
         MigrateResult firstResult = migrationOnly.migrate();
-        assertThat(firstResult.migrationsExecuted).isEqualTo(2);
+        assertThat(firstResult.migrationsExecuted).isEqualTo(3);
 
         // 2. sdv 역할 생성 (기존 DB에 대한 수동 Reconciliation 단계).
         try (Connection root = rootConnection(); Statement st = root.createStatement()) {
@@ -89,7 +89,7 @@ class RuntimeRoleGrantCallbackTest {
                 .load();
         MigrateResult secondResult = withCallback.migrate();
         assertThat(secondResult.migrationsExecuted)
-                .as("V001/V002 already applied - zero pending versioned migrations")
+                .as("V001/V002/V003 already applied - zero pending versioned migrations")
                 .isEqualTo(0);
 
         assertRuntimeGrantsAreExactlyAsExpected();

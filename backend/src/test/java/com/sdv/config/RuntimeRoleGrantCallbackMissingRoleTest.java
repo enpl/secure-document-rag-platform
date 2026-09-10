@@ -55,7 +55,7 @@ class RuntimeRoleGrantCallbackMissingRoleTest {
                 .locations("classpath:db/migration", "classpath:db/callback")
                 .load();
 
-        // sdv 역할이 존재하지 않는 상태에서 migrate()를 호출하면(V001/V002 자체는
+        // sdv 역할이 존재하지 않는 상태에서 migrate()를 호출하면(V001/V002/V003 자체는
         // 성공하지만, 콜백의 REVOKE ... FROM sdv가 실패해) FlywayException이 던져져야 한다.
         // 이는 Spring Boot 통합에서 Application Context Refresh 실패, 즉
         // "정상적인 Application Startup 실패"에 그대로 대응한다.
@@ -64,7 +64,7 @@ class RuntimeRoleGrantCallbackMissingRoleTest {
                         + "which is what Spring Boot's Flyway integration calls during context refresh")
                 .isInstanceOf(FlywayException.class);
 
-        // V001/V002 자체는 콜백 이전에 각각 독립적으로 Commit되므로 이미 적용되어 있어야 한다 -
+        // V001/V002/V003 자체는 콜백 이전에 각각 독립적으로 Commit되므로 이미 적용되어 있어야 한다 -
         // 즉 "스키마는 적용됐지만 Runtime Grant는 없는" 상태가 실제로 재현된다.
         try (Connection root = DriverManager.getConnection(
                 postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
@@ -76,7 +76,7 @@ class RuntimeRoleGrantCallbackMissingRoleTest {
                 assertThat(rs.getBoolean("success")).isTrue();
                 versions.add(rs.getString("version"));
             }
-            assertThat(versions).containsExactly("001", "002");
+            assertThat(versions).containsExactly("001", "002", "003");
 
             assertThat(st.executeQuery(
                             "SELECT count(*) FROM pg_roles WHERE rolname = 'sdv'").next())
