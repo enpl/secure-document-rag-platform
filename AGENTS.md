@@ -460,15 +460,38 @@ DB schema
 - 존재하지 않는 구조나 파일을 추측하지 않는다.
 - 구현 전에 Plan과 변경 예정 파일 목록을 먼저 제시한다.
 - 사용자의 승인을 받은 범위만 수정한다.
-- 한 번에 최소 범위만 변경한다.
 - Architecture 또는 Dependency 변경은 반드시 먼저 설명하고 승인을 받는다.
-- 요청하지 않은 Refactoring을 하지 않는다.
 - 요청하지 않은 Dependency를 추가하지 않는다.
 - 자동으로 git add, commit, push 하지 않는다.
 - git reset --hard, force push, history rewrite, branch 강제 삭제를 하지 않는다.
 - destructive command가 필요하면 실행 전에 이유를 설명하고 승인을 요청한다.
 - 작업 완료 후 변경 파일, 변경 이유, 테스트 결과, 남은 작업을 보고한다.
 - 다음과 같은 오래된 가정을 되풀이하지 않는다: PDF 전용 문서 처리, Prompt Injection을 선택적 확장으로 취급, 범용 Chatbot 가정, Client가 LLM Provider를 선택하는 방식, 과거(구) Development Order.
+
+### Behavioral Coding Discipline
+
+아래 네 가지 원칙을 작업 전반에 적용한다.
+
+1. Think Before Coding
+   - 가정(Assumption)을 명시적으로 서술한다.
+   - 모호함이 결과를 실질적으로 바꿀 수 있으면, 수정 전에 먼저 질문한다.
+   - 여러 해석이 모두 유효하면 임의로 하나를 선택하지 않고 관련 선택지를 제시한다.
+
+2. Simplicity First
+   - 요청된 작업 범위만 구현한다.
+   - 투기적(Speculative) 유연성, 설정(Configuration), 추상화, 불필요한 예외 처리를 추가하지 않는다.
+   - 성공 기준을 만족하는 가장 작은 해법을 선호한다.
+
+3. Surgical Changes
+   - 요청이 요구하는 파일과 라인만 변경한다.
+   - 정상 동작하는 코드를 Refactoring하거나, 주변 내용을 재포맷하거나, 관련 없는 주석을 다시 쓰거나, 관련 없는 Dead Code를 제거하지 않는다.
+   - 변경된 모든 라인은 현재 작업(Task)으로 추적 가능해야 한다.
+
+4. Goal-Driven Execution
+   - 편집 전에 요청을 명시적이고 검증 가능한 성공 기준으로 변환한다.
+   - 여러 단계로 이루어진 작업은 각 단계마다 검증 조건을 정의한다.
+   - 성공 기준이 충족되거나 구체적인 Blocker가 확인될 때까지 계속한다.
+   - 실제로 수행하지 않은 검증을 완료했다고 주장하지 않는다.
 
 ### Mandatory Claude Handoff
 
