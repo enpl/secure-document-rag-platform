@@ -5,6 +5,7 @@ import com.sdv.audit.domain.AuditEvent;
 import com.sdv.common.logging.SensitiveLogFilter;
 import com.sdv.common.trace.TraceIdFilter;
 import org.slf4j.MDC;
+import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -17,10 +18,12 @@ import java.util.Map;
  * 사용하며, metadata 값은 {@link SensitiveLogFilter}로 위생 처리한 뒤에만
  * {@link AuditEvent}에 담는다(INV-AUD-001).</p>
  *
- * <p>이 클래스는 아직 Spring Bean으로 등록하지 않는다 - {@link AuditEventPort}를
- * 구현하는 Persistence Adapter가 아직 존재하지 않기 때문이다(M02 범위 밖, 의도적
- * 지연). Adapter가 추가되는 작업에서 {@code @Service}를 부여하고 실제로 연결한다.</p>
+ * <p>M02에서는 {@link AuditEventPort}를 구현하는 Persistence Adapter가 없어
+ * Spring Bean으로 등록하지 않았다. M03에서
+ * {@code com.sdv.audit.infrastructure.persistence.AuditLogPersistenceAdapter}가
+ * 추가되어 {@code @Service}로 등록한다 - 인증/인가 거부 감사를 영속화하기 위함이다.</p>
  */
+@Service
 public class AuditService {
 
     private final AuditEventPort auditEventPort;

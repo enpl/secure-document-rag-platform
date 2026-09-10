@@ -7,10 +7,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -28,6 +31,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestcontainersConfiguration.class)
+// M03이 추가한 SecurityConfig가 sdv.keycloak.issuer-uri/audience를 요구하므로
+// (application.yml 기본 프로파일에는 값이 없음), 전체 Context 기동을 위해 최소
+// Placeholder 값을 지정한다 - 이 테스트의 검증 대상(Health 응답 내용)은 바뀌지 않는다.
+@TestPropertySource(properties = {
+        "sdv.keycloak.issuer-uri=http://localhost:8180/realms/sdv",
+        "sdv.keycloak.audience=sdv-backend"
+})
 class AdminHealthEndpointTest {
 
     @Autowired
@@ -35,7 +45,11 @@ class AdminHealthEndpointTest {
 
     @Test
     void adminHealthReturnsTraceIdAndNeverFabricatesUnimplementedDependencies() throws Exception {
-        MvcResult result = mockMvc.perform(get("/api/admin/health"))
+        // M03이 /api/admin/health를 ADMIN 전용으로 보호한다 - 이 테스트가 검증하는
+        // 대상(Health 응답 내용)은 그대로이며, 요청에 ADMIN 인증을 추가했을 뿐이다.
+        MvcResult result = mockMvc.perform(get("/api/admin/health")
+                        .with(jwt().jwt(builder -> builder.subject("admin-health-test"))
+                                .authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))))
                 .andExpect(status().isOk())
                 .andReturn();
 
