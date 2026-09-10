@@ -32,11 +32,13 @@ class SourceConnectionJpaRepositoryTest {
 
     @Test
     void savesAndFindsSourceConnectionById() {
+        // M04: 생성자가 owner_subject(V004, 계정 격리)를 추가로 받는다.
         SourceConnectionEntity entity = new SourceConnectionEntity(
                 "GOOGLE_DRIVE",
                 "Marketing Google Drive",
                 "ACTIVE",
-                "INCREMENTAL"
+                "INCREMENTAL",
+                "owner-subject-repo-test"
         );
 
         SourceConnectionEntity saved = sourceConnectionJpaRepository.saveAndFlush(entity);
@@ -51,5 +53,6 @@ class SourceConnectionJpaRepositoryTest {
         assertThat(found.getDisplayName()).isEqualTo("Marketing Google Drive");
         assertThat(found.getStatus()).isEqualTo("ACTIVE");
         assertThat(found.getSyncMode()).isEqualTo("INCREMENTAL");
+        assertThat(found.getOwnerSubject()).isEqualTo("owner-subject-repo-test");
     }
 }

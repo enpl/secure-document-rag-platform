@@ -46,19 +46,30 @@ public class SourceConnectionEntity {
     @Column(name = "last_sync_at")
     private Instant lastSyncAt;
 
+    // 인증된 Keycloak sub(F-BE-008 UserContext.subject) - 계정 격리(Account
+    // Isolation)의 신뢰 기준. API 요청에서 받지 않는다(V004).
+    @Column(name = "owner_subject", nullable = false, length = 255)
+    private String ownerSubject;
+
     protected SourceConnectionEntity() {
         // JPA
     }
 
-    public SourceConnectionEntity(String type, String displayName, String status, String syncMode) {
+    public SourceConnectionEntity(String type, String displayName, String status, String syncMode,
+            String ownerSubject) {
         this.type = type;
         this.displayName = displayName;
         this.status = status;
         this.syncMode = syncMode;
+        this.ownerSubject = ownerSubject;
     }
 
     public Long getId() {
         return id;
+    }
+
+    public String getOwnerSubject() {
+        return ownerSubject;
     }
 
     public String getType() {

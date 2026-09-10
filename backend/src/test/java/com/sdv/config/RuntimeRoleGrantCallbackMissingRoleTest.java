@@ -64,7 +64,7 @@ class RuntimeRoleGrantCallbackMissingRoleTest {
                         + "which is what Spring Boot's Flyway integration calls during context refresh")
                 .isInstanceOf(FlywayException.class);
 
-        // V001/V002/V003 자체는 콜백 이전에 각각 독립적으로 Commit되므로 이미 적용되어 있어야 한다 -
+        // V001~V004 자체는 콜백 이전에 각각 독립적으로 Commit되므로 이미 적용되어 있어야 한다 -
         // 즉 "스키마는 적용됐지만 Runtime Grant는 없는" 상태가 실제로 재현된다.
         try (Connection root = DriverManager.getConnection(
                 postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
@@ -76,7 +76,7 @@ class RuntimeRoleGrantCallbackMissingRoleTest {
                 assertThat(rs.getBoolean("success")).isTrue();
                 versions.add(rs.getString("version"));
             }
-            assertThat(versions).containsExactly("001", "002", "003");
+            assertThat(versions).containsExactly("001", "002", "003", "004");
 
             assertThat(st.executeQuery(
                             "SELECT count(*) FROM pg_roles WHERE rolname = 'sdv'").next())
