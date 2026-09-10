@@ -68,13 +68,13 @@ class RuntimeRoleGrantCallbackTest {
 
     @Test
     void existingSchemaReconciliationGrantsExactRuntimePrivileges() throws Exception {
-        // 1. 기존 스키마 상태 재현: 콜백 없이 V001/V002/V003만 적용한다(수정 없는 실제 파일 사용).
+        // 1. 기존 스키마 상태 재현: 콜백 없이 V001~V004만 적용한다(수정 없는 실제 파일 사용).
         Flyway migrationOnly = Flyway.configure()
                 .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
                 .locations("classpath:db/migration")
                 .load();
         MigrateResult firstResult = migrationOnly.migrate();
-        assertThat(firstResult.migrationsExecuted).isEqualTo(3);
+        assertThat(firstResult.migrationsExecuted).isEqualTo(4);
 
         // 2. sdv 역할 생성 (기존 DB에 대한 수동 Reconciliation 단계).
         try (Connection root = rootConnection(); Statement st = root.createStatement()) {
@@ -180,9 +180,12 @@ class RuntimeRoleGrantCallbackTest {
             long generatedId;
             try (Statement st = sdv.createStatement()) {
                 // Identity 컬럼 INSERT - sdv에는 어떤 Sequence 권한도 없다.
+                // owner_subject: V004(M04)의 chk_source_connection_owner_subject를 만족시킨다
+                // (이 테스트의 목적은 DML 권한 검증이지 M04 비즈니스 로직 검증이 아니다).
                 var rs = st.executeQuery(
-                        "INSERT INTO source_connections (type, display_name, status, sync_mode) "
-                                + "VALUES ('LOCAL_VAULT', 'callback-test', 'ACTIVE', 'FULL') RETURNING id");
+                        "INSERT INTO source_connections (type, display_name, status, sync_mode, owner_subject) "
+                                + "VALUES ('LOCAL_VAULT', 'callback-test', 'ACTIVE', 'FULL', 'owner-callback-test') "
+                                + "RETURNING id");
                 rs.next();
                 generatedId = rs.getLong(1);
                 assertThat(generatedId).isPositive();

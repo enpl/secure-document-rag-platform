@@ -27,6 +27,7 @@ public class GlobalExceptionHandler {
 
     private static final String VALIDATION_ERROR = "VALIDATION_ERROR";
     private static final String INTERNAL_ERROR = "INTERNAL_ERROR";
+    private static final String NOT_FOUND = "NOT_FOUND";
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
@@ -36,6 +37,13 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ConstraintViolationException.class)
     public ResponseEntity<ApiErrorResponse> handleConstraintViolation(ConstraintViolationException ex) {
         return respond(HttpStatus.BAD_REQUEST, VALIDATION_ERROR, "Request validation failed.");
+    }
+
+    // M04: Owner-Scoped 조회 실패를 "존재하지 않음"과 "다른 계정 소유"를 구분하지
+    // 않는 동일한 404로 변환한다 - Cross-Account 존재 여부를 노출하지 않는다.
+    @ExceptionHandler(NotFoundException.class)
+    public ResponseEntity<ApiErrorResponse> handleNotFound(NotFoundException ex) {
+        return respond(HttpStatus.NOT_FOUND, NOT_FOUND, "The requested resource was not found.");
     }
 
     @ExceptionHandler(Exception.class)

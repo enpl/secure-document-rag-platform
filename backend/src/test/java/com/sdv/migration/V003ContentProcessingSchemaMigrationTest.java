@@ -67,7 +67,9 @@ class V003ContentProcessingSchemaMigrationTest {
 
     @Test
     void emptyDatabaseMigratesThroughV003() throws SQLException {
-        flywayTo(null).migrate();
+        // V004(M04)가 이후에 추가되었으므로, "latest"가 아니라 V003까지로 명시적으로
+        // 고정한다 - 이 테스트의 의도(V001~V003 검증)는 이후 Migration과 무관해야 한다.
+        flywayTo(MigrationVersion.fromVersion("3")).migrate();
 
         try (Connection connection = connect()) {
             assertThat(appliedVersions(connection)).containsExactly("001", "002", "003");
@@ -114,7 +116,9 @@ class V003ContentProcessingSchemaMigrationTest {
             checksumsBeforeV003 = schemaHistoryChecksums(connection);
         }
 
-        flywayTo(null).migrate();
+        // V004(M04)가 이후에 추가되었으므로, "latest"가 아니라 V003까지로 명시적으로
+        // 고정한다 - 이 테스트의 의도(V002→V003 검증)는 이후 Migration과 무관해야 한다.
+        flywayTo(MigrationVersion.fromVersion("3")).migrate();
 
         try (Connection connection = connect()) {
             assertThat(appliedVersions(connection)).containsExactly("001", "002", "003");
@@ -182,7 +186,7 @@ class V003ContentProcessingSchemaMigrationTest {
         flywayTo(null).migrate();
 
         try (Connection connection = connect()) {
-            long sourceConnectionId = insertSourceConnection(connection);
+            long sourceConnectionId = insertSourceConnectionWithOwner(connection);
 
             for (String validStatus : VALID_INDEX_STATUSES) {
                 long id = insertSourceDocumentWithIndexStatus(
@@ -221,7 +225,7 @@ class V003ContentProcessingSchemaMigrationTest {
         flywayTo(null).migrate();
 
         try (Connection connection = connect()) {
-            long sourceConnectionId = insertSourceConnection(connection);
+            long sourceConnectionId = insertSourceConnectionWithOwner(connection);
             long sourceDocumentId = insertSourceDocument(connection, sourceConnectionId, "sdoc-locator");
             String embeddingLiteral = zeroVectorLiteral();
             int chunkIndex = 0;
@@ -331,6 +335,7 @@ class V003ContentProcessingSchemaMigrationTest {
         }
     }
 
+    /** V001/V002-only columns - used only by the pre-V004 (owner_subject does not exist yet) scenario. */
     private long insertSourceConnection(Connection connection) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO source_connections (type, display_name, status, sync_mode) "
@@ -339,6 +344,27 @@ class V003ContentProcessingSchemaMigrationTest {
             ps.setString(2, "M01 Migration Test Source");
             ps.setString(3, "ACTIVE");
             ps.setString(4, "INCREMENTAL");
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        }
+    }
+
+    /**
+     * M04(V004) 이후 스키마용 - owner_subject가 NOT VALID CHECK로 신규 행에
+     * 강제되므로, 최신 스키마를 대상으로 하는 테스트(index_status/locator_type
+     * 제약 검증)는 이 Helper를 사용한다.
+     */
+    private long insertSourceConnectionWithOwner(Connection connection) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO source_connections (type, display_name, status, sync_mode, owner_subject) "
+                        + "VALUES (?, ?, ?, ?, ?) RETURNING id")) {
+            ps.setString(1, "GOOGLE_DRIVE");
+            ps.setString(2, "M03 Migration Test Source");
+            ps.setString(3, "ACTIVE");
+            ps.setString(4, "INCREMENTAL");
+            ps.setString(5, "owner-subject-migration-test");
             try (ResultSet rs = ps.executeQuery()) {
                 rs.next();
                 return rs.getLong(1);

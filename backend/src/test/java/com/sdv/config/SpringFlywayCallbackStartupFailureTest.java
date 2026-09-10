@@ -109,8 +109,8 @@ class SpringFlywayCallbackStartupFailureTest {
                     .doesNotContain("BindException");
         });
 
-        // V001/V002/V003 자체는 콜백 이전에 각각 독립적으로 Commit되므로, 콜백이 실패해도
-        // 이미 적용되어 있어야 한다("스키마는 있지만 sdv 권한은 없는" 상태가 재현된다).
+        // V001/V002/V003/V004 자체는 콜백 이전에 각각 독립적으로 Commit되므로, 콜백이
+        // 실패해도 이미 적용되어 있어야 한다("스키마는 있지만 sdv 권한은 없는" 상태가 재현된다).
         try (Connection root = DriverManager.getConnection(
                 postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
              Statement st = root.createStatement()) {
@@ -121,7 +121,7 @@ class SpringFlywayCallbackStartupFailureTest {
                 assertThat(rs.getBoolean("success")).isTrue();
                 versions.add(rs.getString("version"));
             }
-            assertThat(versions).containsExactly("001", "002", "003");
+            assertThat(versions).containsExactly("001", "002", "003", "004");
         }
 
         // Control: sdv 역할을 준비(수동 Reconciliation)한 뒤, 완전히 동일한 구성으로
