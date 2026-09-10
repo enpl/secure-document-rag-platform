@@ -8,3 +8,15 @@ spring:
 
 server:
   port: 8080
+
+# F-BE-014/015(Admin Health)와는 별개로, Spring Boot 표준 Health 지원(DataSource 등)을
+# 위해 Actuator를 추가한다. health 엔드포인트만 web에 노출하고 상세 정보는 감춘다 -
+# 자격증명/환경변수/내부 예외 세부사항이 노출되지 않도록 한다.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
