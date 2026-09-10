@@ -73,3 +73,4 @@ ai-service/.venv
 
 # Local AI handoff reports
 .claude-handoff/
+docs/workmd

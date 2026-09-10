@@ -195,6 +195,8 @@ name
 mime
 version
 state
+indexStatus
+indexReason
 ```
 
 Related:
@@ -276,15 +278,51 @@ Type:
 
 Java Enum
 
+Responsibility:
+
+Source document lifecycle only, distinct from RAG/content indexing status (see `DocumentIndexStatus`, `F-BE-182`).
+
 Official values:
 
 ```java
-SYNCED
-READY
-STALE
+ACTIVE
 DELETED
-FAILED
 ```
+
+Related:
+
+SRC-004, SYN-004, RAG-008
+
+---
+
+## F-BE-182 — DocumentIndexStatus
+
+Path:
+
+`backend/src/main/java/com/sdv/source/domain/DocumentIndexStatus.java`
+
+Type:
+
+Java Enum
+
+Responsibility:
+
+RAG/content indexing status, distinct from `SourceDocumentState` (`F-BE-129`).
+
+Official values:
+
+```java
+PENDING
+INDEXED
+SKIPPED_UNSUPPORTED
+SKIPPED_NO_TEXT
+FAILED
+STALE
+```
+
+`SourceDocument` (`F-BE-020`) distinguishes `state` (`SourceDocumentState`) from `indexStatus` (`DocumentIndexStatus`) and `indexReason` (reason for `indexStatus`).
+
+`DocumentIndexStatus` belongs to `com.sdv.source.domain`; RAG may depend on Source, Source must not depend on RAG.
 
 Related:
 
@@ -686,7 +724,7 @@ Representative methods:
 
 ```text
 findBySourceAndSourceDocId
-findReadyIds
+findIndexEligibleIds
 ```
 
 Related:
@@ -1321,11 +1359,12 @@ PolicyCache
 ChatSessionEntity
 ChatMessageEntity
 ChatSessionService
-PromptSecurityService
 LlmTimeoutConfig
 AuditHashService
 SecurityDashboardController
 ```
+
+`PromptSecurityService` (File ID `F-BE-146`) is a Core MVP security control, not a deferred/extension file, and must not be classified as deferred-only. Its Core responsibility is to prevent direct and indirect prompt injection — including injection carried by retrieved content — from overriding ACL, Source permission, Overlay Policy, AI Usage Policy, provider-selection policy, System instructions, or Tool permissions. Its canonical path/package is not established by the sources reviewed for this correction; this is reported as an unresolved path, not invented.
 
 SharePoint and S3 Core work is contract/skeleton only.
 

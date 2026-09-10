@@ -324,7 +324,11 @@ Key concepts:
 - name
 - MIME type
 - source version
-- state
+- state (`SourceDocumentState`) — Source document lifecycle
+- indexStatus (`DocumentIndexStatus`) — RAG/content indexing status
+- indexReason — reason for the current indexStatus
+
+`state` and `indexStatus` are distinct concepts and must not be merged (see `SourceDocumentState` and `DocumentIndexStatus` below).
 
 Source-specific Google SDK objects must not leak into this class.
 
@@ -339,14 +343,44 @@ Location:
 Official values:
 
 ```java
-SYNCED
-READY
-STALE
+ACTIVE
 DELETED
-FAILED
 ```
 
-State transitions must not allow deleted/stale/failed documents to accidentally remain valid RAG candidates.
+`SourceDocumentState` represents only the Source document lifecycle. It must not be used to represent RAG/content indexing status.
+
+State transitions must not allow deleted documents, or documents whose current content is not `INDEXED`, to accidentally remain valid RAG candidates.
+
+### DocumentIndexStatus
+
+Location:
+
+`com.sdv.source.domain.DocumentIndexStatus`
+
+File ID: `F-BE-182`
+
+Type: Java Enum
+
+Official values:
+
+```java
+PENDING
+INDEXED
+SKIPPED_UNSUPPORTED
+SKIPPED_NO_TEXT
+FAILED
+STALE
+```
+
+`DocumentIndexStatus` represents RAG/content indexing status. It is a distinct concept from `SourceDocumentState` and must not be merged into it.
+
+`SourceDocument.java` distinguishes:
+
+- `state` — Source document lifecycle (`SourceDocumentState`)
+- `indexStatus` — RAG/content indexing status (`DocumentIndexStatus`)
+- `indexReason` — reason for the current `indexStatus`
+
+`DocumentIndexStatus` belongs to `com.sdv.source.domain`, not `com.sdv.rag.domain`. RAG may depend on the Source domain; Source must not depend on RAG. `com.sdv.rag.application`'s `ContentProcessingPolicy` may classify Source content into a `DocumentIndexStatus` value.
 
 ---
 
@@ -1077,14 +1111,19 @@ Source documents are:
 3. chunked,
 4. embedded,
 5. stored in pgvector,
-6. marked READY,
-7. searched only within permitted document scope.
+6. searched only within permitted document scope.
+
+A document is an eligible RAG retrieval candidate only when:
+
+- the source document is `ACTIVE`, and
+- its current content has `indexStatus = INDEXED`, and
+- permission and policy checks pass before retrieval.
 
 When Source version changes:
 
-re-index.
+the index becomes `STALE` before reprocessing.
 
-Only valid/READY documents should become RAG candidates.
+Unsupported or textless content must not produce chunks or embeddings.
 
 ---
 
