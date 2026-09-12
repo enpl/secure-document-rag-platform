@@ -74,7 +74,7 @@ class RuntimeRoleGrantCallbackTest {
                 .locations("classpath:db/migration")
                 .load();
         MigrateResult firstResult = migrationOnly.migrate();
-        assertThat(firstResult.migrationsExecuted).isEqualTo(4);
+        assertThat(firstResult.migrationsExecuted).isEqualTo(5);
 
         // 2. sdv 역할 생성 (기존 DB에 대한 수동 Reconciliation 단계).
         try (Connection root = rootConnection(); Statement st = root.createStatement()) {

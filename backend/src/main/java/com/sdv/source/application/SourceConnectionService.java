@@ -143,6 +143,13 @@ public class SourceConnectionService {
 
         entity.changeStatus(SourceConnection.STATUS_DISABLED);
         sourceDocumentJpaRepository.markAllActiveAsDeletedForSource(id);
+        // M06: 논리적 삭제는 FK ON DELETE CASCADE를 발동시키지 않으므로, 추출된
+        // 텍스트(document_extracted_content, V005)를 별도로 제거한다 - 같은
+        // Transaction 안에서 함께 Commit/Rollback된다. In-flight로 Claim된
+        // 시도가 있었더라도, 그 시도의 Publish 직전 재검증이 이 시점 이후의
+        // state=DELETED를 다시 읽으므로 텍스트를 되살리지 못한다
+        // (ContentExtractionService.finalizePublish 참고).
+        sourceDocumentJpaRepository.deleteExtractedContentForSource(id);
 
         auditService.record(ownerSubject, "SOURCE_DISCONNECTED", "source:" + id, SUCCESS, OK, Map.of());
     }
