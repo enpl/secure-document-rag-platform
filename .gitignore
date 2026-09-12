@@ -71,6 +71,11 @@ Thumbs.db
 ai-service/.venv
 ./venv
 
+# Python bytecode cache (M06 - ai-service now has real source under app/tests)
+__pycache__/
+*.pyc
+.pytest_cache/
+
 # Local AI handoff reports
 .claude-handoff/
 docs/workmd

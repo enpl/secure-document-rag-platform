@@ -50,7 +50,10 @@ class V004SourceAccountIsolationMigrationTest {
 
     @Test
     void emptyDatabaseMigratesThroughV004() throws SQLException {
-        flywayTo(null).migrate();
+        // V005(M06)가 추가된 뒤에도 이 테스트가 V004 자체의 동작만 안정적으로
+        // 검증하도록 target을 V004로 고정한다(이전에는 null=최신이었는데, V005가
+        // 추가되자 "latest"가 V005까지 포함하게 되어 이 Assertion이 깨졌다).
+        flywayTo(org.flywaydb.core.api.MigrationVersion.fromVersion("4")).migrate();
 
         try (Connection connection = connect()) {
             assertThat(appliedVersions(connection)).containsExactly("001", "002", "003", "004");
@@ -87,7 +90,9 @@ class V004SourceAccountIsolationMigrationTest {
             checksumsBeforeV004 = schemaHistoryChecksums(connection);
         }
 
-        flywayTo(null).migrate();
+        // V005(M06) 추가 이후에도 V004 자체 동작만 검증하도록 target을 고정한다
+        // (위 emptyDatabaseMigratesThroughV004와 동일한 이유).
+        flywayTo(org.flywaydb.core.api.MigrationVersion.fromVersion("4")).migrate();
 
         try (Connection connection = connect()) {
             assertThat(appliedVersions(connection)).containsExactly("001", "002", "003", "004");
