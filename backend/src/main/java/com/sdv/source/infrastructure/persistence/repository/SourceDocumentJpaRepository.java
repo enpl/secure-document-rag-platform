@@ -25,17 +25,24 @@ import java.util.Optional;
  * 컬럼만으로 JOIN한다) - {@code EffectivePermissionService}가 문서를 로드할 때
  * 다른 계정 소유 문서를 절대 반환하지 않는다.</p>
  *
- * <p>{@code updateIndexStatus}/{@code deleteExtractedContentForSource}는 M06이
- * 추가한 최소 메서드다. {@code deleteExtractedContentForSource}는 이 Source(RAG
- * 소유가 아닌 Source 소유) Repository 안에서 {@code document_extracted_content}
- * (V005, RAG 소유 테이블)를 테이블 이름만으로 참조하는 Native Query다 -
+ * <p>{@code updateIndexStatus}/{@code deleteEmbeddingIndexForSource}는 M06/M07A가
+ * 추가한 최소 메서드다. {@code deleteEmbeddingIndexForSource}는 이 Source(RAG
+ * 소유가 아닌 Source 소유) Repository 안에서 {@code document_embedding_index}
+ * (V006, RAG 소유 테이블)를 테이블 이름만으로 참조하는 Native Query다 -
  * Source 도메인 Java 코드가 {@code com.sdv.rag.*} 클래스를 Import하지 않는다는
  * 의존 방향 규칙(RAG는 Source에 의존할 수 있지만 반대는 안 됨)을 SQL 문자열
  * 수준에서만, 이 메서드 하나로 좁게 우회한다 - 기존 {@code markAllActiveAsDeletedForSource}
  * (논리적 삭제, Bulk UPDATE)가 FK {@code ON DELETE CASCADE}를 발동시키지 않으므로,
- * Disconnect 시 추출된 텍스트를 정리할 다른 방법이 없기 때문이다
+ * Disconnect 시 Embedding Index 행을 정리할 다른 방법이 없기 때문이다
  * ({@code SourceConnectionService.disconnect}가 두 메서드를 같은 Transaction
  * 안에서 함께 호출한다).</p>
+ *
+ * <p><b>M07A 교정:</b> 이 메서드는 원래 {@code document_extracted_content}
+ * (V005)를 대상으로 하는 {@code deleteExtractedContentForSource}였다. V006이
+ * 그 테이블 자체를 (구조와 데이터 모두) 제거했으므로, 같은 역할을
+ * {@code document_embedding_index}(V006)를 대상으로 하도록 이름과 SQL을
+ * 함께 교정했다 - Disconnect가 더 이상 존재하지 않는 테이블을 참조하면
+ * Application이 Runtime에 그 지점에서 실패한다.</p>
  */
 public interface SourceDocumentJpaRepository extends JpaRepository<SourceDocumentEntity, Long> {
 
@@ -87,32 +94,38 @@ public interface SourceDocumentJpaRepository extends JpaRepository<SourceDocumen
             @Param("indexReason") String indexReason);
 
     /**
-     * M06 후속 교정. {@code ContentExtractionService.finalizePublish}가 발행
-     * 직전 재검증(ACTIVE 상태 등)에 쓰는 행 단위 비관적 쓰기 Lock(
-     * {@code SELECT ... FOR UPDATE}) 조회다. 이 Lock은 같은 행을 바꾸려는
-     * 동시 {@code SourceConnectionService.disconnect}(Bulk UPDATE)의 해당
-     * 행 변경을 이 Transaction이 끝날 때까지 대기시켜, "발행 직전 읽은 상태"와
-     * "실제 발행이 반영되는 시점" 사이에 Disconnect가 끼어들 수 있는 경쟁을
-     * 없앤다(단순 SELECT 뒤에 별도 UPDATE를 하는 것만으로는 그 사이의 끼어듦을
-     * 막지 못한다). Lock 대상은 {@code source_documents} 행 하나뿐이다 -
-     * Disconnect가 먼저 {@code source_connections}를, 그 다음 {@code source_documents}를
-     * 바꾸는 순서와 겹치는 두 번째 단계에서만 만나므로 Lock 순서 역전으로 인한
-     * Deadlock 위험이 없다({@code source_connections}는 여기서 Lock을 걸지
-     * 않는다).
+     * M06이 추가한 행 단위 비관적 쓰기 Lock({@code SELECT ... FOR UPDATE})
+     * 조회 - 원래 목적은 {@code ContentExtractionService.finalizePublish}가
+     * 발행 직전 재검증(ACTIVE 상태 등)과 실제 발행 사이에 동시
+     * {@code SourceConnectionService.disconnect}(Bulk UPDATE)가 끼어드는
+     * 경쟁을 막는 것이었다.
+     *
+     * <p><b>M07A 교정 - 현재 상태(정확한 서술):</b> V006이 {@code
+     * document_extracted_content}를 제거하면서 {@code ContentExtractionService}의
+     * Claim/Fetch/Parse/Publish 로직 전체({@code finalizePublish} 포함)가
+     * 함께 제거됐다 - 이 메서드는 현재 어떤 호출자도 없다(더 이상 쓰이지
+     * 않는다는 뜻이지, 잘못됐다는 뜻이 아니다). Lock 자체의 의미(같은
+     * {@code source_documents} 행을 두고 Disconnect의 Bulk UPDATE와 경쟁하는
+     * 것을 막는다는 것, {@code source_connections}는 여기서 Lock을 걸지
+     * 않으므로 Lock 순서 역전 위험이 없다는 것)는 여전히 유효하며, M11이
+     * 실제 발행/재인덱싱 Orchestration을 구현할 때 그대로 재사용할 수 있게
+     * 남겨둔다 - 지금 이 메서드를 지우거나 지어낸 호출자를 붙이지 않는다.</p>
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT e FROM SourceDocumentEntity e WHERE e.id = :documentId")
     Optional<SourceDocumentEntity> findByIdForUpdate(@Param("documentId") Long documentId);
 
     /**
-     * M06 - Source Disconnect(논리적 삭제) 시 이 Source에 속한 모든 문서의
-     * 추출된 텍스트를 제거한다. {@code markAllActiveAsDeletedForSource}(Bulk
-     * UPDATE)는 FK {@code ON DELETE CASCADE}를 발동시키지 않으므로 별도로
-     * 호출해야 한다 - 클래스 Javadoc의 의존 방향 설명 참고.
+     * M06/M07A - Source Disconnect(논리적 삭제) 시 이 Source에 속한 모든
+     * 문서의 Embedding Index 행을 제거한다. {@code markAllActiveAsDeletedForSource}
+     * (Bulk UPDATE)는 FK {@code ON DELETE CASCADE}를 발동시키지 않으므로
+     * 별도로 호출해야 한다 - 클래스 Javadoc의 의존 방향 설명 참고. (M07A
+     * 교정: V006 이전에는 {@code document_extracted_content}를 대상으로 했다
+     * - 그 테이블은 V006이 제거했다.)
      */
     @Modifying
-    @Query(value = "DELETE FROM document_extracted_content "
+    @Query(value = "DELETE FROM document_embedding_index "
             + "WHERE document_id IN (SELECT id FROM source_documents WHERE source_id = :sourceId)",
             nativeQuery = true)
-    int deleteExtractedContentForSource(@Param("sourceId") Long sourceId);
+    int deleteEmbeddingIndexForSource(@Param("sourceId") Long sourceId);
 }

@@ -222,7 +222,12 @@ class V003ContentProcessingSchemaMigrationTest {
 
     @Test
     void locatorTypeAcceptsNullAndCanonicalValuesAndRejectsInvalid() throws SQLException {
-        flywayTo(null).migrate();
+        // M07A(V006)이 document_chunks 자체를 제거했으므로, 이 Test가 검증하려는
+        // 테이블은 더 이상 "latest"에 존재하지 않는다 - V006 이전(V005까지)으로
+        // 명시적으로 고정한다. V003까지만으로는 부족하다: 아래에서 쓰는
+        // insertSourceConnectionWithOwner()가 V004가 추가한 owner_subject
+        // 컬럼을 요구한다(Class Javadoc 참고) - 그래서 "3"이 아니라 "5"다.
+        flywayTo(MigrationVersion.fromVersion("5")).migrate();
 
         try (Connection connection = connect()) {
             long sourceConnectionId = insertSourceConnectionWithOwner(connection);

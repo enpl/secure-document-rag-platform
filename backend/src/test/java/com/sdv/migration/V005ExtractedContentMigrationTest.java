@@ -129,9 +129,14 @@ class V005ExtractedContentMigrationTest {
     }
 
     private Flyway flyway() {
+        // M07A(V006)이 document_extracted_content 자체를 제거했으므로, 이
+        // Test 파일은 V005가 그 테이블을 만든 시점의 Schema를 검증하기 위해
+        // 명시적으로 V005까지만 Migrate한다("latest" = 이제 V006이라 이
+        // 테이블이 없다) - V001~V005 자체는 여전히 수정하지 않는다.
         FluentConfiguration configuration = Flyway.configure()
                 .dataSource(container.getJdbcUrl(), container.getUsername(), container.getPassword())
-                .locations("classpath:db/migration");
+                .locations("classpath:db/migration")
+                .target(org.flywaydb.core.api.MigrationVersion.fromVersion("5"));
         return configuration.load();
     }
 
