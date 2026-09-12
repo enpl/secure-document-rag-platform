@@ -22,6 +22,10 @@ The original master remains:
 
 `Secure_Document_Vault_v3.2_Cloud_상세기능_파일통합명세.xlsx`
 
+**v1.4 frozen amendment (current authoritative Excel):** `SDV_v3.2_전체상세명세_MVP동결_v1.4_원본비보관_개정본.xlsx` — Google Drive as sole system of record, no persistent original/plaintext content, Metadata/ACL Catalog + embedding-only index, mandatory live retrieval per request. Full contract detail lives in `docs/spec/SDV_v3.2_CORE_SPEC.md` §2A. This manifest is amended below to align existing IDs with that contract and to add the small number of new files it introduces (§37). All existing IDs are preserved unchanged and the manifest is not renumbered.
+
+The v1.4 master inventory contains 117 feature IDs, including 68 rows whose phase is `MVP`, 309 file IDs, 58 validation IDs, and 34 constraints. These are inventory counts, not implementation completion percentages.
+
 ---
 
 # 2. Interpretation Rules
@@ -136,9 +140,9 @@ Related:
 
 SRC-001, SRC-002
 
-Core rule:
+Core rule (v1.4 — `CORE_SPEC.md` §2A.1):
 
-Only Google Drive and Local Vault receive full Core implementations.
+Only Google Drive receives a full Core implementation and remains the system of record. ~~Local Vault~~ is EXCLUDED / RETIRED at v1.4 (§15 below) — the enum value may remain for schema/historical traceability only, never for new functionality.
 
 ---
 
@@ -360,6 +364,8 @@ Related:
 SRC-001
 
 Technology types from Google, AWS, JPA, or HTTP must not leak into this Port.
+
+**v1.4 update (`CORE_SPEC.md` §2A.1, §2A.5):** the active Core implementation of this Port is `GoogleDriveConnector` only. `fetchContent` is invoked per-request for Mandatory Live Retrieval (bounded stream, pre/post version+access verification), not to populate a durable content store. A `LocalVaultConnector` implementation is EXCLUDED / RETIRED (§15).
 
 ---
 
@@ -858,6 +864,8 @@ Related:
 
 SRC-004, SRC-005, SRC-006
 
+**v1.4 update (`CORE_SPEC.md` §2A.5, §2A.11):** this is the sole active Core `DocumentSourceConnector` implementation. `fetchContent` must be called only as part of the Mandatory Live Retrieval cycle (bounded stream, pre-fetch and post-fetch access/version verification as the current user) — never to populate a durable content cache.
+
 ---
 
 ## F-BE-041 — GoogleDriveClient
@@ -888,6 +896,8 @@ Related:
 SRC-004, SRC-005, SRC-006
 
 Google SDK/HTTP dependency remains here.
+
+**v1.4 update (`CORE_SPEC.md` §2A.7):** `files.export` for Google Workspace documents is limited to 10 MB synchronously. For a larger document, use a supported long-running `files.download`/revision flow, or return `EXPORT_LIMIT_EXCEEDED`. Never treat a partial export as a complete document, and never persist the export.
 
 ---
 
@@ -1032,6 +1042,8 @@ Related:
 
 SRC-006
 
+**v1.4 update (`CORE_SPEC.md` §2A.1, §2A.7):** content fetched here is transient — used only within a single indexing or Mandatory Live Retrieval request cycle, never written to a durable original/export store. Google Docs export uses a transient DOCX/PDF export followed by immediate cleanup.
+
 ---
 
 ## F-BE-047 — PrincipalResolver
@@ -1060,7 +1072,9 @@ AUT-004, SRC-005
 
 ---
 
-# 15. Local Vault
+# 15. Local Vault — EXCLUDED / RETIRED (v1.4)
+
+> **EXCLUDED / RETIRED at v1.4 (`CORE_SPEC.md` §2A.1, §11).** Every file ID in this section (`F-BE-048`–`F-BE-061`) is preserved below unmodified, for historical/traceability purposes only. None of these files describe an active Core capability, and none of these IDs may be reused for a different file or purpose. Do not implement, extend, or reactivate any file in this table.
 
 | ID | Path | Type | Responsibility | Content | Feature |
 |---|---|---|---|---|---|
@@ -1093,10 +1107,14 @@ AUT-004, SRC-005
 | F-BE-067 | `backend/src/main/java/com/sdv/sync/application/AbstractSourceSyncJob.java` | Abstract Class | Common Sync workflow | loadCursor→fetchChanges→persist→publish | SYN-001,002 |
 | F-BE-136 | `backend/src/main/java/com/sdv/sync/infrastructure/persistence/entity/SyncRunEntity.java` | Entity | sync_runs mapping | mode,total,success,failed,status | SYN-001 |
 | F-BE-137 | `backend/src/main/java/com/sdv/sync/infrastructure/persistence/repository/SyncRunJpaRepository.java` | Repository | Sync history | findBySourceId | SYN-001,008 |
+| F-BE-196 | `backend/src/main/java/com/sdv/sync/application/job/GoogleDriveSyncJob.java` | Service | Google Drive initial/incremental Sync template; cursor commit occurs atomically with metadata, permission, and Outbox state | fetchChanges, mapMetadata, mapPermissions | SYN-001,002,003; SRC-004 |
+| F-BE-197 | `backend/src/main/java/com/sdv/sync/application/job/LocalVaultSyncJob.java` | Service | **EXCLUDED / RETIRED at v1.4** — historical Local Vault Sync Job; `GoogleDriveSyncJob` is the Core implementation | fetchChanges, mapMetadata, mapPermissions | SYN-001,002,003; SRC-007 |
 
 `AbstractSourceSyncJob` is allowed because the workflow invariant is explicit.
 
 Do not generalize this permission to unrelated inheritance hierarchies.
+
+**v1.4 update for F-BE-066 (`CORE_SPEC.md` §2A.11):** `SourceDeletionService.handleDeleted` must also retire the deleted document's `document_embedding_index` rows. It must never depend on a plaintext content row after the `V006` correction (`F-INF-020`) lands, because none may durably exist.
 
 ---
 
@@ -1184,17 +1202,20 @@ Client filters must never widen authorization scope.
 
 | ID | Path | Type | Responsibility |
 |---|---|---|---|
-| F-BE-100 | `backend/src/main/java/com/sdv/rag/application/RagRetrievalService.java` | Service | permission prefilter then vector retrieval |
-| F-BE-101 | `backend/src/main/java/com/sdv/rag/application/RagAnswerService.java` | Service | Retrieval→Policy→LLM→Citation |
-| F-BE-102 | `backend/src/main/java/com/sdv/rag/application/CitationAssembler.java` | Service | Chunk→Citation |
+| F-BE-100 | `backend/src/main/java/com/sdv/rag/application/RagRetrievalService.java` | Service | ACL Catalog prefilter + embedding-only candidate shortlist (v1.4 §2A.4 — not a permission decision, not evidence) |
+| F-BE-101 | `backend/src/main/java/com/sdv/rag/application/RagAnswerService.java` | Service | Candidate shortlist → Mandatory Live Retrieval (v1.4 §2A.5: current-user Drive verify → bounded fetch → parse → re-verify → ephemeral evidence) → Policy → LLM → Citation |
+| F-BE-102 | `backend/src/main/java/com/sdv/rag/application/CitationAssembler.java` | Service | verified live-retrieval evidence → Citation (v1.4 §2A.5 step 8; core locators `PAGE`/`SECTION`/`LINE_RANGE`, §2A.7) — not from a durable Chunk/text table |
+| F-BE-103 | `backend/src/main/java/com/sdv/rag/application/LiveEvidenceRetrievalService.java` | Service | Every query: current-user Drive permission/version verification + transient evidence fetch; `retrieveLive()`, `retryOnVersionChange()`; depends on `DocumentSourceConnector`, `SourceConsistencyGuard`, `EphemeralEvidenceStore` |
 | F-BE-104 | `backend/src/main/java/com/sdv/rag/application/port/VectorSearchPort.java` | Interface | authorized vector search |
 | F-BE-105 | `backend/src/main/java/com/sdv/rag/infrastructure/PgVectorSearchAdapter.java` | Adapter | pgvector search |
-| F-BE-106 | `backend/src/main/java/com/sdv/rag/infrastructure/persistence/entity/DocumentChunkEntity.java` | Entity | document_chunks |
-| F-BE-107 | `backend/src/main/java/com/sdv/rag/infrastructure/persistence/repository/DocumentChunkJpaRepository.java` | Repository | Chunk save/delete |
-| F-BE-108 | `backend/src/main/java/com/sdv/rag/infrastructure/ai/DocumentParsingClient.java` | Client | FastAPI parse/index |
-| F-BE-114 | `backend/src/main/java/com/sdv/rag/infrastructure/event/IndexRequestedConsumer.java` | Kafka Consumer | index request→AI service |
+| F-BE-106 | `backend/src/main/java/com/sdv/rag/infrastructure/persistence/entity/DocumentEmbeddingEntity.java` | JPA Entity | Content-free `document_embedding_index`: `documentId`, `chunkIndex`, `embedding`, `locatorType`, `locatorValue`, `sourceVersion`, `contentHmac`, `modelVersion`; parser/model generation metadata remains required by the data model; no plaintext field |
+| F-BE-107 | `backend/src/main/java/com/sdv/rag/infrastructure/persistence/repository/DocumentEmbeddingJpaRepository.java` | Spring Data Repository | Atomic embedding generation replacement/delete/allowed search: `replaceGeneration()`, `deleteByDocumentId()`, `searchAllowed()`; generation key includes source, parser, and model versions |
+| F-BE-108 | `backend/src/main/java/com/sdv/rag/infrastructure/ai/DocumentParsingClient.java` | Client | FastAPI parse/index — v1.4: parse output is durable only as embedding-index rows (§2A.2); `document_extracted_content.normalized_text` (V005) is known drift requiring `V006` (§2A.3) |
+| F-BE-114 | `backend/src/main/java/com/sdv/rag/infrastructure/event/IndexRequestedConsumer.java` | Kafka Consumer | index request → AI service; builds embedding-only index rows (v1.4 §2A.2), never a durable text store |
+| F-BE-173 | `backend/src/main/java/com/sdv/rag/application/ContentProcessingPolicy.java` | Service/Policy | `classify(metadata)`, `isIndexable(mimeType)` classify Core processing/index status from metadata, MIME, size, and policy; PDF/DOCX/TXT/MD content, XLSX parser retained but default-disabled |
+| F-BE-188 | `backend/src/main/java/com/sdv/rag/application/IndexOrchestrator.java` | Service | `index()`, `replaceGeneration()`, `cleanup()`, `markFailed()`: transient Drive fetch → parse/chunk/embed → atomic content-free generation replacement → cleanup; no content-bearing Kafka/DB retry state |
 
-FederatedRetrievalService is extension PoC.
+**v1.4 correction (`CORE_SPEC.md` §2A.11):** Mandatory Live Retrieval (§2A.5) is a Core MVP requirement, not a PoC. The class name `FederatedRetrievalService` below remains listed in §30 as a separate deferred/extension identifier, but this must not be read as meaning live, per-request, permission-verified retrieval itself is deferred — it is not; it is mandatory for every `FIND_CONTENT`/`SUMMARIZE`/`COMPARE`/`GROUNDED_ANALYSIS` request via `RagRetrievalService`/`RagAnswerService` above.
 
 ---
 
@@ -1204,7 +1225,7 @@ FederatedRetrievalService is extension PoC.
 |---|---|---|---|
 | F-BE-109 | `backend/src/main/java/com/sdv/ai/application/port/LlmProvider.java` | Interface | common provider contract |
 | F-BE-110 | `backend/src/main/java/com/sdv/ai/application/PolicyEnforcedLlmGateway.java` | Service | AI policy before provider |
-| F-BE-111 | `backend/src/main/java/com/sdv/ai/application/PromptComposer.java` | Service | question + authorized Chunk prompt |
+| F-BE-111 | `backend/src/main/java/com/sdv/ai/application/PromptComposer.java` | Service | question + smallest live-verified ephemeral evidence prompt (v1.4 §2A.6, §2A.9 — never a durable Chunk/text table) |
 | F-BE-112 | `backend/src/main/java/com/sdv/ai/infrastructure/OllamaLlmAdapter.java` | Adapter | Local Ollama provider |
 | F-BE-113 | `backend/src/main/java/com/sdv/ai/infrastructure/ExternalLlmAdapter.java` | Adapter | External provider/mock; OFF by default |
 | F-BE-145 | `backend/src/main/java/com/sdv/ai/domain/LlmInvocationMetadata.java` | Record/VO | provider/model/version/latency |
@@ -1251,9 +1272,9 @@ Automatic Source permission remediation is not part of Core.
 | F-AI-001 | `ai-service/app/main.py` | Python | FastAPI entry point |
 | F-AI-002 | `ai-service/app/api/routes.py` | Router | `/parse`, `/index`, `/health` internal APIs |
 | F-AI-003 | `ai-service/app/services/parser_service.py` | Service | PDF/DOCX/TXT text extraction |
-| F-AI-004 | `ai-service/app/services/chunking_service.py` | Service | Chunk + metadata |
-| F-AI-005 | `ai-service/app/services/embedding_service.py` | Service | Embedding |
-| F-AI-006 | `ai-service/app/workers/index_worker.py` | Worker | Index orchestration |
+| F-AI-004 | `ai-service/app/services/chunking_service.py` | Service | Chunk + metadata — v1.4: Chunk text is transient within one request/response cycle only, never returned for durable plaintext storage (§2A.2, §2A.3) |
+| F-AI-005 | `ai-service/app/services/embedding_service.py` | Service | Embedding — output (vectors + locators + version/digest metadata, §2A.2) is the only content-derived data the Backend may persist from this pipeline |
+| F-AI-006 | `ai-service/app/workers/index_worker.py` | Worker | Index orchestration — builds the v1.4 Embedding Candidate Index (§2A.11) only; must not cause plaintext to be written to a durable store |
 | F-AI-007 | `ai-service/app/models/schemas.py` | Pydantic | Internal schemas |
 | F-AI-008 | `ai-service/app/core/config.py` | Config | AI service settings |
 | F-AI-009 | `ai-service/tests/test_parser.py` | Test | parser validation |
@@ -1282,7 +1303,7 @@ Authorization remains Backend-owned.
 | F-FE-009 | `frontend/src/features/policies/PolicyAdminPage.tsx` | Overlay/AI policy UI |
 | F-FE-010 | `frontend/src/features/security/SecurityDashboardPage.tsx` | Finding/risk UI |
 | F-FE-011 | `frontend/src/features/audit/AuditLogPage.tsx` | Audit search |
-| F-FE-012 | `frontend/src/features/vault/VaultPage.tsx` | Vault collection/upload |
+| F-FE-012 | `frontend/src/features/vault/VaultPage.tsx` | **EXCLUDED / RETIRED at v1.4** (`CORE_SPEC.md` §2A.1, §11) — Vault collection/upload; preserved for historical/traceability reference only, `/api/vault/*` is not an active API |
 | F-FE-013 | `frontend/src/shared/api/httpClient.ts` | common HTTP/401/trace handling |
 | F-FE-014 | `frontend/src/shared/types/api.ts` | shared API Types |
 | F-FE-015 | `frontend/src/*.test.tsx` | core UI tests |
@@ -1305,9 +1326,11 @@ Frontend must not reimplement Backend permission logic.
 | F-INF-008 | `backend/src/main/resources/db/migration/V002__pgvector.sql` | SQL | pgvector / Chunk vector |
 | F-INF-009 | `scripts/bootstrap.ps1` | PowerShell | initial environment startup |
 | F-INF-010 | `scripts/verify.ps1` | PowerShell | health/secret/E2E checks |
-| F-INF-011 | `scripts/backup.ps1` | PowerShell | DB/Vault backup |
-| F-INF-012 | `scripts/restore.ps1` | PowerShell | restore/verification |
+| F-INF-011 | `scripts/backup.ps1` | PowerShell | v1.4: DB (Metadata/ACL Catalog, embedding-only index, audit) backup only — ~~Vault backup~~ EXCLUDED/RETIRED (§2A.1); the Encrypted Ephemeral Evidence store (§2A.6) must never be backed up |
+| F-INF-012 | `scripts/restore.ps1` | PowerShell | restore/verification — same v1.4 scope narrowing as F-INF-011; ephemeral evidence is never restored (it is never backed up) |
 | F-INF-016 | `.github/workflows/ci.yml` | GitHub Actions | Gradle/pytest/npm/secret scan |
+| F-INF-017 | `backend/src/main/resources/db/migration/V003__content_processing_schema.sql` | SQL | Applied immutable ALTER-only migration for source document index status/reason and chunk locator type/value |
+| F-INF-018 | `backend/src/main/resources/db/migration/V004__consumer_idempotency.sql` | SQL | **KNOWN VERSION COLLISION:** the workbook assigns the `processed_events` ledger and unique constraints to this path, but repository V004 is already the applied immutable `V004__source_account_isolation.sql`. Do not create a second V004; during M09 retain the F-INF-018 responsibility and assign a verified unused version after V006, then update this public path transparently. |
 
 Applied migration files must not be edited.
 
@@ -1334,12 +1357,12 @@ This Agent-readable specification supplements those project-facing documents.
 | ID | Path | Purpose |
 |---|---|---|
 | F-TST-001 | `backend/src/test/java/com/sdv/security/EffectivePermissionServiceTest.java` | Source/Overlay policy matrix |
-| F-TST-002 | `backend/src/test/java/com/sdv/rag/UnauthorizedRetrievalE2ETest.java` | Unauthorized Chunk = 0 |
-| F-TST-003 | `backend/src/test/java/com/sdv/source/GoogleDriveConnectorContractTest.java` | Connector contract |
+| F-TST-002 | `backend/src/test/java/com/sdv/rag/UnauthorizedRetrievalE2ETest.java` | Unauthorized Chunk = 0; v1.4 update: must also prove the current-user Drive access recheck fails closed (DENY/UNKNOWN/deleted/trashed/non-downloadable) before content ever reaches a parser/LLM (§2A.5) |
+| F-TST-003 | `backend/src/test/java/com/sdv/source/GoogleDriveConnectorContractTest.java` | Connector contract; v1.4 update: must also cover the `files.export` 10 MB boundary/`EXPORT_LIMIT_EXCEEDED` and the version-changed-during-fetch retry-once-then-`DOCUMENT_CHANGED` behavior (§2A.5, §2A.7) |
 | F-TST-004 | `backend/src/test/java/com/sdv/sync/PermissionSyncE2ETest.java` | Drive permission removal→RAG exclusion |
 | F-TST-005 | `backend/src/test/java/com/sdv/ai/ExternalLlmPolicyTest.java` | LOCAL_ONLY external call = 0 |
 | F-TST-006 | `backend/src/test/java/com/sdv/audit/AuditTraceE2ETest.java` | RAG trace reconstruction |
-| F-TST-007 | `backend/src/test/java/com/sdv/vault/VaultCryptoIntegrationTest.java` | encrypted storage + hash |
+| F-TST-007 | `backend/src/test/java/com/sdv/rag/ZeroOriginalPersistenceE2ETest.java` | Verify zero durable retention of originals, exports, complete extracted text, and plaintext chunks by scanning DB/files/cache/logs; cover hard-TTL expiry and cleanup recovery with Testcontainers and a temporary filesystem |
 | F-TST-008 | `backend/src/test/java/com/sdv/security/OversharingDetectionTest.java` | SECRET + anyone → HIGH |
 
 Feature-specific smaller unit/integration tests may be added next to these canonical portfolio tests when needed.
@@ -1366,9 +1389,11 @@ SecurityDashboardController
 
 `PromptSecurityService` (File ID `F-BE-146`) is a Core MVP security control, not a deferred/extension file, and must not be classified as deferred-only. Its Core responsibility is to prevent direct and indirect prompt injection — including injection carried by retrieved content — from overriding ACL, Source permission, Overlay Policy, AI Usage Policy, provider-selection policy, System instructions, or Tool permissions. Its canonical path/package is not established by the sources reviewed for this correction; this is reported as an unresolved path, not invented.
 
+**v1.4 clarification (`CORE_SPEC.md` §2A.11):** `FederatedRetrievalService` above is a deferred **class name** only. It must not be read as meaning live, per-request, permission-verified retrieval itself is deferred — Mandatory Live Retrieval (§2A.5) is a required Core capability, implemented by `RagRetrievalService`/`RagAnswerService` (§21), not by this deferred class.
+
 SharePoint and S3 Core work is contract/skeleton only.
 
-Actual AWS S3 Source implementation belongs to Cloud Portfolio.
+Actual AWS S3 Source implementation belongs to Cloud Portfolio, and even then only as a read-only `DocumentSourceConnector` (v1.4 §2A.10) — never as a writer of SDV-managed content. See §37 for `ObjectStoragePort`/`S3ObjectStorageAdapter` (`F-BE-159`, `F-BE-160`), which are excluded/retired specifically because their writer role conflicts with the v1.4 retention rule.
 
 ---
 
@@ -1434,8 +1459,9 @@ External implementation later connects through:
 
 ```text
 backend/src/main/java/com/sdv/source/infrastructure/google/GoogleDriveConnector.java
-backend/src/main/java/com/sdv/vault/infrastructure/LocalVaultConnector.java
 ```
+
+(`backend/src/main/java/com/sdv/vault/infrastructure/LocalVaultConnector.java` is EXCLUDED / RETIRED at v1.4 — §15, `CORE_SPEC.md` §2A.1 — and is not part of the active implementation target.)
 
 ---
 
@@ -1540,3 +1566,30 @@ When generic best practice and the explicit v3.2 file manifest disagree:
 follow the v3.2 manifest first,
 
 then propose an intentional specification change if a better design is truly necessary.
+
+---
+
+# 37. v1.4 New Files (Excel v1.4 freeze) and Excluded/Retired Writer Files
+
+## 37.1 New files added at v1.4
+
+Do not create the actual code or migration files for these from this manifest entry alone — implementation is separate, future work (see `CORE_SPEC.md` §2A.12 development order). These IDs are added here only so future Plans reference the correct canonical path.
+
+| ID | Canonical Path | Type | Responsibility |
+|---|---|---|---|
+| F-BE-206 | `backend/src/main/java/com/sdv/rag/application/port/out/EphemeralEvidenceStore.java` | Java Interface | Encrypted ephemeral-evidence contract with a hard TTL of at most 300 seconds from original creation; `putEncrypted()`, `getIfAuthorizedAndCurrent()`, `evict()` (`CORE_SPEC.md` §2A.6) |
+| F-BE-207 | `backend/src/main/java/com/sdv/rag/application/SourceConsistencyGuard.java` | Java Service | Drive access/version checks before and after fetch, with one bounded retry on version change (`CORE_SPEC.md` §2A.5) |
+| F-BE-208 | `backend/src/main/java/com/sdv/rag/infrastructure/ephemeral/EncryptedEphemeralEvidenceStore.java` | Java Adapter | `EphemeralEvidenceStore` implementation: encrypted volatile evidence storage with forced eviction and no sliding TTL; `putEncrypted()`, `evictExpired()`, `evictByDocument()` (`CORE_SPEC.md` §2A.6); never backed up, snapshotted, or mounted on a durable volume |
+| F-INF-020 | `backend/src/main/resources/db/migration/V006__zero_original_persistence.sql` | SQL (future) | Corrects the persistence model (removes/relocates durable plaintext such as `document_extracted_content.normalized_text`) without editing `V001`–`V005` (`CORE_SPEC.md` §2A.3) |
+
+The `F-BE-206`–`F-BE-208` package paths above are explicit values from the v1.4 Excel master, not inferred placements.
+
+## 37.2 S3 / Object Storage — excluded/retired from introduction (v1.4)
+
+| ID | Canonical Path | Type | Responsibility | Status |
+|---|---|---|---|---|
+| F-BE-159 | `backend/src/main/java/com/sdv/storage/application/port/ObjectStoragePort.java` | Java Interface | Generic object storage write/read contract | **EXCLUDED / RETIRED at v1.4** — writer behavior conflicts with the global no-original-retention rule (`CORE_SPEC.md` §2A.10) |
+| F-BE-160 | `backend/src/main/java/com/sdv/storage/infrastructure/aws/S3ObjectStorageAdapter.java` | Java Adapter | `ObjectStoragePort` AWS S3 implementation | **EXCLUDED / RETIRED at v1.4** — same reason as `F-BE-159`; S3 must never be described as an SDV original-file, export, extracted-text, or evidence store. A future S3 integration may exist only as a read-only `DocumentSourceConnector` for customer-owned source data (§2A.10). |
+
+The `F-BE-159` and `F-BE-160` paths above are explicit v1.4 Excel identities retained only for traceability. Their writer responsibilities remain excluded/retired.
+
