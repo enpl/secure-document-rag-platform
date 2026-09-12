@@ -1,44 +1,30 @@
-# secure-document-rag-platform
-A secure document search and RAG platform built with Spring Boot, Spring AI, React, Kafka, and Redis.
+# Secure Document Vault (SDV)
 
-## 프로젝트 목표
+SDV is a secure enterprise RAG gateway for finding and analyzing documents a user can currently access. Google Drive is the sole Core source and remains the system of record.
 
-- Spring AI 기반 문서 질의응답
-- PDF 문서 등록 및 Vector DB 검색
-- 사용자별 문서 접근 권한
-- React·TypeScript 기반 관리 화면
-- Kafka 기반 문서 색인 비동기 처리
-- Redis 캐시 및 요청 제한
-- 모니터링과 장애 대응
-- Docker 기반 실행 및 배포
+## Core architecture
 
-## 개발 단계
+- SDV does not provide an original-file upload repository or retain original bytes, Google Workspace exports, complete extracted text, or plaintext chunks.
+- SDV may persist a Metadata/ACL Catalog and a content-free embedding index containing vectors, generalized locators, source version, keyed digest/HMAC, and parser/model version metadata.
+- Metadata search covers every Google Drive file type. Before returning a result, SDV rechecks access against Drive as the final user.
+- Content search and answers use the Catalog and embeddings only to shortlist candidates. Each request verifies current Drive permission and version, fetches required content transiently, and answers only from version-consistent evidence.
+- Selected evidence may remain encrypted for the active conversation for at most 300 seconds from its original creation time. Reuse does not extend that deadline.
 
-- [ ] Spring AI 기본 질의응답
-- [ ] PDF 기반 RAG
-- [ ] React 사용자 화면
-- [ ] 사용자 인증과 문서 접근 권한
-- [ ] Redis 캐시
-- [ ] Kafka 비동기 색인
-- [ ] 모니터링과 부하 테스트
-- [ ] Docker 및 CI/CD
-- [ ] v1.0.0 배포
+Core content answers support PDF, DOCX, TXT, and MD. Google Docs uses a transient DOCX or PDF export. The existing XLSX parser is disabled in the default Core path; other formats remain metadata-only until separately implemented.
 
-## 브랜치 전략
+## Current status
 
-- `main`: 배포 및 공개 가능한 안정 버전
-- `develop`: 다음 버전 통합 개발
-- `feature/*`: 기능 개발
-- `fix/*`: 일반 버그 수정
-- `release/*`: 출시 준비
-- `hotfix/*`: 운영 버전 긴급 수정
+M01 through M06 are complete at the recorded `c96c885` baseline. The V005 implementation still persists `normalized_text`; this is known drift against the v1.4 retention contract.
 
-## 저장소 구조
+The next implementation order is:
 
-```text
-backend/    Spring Boot 백엔드
-frontend/   React·TypeScript 프론트엔드
-infra/      Docker, Keycloak, 모니터링 설정
-docs/       아키텍처와 기술 기록
-samples/    테스트용 공개 문서와 요청 예시
-scripts/    개발·실행 보조 스크립트
+1. V006 zero-original-persistence correction
+2. Real Google Drive connector
+3. Content-free embedding index and transient indexing
+4. Mandatory live retrieval and grounded answer flow
+
+See [Core Specification](docs/spec/SDV_v3.2_CORE_SPEC.md) and [Core File Manifest](docs/spec/SDV_v3.2_FILE_MANIFEST.md) for the authoritative repository-readable contract.
+
+## Technology
+
+Java 21 and Spring Boot form the backend; PostgreSQL/pgvector provides allowed durable indexing data; Python/FastAPI provides internal parsing and embedding services; React provides the guided UI; Keycloak, Kafka, and Docker Compose support authentication, asynchronous processing, and local infrastructure.

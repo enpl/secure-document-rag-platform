@@ -6,24 +6,25 @@
 
 - 프로젝트명: Secure Document Vault (SDV)
 - 목표: 기업 문서를 Source 권한과 SDV 정책에 따라 안전하게 검색하고 AI에 연결하는 Secure RAG Gateway
-- 현재 단계: Core MVP 개발 — Canonical Development Order 상 `1. Environment / Specification Alignment` (CURRENT)
-- 최신 v3.2 상세명세(Excel 마스터 명세)를 최우선 Source of Truth로 사용
-- README와 상세명세가 충돌하면 v3.2 상세명세를 우선한다.
+- 현재 단계: Core MVP 개발 — v1.4 공개 Markdown 정합화 완료, 다음 구현은 `V006__zero_original_persistence.sql` 교정(M07A)
+- 최신 v3.2 상세명세(Excel 마스터 명세)를 최우선 Source of Truth로 사용하며, **v1.4 동결본**(`SDV_v3.2_전체상세명세_MVP동결_v1.4_원본비보관_개정본.xlsx`)이 그 최신판이다 — 상세는 `docs/spec/SDV_v3.2_CORE_SPEC.md` §2A 참고
+- README와 상세명세가 충돌하면 v3.2 상세명세(v1.4 동결본 우선)를 우선한다.
 
 ### 제품 정의
 
 - SDV는 Enterprise Secure RAG Gateway이다.
-- 기존 기업 Source(Google Drive 등)는 계속 System of Record로 유지된다.
+- Google Drive는 계속 System of Record로 유지된다.
 - SDV는 Google Drive 대체품이 아니다.
 - SDV는 범용 Chatbot이 아니다.
-- Core MVP Source: Google Drive, Local Vault.
-- SharePoint/S3는 향후 Source 후보이며, 별도로 일정이 잡히기 전까지 Core 구현 대상이 아니다(Contract/Skeleton 수준만 허용).
+- Core MVP Source (v1.4): **Google Drive 단일** — 유일하게 구현된 Source이자 System of Record. ~~Local Vault~~는 **v1.4에서 Excluded/Retired** — SDV가 관리하는 원본 저장소(Local Vault, 파일 업로드 저장소, 원본 복제본 등)를 SDV는 제공하지 않는다. `/api/vault/*`는 활성 API가 아니며 해당 요청은 `404` 또는 명시적 미지원 결과를 반환해야 한다. 과거 Local Vault 기능/File ID는 추적용으로만 보존하고 재사용하지 않는다(`docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.1, §11, File Manifest §15 참고).
+- SharePoint/S3는 향후 Source 후보이며, 별도로 일정이 잡히기 전까지 Core 구현 대상이 아니다(Contract/Skeleton 수준만 허용). S3는 향후에도 Customer 소유 Source에 대한 **Read-only** `DocumentSourceConnector`로만 존재할 수 있다 — `ObjectStoragePort`/`S3ObjectStorageAdapter`(File Manifest `F-BE-159`/`F-BE-160`)는 Writer 역할이 전역 보존(Retention) 규칙과 충돌하므로 v1.4에서 Excluded/Retired다.
+- 원본 비보관(No-Original-Retention) 규칙은 Local/On-Prem/Cloud/Hybrid 모든 배포 형태에 동일하게 적용된다.
 
 ## Specification Source of Truth
 
 SDV 기능의 Plan, 구현, 수정, 리뷰 전에 다음 순서로 확인한다.
 
-1. 최신 사용자 제공 SDV v3.2 Excel 마스터 명세 (예: `Secure_Document_Vault_v3.2_Cloud_상세기능_파일통합명세_멀티포맷_Assistant보완_정합성수정.xlsx`)
+1. 최신 사용자 제공 SDV v3.2 Excel 마스터 명세 — 현재 최신판은 v1.4 동결본 `SDV_v3.2_전체상세명세_MVP동결_v1.4_원본비보관_개정본.xlsx`(기능 ID 117개, phase=MVP 68개, 파일 ID 309개, 검증 ID 58개, 제약조건 34개; 이 수치는 구현 완료율이 아니다)
 2. `docs/spec/SDV_v3.2_CORE_SPEC.md`, `docs/spec/SDV_v3.2_FILE_MANIFEST.md` — 위 Excel로부터 동기화된 Agent-readable Repository Markdown 명세
 3. `CLAUDE.md` / `AGENTS.md`
 4. README
@@ -101,6 +102,18 @@ Flyway Migration은 이 Source-of-Truth 우선순위와 경쟁하는 별도 레�
 
 Core RAG는 텍스트 추출 가능한 포맷만 지원한다.
 
+**v1.4 File-format Scope 확정** (`docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.7):
+
+- 모든 Drive 파일 형식: Metadata/ACL 검색 대상.
+- Core Content 검색/답변 대상: PDF, DOCX, TXT, MD.
+- Google Docs: 일시적(Transient) DOCX 또는 PDF Export 후 즉시 정리(Cleanup).
+- XLSX: 기존 Parser 코드는 유지하되 기본 Core 경로에서는 비활성화한다.
+- PPTX, Spreadsheet, 이미지/OCR, 오디오, 비디오, Archive, 소스코드: Core에서는 Metadata-only.
+- Core Citation Locator: `PAGE`, `SECTION`, `LINE_RANGE`(아래 Citation Model 참고 — `SLIDE`/`SHEET_RANGE`는 향후이며 Core가 아니다).
+- 이미지 전용(Image-only) PDF: PDF 경로로 일시적으로 검사하되 Core에서는 OCR을 수행하지 않고 `SKIPPED_NO_TEXT`로 기록하며, Content를 담은 중간 산출물은 삭제한다.
+- 대용량 파일은 처리에 시간이 걸릴 수 있다 — UI는 명확한 대기/비동기 처리/제한된 실패 상태를 표시해야 한다.
+- Google Drive `files.export`의 동기 응답은 현재 10MB로 제한된다. 더 큰 Google Workspace 문서는 지원되는 장시간 실행 `files.download`/Revision Flow를 사용하거나 `EXPORT_LIMIT_EXCEEDED`를 반환한다. 부분 Export를 완전한 문서로 처리하지 않으며, Export 결과를 절대 영구 보관하지 않는다.
+
 Core는 다음을 수행하지 않는다:
 
 - 이미지 OCR/Vision
@@ -128,7 +141,7 @@ RAG/색인 처리 상태는 Source document 생명주기 상태와 별개 개념
 
 `SourceDocument.java`는 다음을 명시적으로 구분해서 가진다:
 
-- `state` — Source document 생명주기/상태 (`SourceDocumentState`: `SYNCED/READY/STALE/DELETED/FAILED`, `com.sdv.source.domain.SourceDocumentState`)
+- `state` — Source document 생명주기/상태 (`SourceDocumentState`: `ACTIVE/DELETED`, `com.sdv.source.domain.SourceDocumentState`)
 - `indexStatus` — RAG/콘텐츠 색인·처리 상태 (`DocumentIndexStatus`)
 - `indexReason` — 위 색인 상태의 사유
 
@@ -140,21 +153,56 @@ RAG/색인 처리 상태는 Source document 생명주기 상태와 별개 개념
 
 업로드된 실행파일/코드 파일을 절대 실행하지 않는다. Core MVP에서 Archive를 재귀적으로 추출하지 않는다.
 
+### v1.4 원본 비보관(Zero Original/Plaintext Retention) 규칙
+
+`docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.2/§2A.3 참고.
+
+보관 가능한 Content 관련 데이터는 다음뿐이다:
+
+- Metadata/ACL Catalog 데이터
+- 원본/평문을 포함하지 않는 Embedding Index — Embedding Vector, 일반화된 Locator, Source Version, Keyed Digest/HMAC, Parser Version, Embedding Model/Version
+- 문서/증거/질문/답변/Prompt 본문을 포함하지 않는 Audit/운영 상태
+
+Embedding은 민감한 Content 파생 고객 데이터로 취급한다 — Tenant 격리, Customer-scoped 암호화, 접근 제어, 삭제, 재색인 규칙이 필요하다.
+
+다음은 암호화된 장기 보관본이라도 절대 영구 보관하지 않는다:
+
+- 원본 파일 Byte/복제본, Google Workspace Export 파일
+- 완전한 추출 텍스트, `document_extracted_content.normalized_text`
+- `document_chunks.content` 같은 평문 Chunk
+- 답변 근거(Evidence) 텍스트
+- 질문/답변/Prompt/문서 내용을 담은 로그, Kafka Event, DLQ, Trace, Cache, Backup, Snapshot, Crash Dump, Retry Payload
+
+**알려진 구현 Drift**: `develop`(`c96c885`) 기준 현재 M06 구현과 이미 적용된 `V005__extracted_content.sql`은 `document_extracted_content.normalized_text`를 영구 보관한다. 이는 향후 **V006** Migration + Application 변경으로 교정해야 할 알려진 Drift로 기록하며, 지금 V005를 수정하지 않는다(V001~V005는 Immutable).
+
+### Parser Security (v1.4 확정, `docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.8)
+
+- 최대 압축비(Compression Ratio): `100:1` — **이미 승인된 결정이며 재논의하지 않는다.**
+- 최대 압축 해제 크기: `200 MiB`.
+- 기존 항목 수/처리 시간/행 수/페이지 수 제한을 유지한다.
+- Parser는 네트워크에 접근하지 않는다.
+- 외부 리소스 해석(External Entity)이나 XML External Entity를 허용하지 않는다.
+- 매크로/스크립트를 실행하지 않는다.
+- Content Type이 모호하거나 한도를 초과하면 Fail Closed 한다.
+
 ## Citation Model
 
 Citation은 파일 포맷과 무관하게 설계한다.
 
-Core Locator 개념:
+Core Locator 개념 (v1.4 확정, `docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.7):
 
 - `PAGE`
-- `SLIDE`
-- `SHEET_RANGE`
-- `LINE_RANGE`
 - `SECTION`
+- `LINE_RANGE`
+
+Core 파일 단위 Metadata Reference(Content 주장에 대한 Locator가 아님):
+
 - `DOCUMENT`
 
-향후(Core 범위 아님):
+향후(Core 범위 아님 — v1.4에서 명시적으로 향후로 재분류됨):
 
+- `SLIDE`
+- `SHEET_RANGE`
 - `TIMECODE`
 - `FRAME_RANGE`
 - `REGION`
@@ -173,6 +221,8 @@ Chunk/Embedding이 없는 파일도 사용자가 찾을 수 있어야 한다.
 
 인가된 `source_documents` 전체를 대상으로 동작한다.
 
+**v1.4**: Metadata 검색은 모든 Google Drive 파일 형식에 대해 Metadata/ACL Catalog로 동작한 뒤, 결과를 반환하기 전에 현재 사용자 기준 Live Drive 재확인을 거친다(`docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.4).
+
 관련 기능: `RAG-011 File Metadata Discovery`
 
 ### Content/RAG Search
@@ -180,6 +230,39 @@ Chunk/Embedding이 없는 파일도 사용자가 찾을 수 있어야 한다.
 Vector/Content 검색은 지원되고 현재 색인된(Indexed) 콘텐츠에 대해서만 동작한다.
 
 File Discovery 기능이 `document_chunks`에 의존하도록 설계하지 않는다.
+
+**v1.4 확정** (`docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.4, §2A.5): Content 검색/요약/비교/분석은 Metadata/ACL Catalog와 Embedding-only Index를 오직 "가능성 있는 파일/위치의 Shortlist"로만 사용한다. Embedding Hit은 권한 증명도 답변 근거(Evidence)도 아니다 — 관련 Content가 있을 가능성이 있는 위치를 가리킬 뿐이다. Metadata/Embedding만으로 문서 내용을 추론하지 않는다. `FIND_CONTENT`/`SUMMARIZE`/`COMPARE`/`GROUNDED_ANALYSIS` 요청은 모두 Mandatory Live Retrieval(아래 "Mandatory Live Retrieval" 절)을 거쳐야 하며, 이는 나중에 시도할 PoC가 아니라 Core MVP 필수 요구사항이다.
+
+### Mandatory Live Retrieval (v1.4 확정)
+
+`docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.5 참고. `FIND_CONTENT`/`SUMMARIZE`/`COMPARE`/`GROUNDED_ANALYSIS` 요청은 반드시:
+
+1. Metadata/ACL Catalog + Embedding-only Index로 후보를 Shortlist한다.
+2. 최종 사용자의 OAuth 자격증명, 또는 그 사용자를 impersonate하는 Customer 승인 Domain-wide Delegation을 사용한다.
+3. Fetch 전에 그 사용자 기준으로 Drive 접근권한, `capabilities.canDownload`, `trashed`, `version`, `modifiedTime`을 확인한다.
+4. 검사를 통과한 후보의 현재 Content만 Bounded Stream으로 Fetch한다.
+5. 격리된 Parser에서 신뢰할 수 없는 Content를 파싱하고, 질문에 필요한 근거만 선택한다.
+6. Fetch 이후 같은 사용자 접근권한과 Source Version을 다시 확인한다.
+7. Fetch 전/후 Version이 일치할 때만 근거를 사용한다.
+8. 그 검증된 Version에서만 답변과 Citation을 생성한다.
+9. 아래 Ephemeral Evidence 수명주기를 적용한다.
+
+광범위한 관리자(Admin)나 Service Account의 접근권한은 최종 사용자의 접근권한 증명이 아니다. 동기화된 ACL 항목도 최종 증명이 아니다 — ACL Catalog는 빠른 Prefilter일 뿐이고, 위 3/6단계의 현재 사용자 기준 Drive 확인이 최종 인가 결정이다. 현재 사용자 기준 Drive 확인이 실패하거나 `DENY`/`UNKNOWN`/삭제됨/휴지통/다운로드 불가/그 외 검증 불가 상태를 반환하면, Content를 Parser나 LLM에 보내기 전에 Fail Closed 한다.
+
+처리 중 Version이 바뀌면 시도 전체를 폐기하고 한 번 재시도한다. 재시도에서도 다시 바뀌면 Version을 섞거나 추측하지 않고 `DOCUMENT_CHANGED`를 반환한다. 검증된 근거가 하나도 남지 않으면 `NO_EVIDENCE`를 반환한다.
+
+### Encrypted Ephemeral Evidence (v1.4 확정)
+
+`docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.6 참고.
+
+- 근거(Evidence)는 활성 대화(Conversation)에 대해서만 암호화된 Ephemeral Storage에 존재할 수 있다.
+- Hard TTL은 원본 생성 시점부터 최대 300초다 — 배포 환경에서 더 짧게 설정하는 것은 허용된다.
+- 읽기/재사용은 `expiresAt`을 연장하지 않는다 — Sliding TTL은 금지된다.
+- 재사용은 같은 Conversation·같은 사용자에 대해, 현재 Drive 접근권한이 유효하고 Source Version이 바뀌지 않은 동안만 허용된다 — 재사용 전마다 현재 Drive 접근권한/Version을 다시 확인한다.
+- Conversation 종료, 요청 취소, 오류 발생, 접근권한 회수, Version 변경, Hard TTL 만료 시 근거를 삭제한다.
+- 삭제/만료 이후의 질문은 Source를 다시 Fetch해야 한다.
+- 같은 Conversation이 활성 상태인 동안 성공적인 답변이 즉시 삭제를 요구하지는 않지만, 원본 Hard TTL은 절대 연장하지 않는다.
+- 이 Cache를 Durable Volume에 Backup/Snapshot/Mount하지 않는다.
 
 ## Assistant / Prompt Security
 
@@ -316,10 +399,13 @@ LLM 출력은 신뢰할 수 없는 데이터로 취급한다.
 - Hibernate ddl-auto=create/update를 사용하지 않는다.
 - DB Schema 변경은 Flyway Migration으로만 관리한다.
 - 이미 적용된 Migration 파일은 수정하지 않는다.
-- 새 변경은 V002, V003처럼 새로운 Migration으로 추가한다.
-- 현재 V001__baseline.sql은 Core relational schema이다.
-- document_chunks와 pgvector는 V002 범위이며 이미 적용 완료되었다.
-- 다음 예정 Migration은 V003 Content Processing Schema이다(Canonical Development Order 2단계). 임의로 앞당기지 않는다.
+- 새 변경은 새로운 Migration Version으로 추가한다.
+- `V001__baseline.sql`은 Core relational schema이다.
+- `V002__pgvector.sql`은 pgvector/document chunk vector 관련 Migration이다.
+- `V003__content_processing_schema.sql`(실제 파일명, M01 범위)부터 `V004`(Source Account Isolation), `V005__extracted_content.sql`(M06 Content Extraction)까지 이미 적용 완료되었다.
+- `V001`~`V005`는 모두 Immutable — 절대 수정하지 않는다.
+- 다음 예정 Migration은 **`V006__zero_original_persistence.sql`**이다 — v1.4 원본/평문 비보관 규칙(`docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.3)에 맞춰 영속 모델을 교정한다(예: `document_extracted_content.normalized_text` 등 평문 보관 지점 정리). 기존 `V001`~`V005`를 고치는 대신 새 Migration으로만 추가한다. 이 작업(v1.4 Markdown 정합화)에서는 V006 자체를 만들지 않는다.
+- Excel의 `F-INF-018`은 `V004__consumer_idempotency.sql`로 남아 있지만 실제 V004는 이미 `V004__source_account_isolation.sql`로 적용됐다. 이는 이름/버전 충돌이다. `F-INF-018`의 Consumer Idempotency 책임은 유지하되, 구현 시 V006 이후 실제로 비어 있는 새 버전을 확인해 공개 명세와 함께 정정한다. 두 번째 V004를 만들지 않는다.
 
 ## Security
 
@@ -337,6 +423,7 @@ LLM 출력은 신뢰할 수 없는 데이터로 취급한다.
 - 삭제된 문서는 검색/RAG/Citation에서 제거한다.
 - ACL과 Vector 메타데이터가 불일치하면 해당 문서에 대해 일시적으로 RAG를 거부한다.
 - Prompt Injection 방어는 Core MVP 필수 보안이다(상세는 위 "Assistant / Prompt Security" 참고).
+- **v1.4**: 동기화된 ACL Catalog는 빠른 Prefilter일 뿐이다 — Content 응답 전 현재 사용자 기준 Live Drive 확인(Mandatory Live Retrieval)이 최종 인가 결정이다. 광범위한 관리자(Admin)나 Service Account의 접근권한, 동기화된 ACL 항목은 최종 사용자의 접근권한 증명으로 취급하지 않는다.
 
 ## Vector 결정 (Canonical)
 
@@ -363,26 +450,35 @@ LLM 출력은 신뢰할 수 없는 데이터로 취급한다.
 ## Development Status (완료된 사실)
 
 - OPS-004 Flyway Baseline 완료
-- V001 baseline 완료
-- V002 pgvector 완료
+- M01 / `V003__content_processing_schema.sql` Content Processing Schema 완료
+- M02 Common/Operations/Audit Foundation 완료
+- M03 Keycloak Authentication/Authorization 완료
+- M04 Source Core 완료 (실제 Google Drive Connector는 아직 Pending)
+- M05 Policy/ACL Core 완료
+- M06 Content Processing/Parser Security 완료 (`develop` `c96c885`)
+- `V001`~`V005` 모두 적용 완료, Immutable
+- **M06 평문/추출 텍스트 영속화(`document_extracted_content.normalized_text`)는 v1.4 대비 알려진 Drift** — `docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.3, 아직 미교정
 - Testcontainers 기반 PostgreSQL/pgvector 통합 테스트 환경 완료
 - Gradle Wrapper 9.7.1이 canonical 버전이다
 - 현재 branch workflow는 보호된 `develop`을 사용한다
+- 다음: **V006 교정** → 실제 Google Drive Connector → Embedding-only Index → Live Retrieval/Answer Flow
+- 이전 "M07 Local Vault" 작업 항목은 **폐기(Retired)**한다 — Local Vault는 v1.4에서 Excluded/Retired이며(§2A.1, §11), 더 이상 다음 작업으로 서술하지 않는다.
 
-이 이후 단계(V003 이상)는 아직 완료되지 않았다. 완료되지 않은 단계를 완료로 서술하지 않는다.
+이 이후 단계(V006 이상)는 아직 완료되지 않았다. 완료되지 않은 단계를 완료로 서술하지 않는다.
 
 ## Canonical Development Order
 
 0. OPS-004 Flyway Baseline — DONE
-1. Environment / Specification Alignment — CURRENT
-2. V003 Content Processing Schema
-3. Common / Operations / Audit Foundation
-4. Keycloak Authentication
-5. Source Core
-6. Policy Core
-7. Content Processing Core
-8. Local Vault
-9. Google Drive Connector
+1. Environment / Specification Alignment — DONE (v1.4 공개 Markdown 정합화 포함)
+2. V003 Content Processing Schema (M01) — DONE
+3. Common / Operations / Audit Foundation (M02) — DONE
+4. Keycloak Authentication (M03) — DONE
+5. Source Core (M04) — DONE (실제 Google Drive Connector는 Pending)
+6. Policy Core (M05) — DONE
+7. Content Processing Core (M06) — DONE (평문 영속화는 v1.4 대비 알려진 Drift, §2A.3 — 아직 미교정)
+8. ~~Local Vault~~ — **RETIRED (v1.4, §2A.1, §11)** — 구현/재활성화하지 않는다
+8A. V006 Zero-Original-Persistence 교정 — **NEXT**
+9. Google Drive Connector (실제 구현)
 10. Sync + Outbox + Kafka
 11. Secure File Metadata Discovery (RAG-011)
 12. AI Service / RAG Ingestion
@@ -424,7 +520,7 @@ DB schema
 
 ## 현재 Environment Alignment 잔여 작업
 
-현재 활성 작업은 여전히 `Environment / Specification Alignment`이다.
+Environment / Specification Alignment는 완료됐으며 다음 활성 구현은 M07A/V006 교정이다.
 
 잔여 작업 상태:
 
@@ -438,21 +534,17 @@ DB schema
    - 이번 작업에서 Compose Runtime 실행(`up`/`start`/`build` 등)이나 기존 Volume에 대한 어떤 작업도 수행하지 않았다 — `docker compose config` 등 정적 검증만 수행했다.
    - F-INF-001 전체가 완료된 것으로 간주하지 않는다.
 5. 메인 애플리케이션 클래스명을 `SecureDocumentVaultApplication`으로 변경 — 이번 작업에서 DONE (F-BE-001에 맞춰 `backend/src/main/java/com/sdv/SecureDocumentVaultApplication.java` / `backend/src/test/java/com/sdv/SecureDocumentVaultApplicationTests.java`로 Rename, 패키지·동작·`@SpringBootTest`/`@Import(TestcontainersConfiguration.class)`/`contextLoads()` 유지, 이전 메인 클래스는 남아있지 않음)
-6. Repository Markdown Spec(`docs/spec/SDV_v3.2_CORE_SPEC.md`, `SDV_v3.2_FILE_MANIFEST.md`)의 `DOCUMENTATION DRIFT` 해소 — 최신 Excel과 재동기화 — NEXT
-7. 이후 V003 Migration 시작 — Environment / Specification Alignment 완료 이후
+6. Repository Markdown Spec(`docs/spec/SDV_v3.2_CORE_SPEC.md`, `SDV_v3.2_FILE_MANIFEST.md`)의 `DOCUMENTATION DRIFT` 해소 — 최신 Excel(v1.4 동결본)과 재동기화 — **DONE**. 엑셀에 존재하는 `F-BE-103`, `F-BE-173`, `F-BE-188`, `F-BE-196`, `F-BE-197`, `F-INF-017`을 정식 경로와 책임으로 반영했고, `document_embedding_index` 목표와 README까지 정렬했다. 실제 코드/Migration 구현 완료를 뜻하지 않는다.
+7. **V006** Migration(`V006__zero_original_persistence.sql`, v1.4 원본/평문 비보관 교정) — **NEXT (M07A)**
 
-6~7번 항목은 이 작업(메인 애플리케이션 클래스명 `SecureDocumentVaultApplication` 변경)에서 수행하지 않는다.
+6~7번 항목 중 7번(V006 Migration 구현)은 이번 v1.4 Markdown 정합화 작업에서 수행하지 않는다 — 이 작업은 Markdown 전용이며 Product 코드/Migration을 만들지 않는다.
 
 ## Git Workflow
 
-- `develop`은 보호 브랜치이며 직접 commit/push 하지 않는다.
-- 작업은 feature/chore 브랜치에서 진행한다.
-- `git add .`는 지양하고, 변경 의도가 명확한 파일만 명시적으로 `git add` 한다.
-- commit 전 `git diff --cached`로 변경 내용을 확인한다.
-- commit → push → `develop`로 PR → merge → 로컬 `develop` 동기화 흐름을 따른다.
-- 자동으로 git add, commit, push 하지 않는다.
-- git reset --hard, force push, history rewrite, branch 강제 삭제를 하지 않는다.
-- destructive command가 필요하면 실행 전에 이유를 설명하고 승인을 요청한다.
+- Git 상태를 변경하는 권한은 사용자에게만 있다. Claude, Codex 및 다른 Agent는 읽기 전용 Git 조회만 수행한다.
+- Agent에게 허용되는 Git 사용은 현재 branch/HEAD, `status`, `log`, `diff`, `show` 확인뿐이다.
+- Agent는 branch/worktree 생성·전환·삭제, add/stage, commit, push/pull/fetch, merge/rebase, reset/restore/checkout, stash/clean, tag, Git 설정 변경을 수행하거나 권한을 요청하지 않는다.
+- 사용자가 작업 branch 준비, 명시적 파일 staging, diff 검토, commit, push, PR, merge 및 `develop` 최신화를 직접 수행한다.
 
 ## AI Agent 작업 규칙
 
@@ -462,9 +554,7 @@ DB schema
 - 사용자의 승인을 받은 범위만 수정한다.
 - Architecture 또는 Dependency 변경은 반드시 먼저 설명하고 승인을 받는다.
 - 요청하지 않은 Dependency를 추가하지 않는다.
-- 자동으로 git add, commit, push 하지 않는다.
-- git reset --hard, force push, history rewrite, branch 강제 삭제를 하지 않는다.
-- destructive command가 필요하면 실행 전에 이유를 설명하고 승인을 요청한다.
+- Git은 위 `Git Workflow`의 읽기 전용 범위만 사용하며 어떤 Git 변경도 수행하지 않는다.
 - 작업 완료 후 변경 파일, 변경 이유, 테스트 결과, 남은 작업을 보고한다.
 - 다음과 같은 오래된 가정을 되풀이하지 않는다: PDF 전용 문서 처리, Prompt Injection을 선택적 확장으로 취급, 범용 Chatbot 가정, Client가 LLM Provider를 선택하는 방식, 과거(구) Development Order.
 
