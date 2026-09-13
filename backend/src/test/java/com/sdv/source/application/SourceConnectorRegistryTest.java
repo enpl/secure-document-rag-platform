@@ -1,8 +1,12 @@
 package com.sdv.source.application;
 
+import com.sdv.common.model.UserContext;
 import com.sdv.source.application.port.DocumentSourceConnector;
+import com.sdv.source.domain.SourceChangePage;
+import com.sdv.source.domain.SourceContentResult;
 import com.sdv.source.domain.SourceDocument;
-import com.sdv.source.domain.SourcePermission;
+import com.sdv.source.domain.SourceMetadataPage;
+import com.sdv.source.domain.SourcePermissionsResult;
 import com.sdv.source.domain.SourceType;
 import org.junit.jupiter.api.Test;
 
@@ -67,17 +71,23 @@ class SourceConnectorRegistryTest {
             }
 
             @Override
-            public byte[] fetchContent(Long sourceId, String sourceDocumentId) {
+            public SourceMetadataPage listMetadata(Long sourceId, String pageToken) {
                 throw new UnsupportedOperationException("not used in this test");
             }
 
             @Override
-            public List<SourcePermission> getPermissions(Long sourceId, String sourceDocumentId) {
+            public SourceContentResult fetchContent(UserContext requestingUser, Long sourceId,
+                    String sourceDocumentId, String expectedSourceVersion) {
                 throw new UnsupportedOperationException("not used in this test");
             }
 
             @Override
-            public List<SourceDocument> findChanges(Long sourceId, String syncCursor) {
+            public SourcePermissionsResult getPermissions(Long sourceId, String sourceDocumentId) {
+                throw new UnsupportedOperationException("not used in this test");
+            }
+
+            @Override
+            public SourceChangePage findChanges(Long sourceId, String pageToken) {
                 throw new UnsupportedOperationException("not used in this test");
             }
         };

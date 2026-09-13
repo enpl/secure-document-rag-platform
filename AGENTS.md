@@ -546,6 +546,18 @@ Environment / Specification Alignment는 완료됐으며 다음 활성 구현은
 - Agent는 branch/worktree 생성·전환·삭제, add/stage, commit, push/pull/fetch, merge/rebase, reset/restore/checkout, stash/clean, tag, Git 설정 변경을 수행하거나 권한을 요청하지 않는다.
 - 사용자가 작업 branch 준비, 명시적 파일 staging, diff 검토, commit, push, PR, merge 및 `develop` 최신화를 직접 수행한다.
 
+## Deferred Register / MVP 우선 전달 Workflow
+
+`docs/plan/SDV_MVP_DEFERRED.md`(SDV MVP 우선 구현·보완 목록)가 이 저장소의 살아있는 원본이다 — Codex 관제(`outputs/SDV_MVP_DEFERRED.md`)는 최초 스냅샷일 뿐이다. 2026-09-13 사용자 지시로 도입됐다.
+
+- 모든 작업은 시작할 때 이 보완 목록과 실제 현재 Git 상태(`branch`/`HEAD`/`status`), 그리고 `.claude-handoff/latest.md`를 먼저 읽는다.
+- 그 목록에서 현재 작업에 실제로 관련된 항목만 골라 반영하고, 승인된 MVP Slice를 끝까지 완료한다.
+- 그 밖에 발견한 후속 작업 후보는 목록/handoff에 재검토 시점·근거와 함께 기록해두고, 승인된 작업을 계속한다 — 같은 상황이 바뀌지 않았는데 매번 다시 묻지 않는다.
+- 보완(Deferred) 항목에 새 범위를 추가하려면 먼저 사용자의 수락을 받는다(항목 ID·효과·수정 범위·검증·추가 비용을 한 번 제시하고 묻는다) — 사용자가 수락하기 전에는 자동으로 끼워 넣지 않는다. 이미 승인된 범위 안에서 필요한 필수 수정은 다시 승인받지 않아도 된다.
+- 작업이 끝날 때마다 `docs/plan/SDV_MVP_DEFERRED.md`의 상태/근거를 실제로 갱신하고, `.claude-handoff/latest.md`를 누적 갱신해 다시 연다(Mandatory Claude Handoff 규칙과 동일).
+
+**M08 MVP OAuth 승인 기록(2026-09-13).** PostgreSQL 암호문 Token 저장(외부 주입 Master Key)이 승인됐다 — `docs/spec/SDV_M08_TOKEN_CONTRACT.md` 참고, 다시 승인받지 않는다. M16의 Frontend 기반 부분(로그인, Source 목록/Google 연결·해제, 준비 상태 표시)은 M09~M15 전체 완료를 기다리지 않고 먼저 시작할 수 있다 — 이는 UI 개발 착수 시점만 앞당긴 것이며, Source 인가(Authorization)와 원본 비보관(No-Original-Retention) 불변식은 그대로 유지한다.
+
 ## AI Agent 작업 규칙
 
 - 작업 전에 현재 Repository 파일을 먼저 조사한다.

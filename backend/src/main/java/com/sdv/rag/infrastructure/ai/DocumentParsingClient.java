@@ -4,6 +4,7 @@ import com.sdv.rag.domain.ExtractedLocation;
 import com.sdv.rag.domain.LocatorType;
 import com.sdv.rag.domain.ParseOutcome;
 import com.sdv.rag.domain.ParseOutcomeKind;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -33,7 +34,14 @@ public class DocumentParsingClient {
 
     private final RestClient restClient;
 
-    public DocumentParsingClient(RestClient restClient) {
+    /**
+     * M08 후속 교정 - {@code @Qualifier}: {@code GoogleDriveRestClientConfig}가
+     * 두 번째 {@link RestClient} Bean({@code googleDriveRestClient})을 추가하면서,
+     * 이 생성자의 원래 Qualifier 없는 주입이 더 이상 결정적이지 않게 됐다(Bean이
+     * 2개면 Spring이 고를 수 없다) - 동작은 그대로 두고 어떤 Bean을 원하는지만
+     * 명시한다.
+     */
+    public DocumentParsingClient(@Qualifier("aiServiceRestClient") RestClient restClient) {
         this.restClient = restClient;
     }
 

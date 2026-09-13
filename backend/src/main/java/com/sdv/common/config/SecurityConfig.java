@@ -71,6 +71,13 @@ public class SecurityConfig {
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
                         .requestMatchers("/actuator/**").denyAll()
+                        // M08 MVP OAuth(docs/spec/SDV_M08_TOKEN_CONTRACT.md): Google이 Browser
+                        // Redirect로 호출하는 Callback만 예외적으로 Bearer Token 없이 통과시킨다 -
+                        // Google은 Keycloak Bearer를 붙일 수 없다. 이 하나의 정확한 경로/Method만
+                        // 이 규칙의 대상이다 - /api/admin/sources/** 나머지는 여전히 ADMIN 전용이다
+                        // (GoogleDriveOAuthController가 State/HttpOnly Cookie/PKCE로 이 Callback을
+                        // 별도로 인증한다).
+                        .requestMatchers(HttpMethod.GET, "/api/admin/sources/google/callback").permitAll()
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/**").hasAnyRole("USER", "ADMIN")
                         .anyRequest().denyAll())

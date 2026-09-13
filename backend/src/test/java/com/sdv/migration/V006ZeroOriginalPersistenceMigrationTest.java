@@ -51,7 +51,10 @@ class V006ZeroOriginalPersistenceMigrationTest {
 
     @Test
     void emptyDatabaseMigratesThroughV006() throws SQLException {
-        flyway(null).migrate();
+        // M08 MVP OAuth(V007) 추가 후에도 이 Test는 "V006까지만" 검증하려는 의도를
+        // 유지한다 - target을 명시적으로 6으로 고정한다(이전에는 classpath의 최신
+        // Migration이 우연히 V006이라 target(null)과 결과가 같았을 뿐이다).
+        flyway(MigrationVersion.fromVersion("6")).migrate();
 
         try (Connection connection = connect()) {
             assertThat(appliedVersions(connection)).containsExactly("001", "002", "003", "004", "005", "006");
@@ -94,8 +97,9 @@ class V006ZeroOriginalPersistenceMigrationTest {
         }
 
         // 같은 DB 위에서 나머지(V006)를 마저 적용한다 - V001~V005는 다시 실행되지
-        // 않는다(Flyway는 이미 적용된 Version을 재실행하지 않는다).
-        flyway(null).migrate();
+        // 않는다(Flyway는 이미 적용된 Version을 재실행하지 않는다). V007(M08) 추가 후에도
+        // 이 Test는 "V006까지만" 검증한다 - target을 명시적으로 6으로 고정한다.
+        flyway(MigrationVersion.fromVersion("6")).migrate();
 
         try (Connection connection = connect()) {
             assertThat(appliedVersions(connection)).containsExactly("001", "002", "003", "004", "005", "006");
