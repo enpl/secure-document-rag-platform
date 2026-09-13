@@ -2,6 +2,7 @@ package com.sdv.source.application;
 
 import com.sdv.common.exception.NotFoundException;
 import com.sdv.source.application.port.SourceTokenStore;
+import com.sdv.source.application.port.TokenEnvelope;
 import com.sdv.source.domain.SourceConnection;
 import com.sdv.source.domain.SourceType;
 import com.sdv.source.infrastructure.persistence.entity.SourceConnectionEntity;
@@ -16,6 +17,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.TestPropertySource;
 
 import java.util.List;
@@ -100,20 +102,35 @@ class SourceConnectionServiceTokenRemovalTest {
         assertThat(recording().deletedSourceIds()).containsExactly(sourceId);
     }
 
+    /**
+     * M08 후속 교정: {@code disconnect()}는 이제 이 Read 시점의 Stale한 {@code
+     * tokenRef} 값만으로 {@code delete()} 호출을 건너뛰지 않는다("ensure disconnect
+     * coordinates even when no token was present at its initial read" - 이 작업
+     * 지시사항 참고, {@code SourceConnectionService.disconnect} Class Javadoc의
+     * "M08 후속 교정" 참고) - 반복 호출에서도 항상 {@code delete()}를 호출하고,
+     * 멱등성은 그 구현체 자신({@code GoogleTokenService.revoke})의 책임이다. 이
+     * Test Double은 실제 멱등적 구현체가 아니라 단순 "호출됐다" Recorder이므로, 두
+     * 번째 호출도 기록에 남는 것이 이제 올바른 관찰 결과다.
+     */
     @Test
-    void repeatedSuccessfulDisconnectDoesNotDeleteAlreadyClearedTokenAgain() {
+    void repeatedSuccessfulDisconnectCallsDeleteAgainIdempotentlyAndStaysDisabled() {
         String ownerSubject = "owner-token-repeat-disconnect";
         long sourceId = createWithTokenRefAndDocument(ownerSubject, "token-ref-repeat-case");
 
         sourceConnectionService.disconnect(sourceId, ownerSubject);
         assertThat(recording().deletedSourceIds()).containsExactly(sourceId);
 
-        // Second call: tokenRef is already null, so the store must not be invoked again.
+        // Second call: tokenRef is already null in the DB, but disconnect() no longer trusts
+        // that stale-read fact alone - it always asks the store again, relying on the store's
+        // own idempotency (real GoogleTokenService.revoke is a safe no-op with nothing stored).
         sourceConnectionService.disconnect(sourceId, ownerSubject);
 
-        assertThat(recording().deletedSourceIds()).as("delete() must not be called a second time").containsExactly(sourceId);
+        assertThat(recording().deletedSourceIds())
+                .as("delete() is called again on repeat disconnect - idempotency is the store's own responsibility now")
+                .containsExactly(sourceId, sourceId);
         SourceConnectionEntity stillDisabled = sourceConnectionJpaRepository.findById(sourceId).orElseThrow();
         assertThat(stillDisabled.getStatus()).isEqualTo("DISABLED");
+        assertThat(stillDisabled.getTokenRef()).isNull();
     }
 
     @Test
@@ -151,13 +168,13 @@ class SourceConnectionServiceTokenRemovalTest {
         private final AtomicBoolean shouldFailOnDelete = new AtomicBoolean(false);
 
         @Override
-        public void save(Long sourceId, String token) {
+        public void save(Long sourceId, TokenEnvelope token) {
             // not exercised by disconnect(); no-op for this test double.
         }
 
         @Override
-        public String load(Long sourceId) {
-            return null;
+        public java.util.Optional<TokenEnvelope> load(Long sourceId) {
+            return java.util.Optional.empty();
         }
 
         @Override
@@ -185,7 +202,14 @@ class SourceConnectionServiceTokenRemovalTest {
     @TestConfiguration
     static class RecordingTokenStoreConfig {
 
+        // M08 MVP OAuth 후속 교정: GoogleTokenStoreAdapter가 이제 실제 SourceTokenStore
+        // Bean으로 항상 등록된다(이 Class Javadoc의 "Production Stub을 추가하지 않는다"는
+        // 이 Test Double 자체에 대한 서술이지, 이 파일이 그 실제 Bean과의 충돌을 피해도
+        // 된다는 뜻은 아니다) - @Primary로 이 Test Double을 명시적으로 우선시켜, 단일
+        // SourceTokenStore Bean을 기대하는 @Autowired 지점이 계속 결정론적으로 이
+        // RecordingSourceTokenStore를 받게 한다.
         @Bean
+        @Primary
         RecordingSourceTokenStore recordingSourceTokenStore() {
             return new RecordingSourceTokenStore();
         }

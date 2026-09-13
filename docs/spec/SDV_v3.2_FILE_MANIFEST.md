@@ -988,6 +988,31 @@ SRC-003
 
 ---
 
+**M08 MVP OAuth implementation paths (2026-09-13, `docs/spec/SDV_M08_TOKEN_CONTRACT.md`).**
+This entire section's bare filenames follow §10's single stated location
+(`com.sdv.source.infrastructure.google`) — that holds for F-BE-040/041/043/044/045 and
+the rest, but **not** for F-BE-042: `GoogleDriveOAuthController` is a Controller, so it
+lives at `backend/src/main/java/com/sdv/source/api/GoogleDriveOAuthController.java`,
+alongside the existing `SourceAdminController` (same package, same "HTTP concerns only"
+convention) — not under `infrastructure.google`. F-BE-043 (`GoogleTokenService`) and
+F-BE-044 (`GoogleTokenStoreAdapter`) are confirmed at
+`backend/src/main/java/com/sdv/source/infrastructure/google/`, matching §10 as normal.
+F-BE-128 (`SecretProperties`) is at the path already given in File Manifest §4
+(`com.sdv.common.config`) — unchanged.
+
+Small concrete implementation support these three canonical files needed (no new
+canonical File IDs assigned, per this task's own instruction not to invent official
+IDs): `GoogleOAuthClient`/`GoogleOAuthException`/`GoogleOAuthRestClientConfig`
+(`com.sdv.source.infrastructure.google`, low-level Google OAuth HTTP wrapper, mirroring
+`GoogleDriveClient`'s existing role for the Drive API itself), `GoogleDriveOAuthService`/
+`GoogleOAuthStateStore` (`com.sdv.source.application`, Use Case/Transaction boundary and
+the bounded in-memory one-use OAuth state store), `GoogleAuthorizeResponse`
+(`com.sdv.source.api.dto`), and `SourceOAuthTokenEntity`/`SourceOAuthTokenJpaRepository`
+(`com.sdv.source.infrastructure.persistence.entity` / `.repository`) backing the new
+`source_oauth_tokens` table.
+
+---
+
 ## F-BE-045 — GoogleDrivePermissionAdapter
 
 File:
@@ -1330,7 +1355,7 @@ Frontend must not reimplement Backend permission logic.
 | F-INF-012 | `scripts/restore.ps1` | PowerShell | restore/verification — same v1.4 scope narrowing as F-INF-011; ephemeral evidence is never restored (it is never backed up) |
 | F-INF-016 | `.github/workflows/ci.yml` | GitHub Actions | Gradle/pytest/npm/secret scan |
 | F-INF-017 | `backend/src/main/resources/db/migration/V003__content_processing_schema.sql` | SQL | Applied immutable ALTER-only migration for source document index status/reason and chunk locator type/value |
-| F-INF-018 | `backend/src/main/resources/db/migration/V004__consumer_idempotency.sql` | SQL | **KNOWN VERSION COLLISION:** the workbook assigns the `processed_events` ledger and unique constraints to this path, but repository V004 is already the applied immutable `V004__source_account_isolation.sql`. Do not create a second V004; during M09 retain the F-INF-018 responsibility and assign a verified unused version after V006, then update this public path transparently. |
+| F-INF-018 | `backend/src/main/resources/db/migration/V004__consumer_idempotency.sql` | SQL | **KNOWN VERSION COLLISION:** the workbook assigns the `processed_events` ledger and unique constraints to this path, but repository V004 is already the applied immutable `V004__source_account_isolation.sql`. Do not create a second V004; during M09 retain the F-INF-018 responsibility and assign a verified unused version, then update this public path transparently. **2026-09-13 update:** the previously-noted "next free version after V006" is no longer V007 — `V007__oauth_token_store.sql` (M08 MVP OAuth, `docs/spec/SDV_M08_TOKEN_CONTRACT.md`) already claimed it. M09 must inspect the actual applied baseline at that time and use the real next-free version (V008 or later, whichever is actually unoccupied) — do not assume V008 without re-verifying, the same way this V007 was only assigned after confirming V001–V006 first. |
 
 Applied migration files must not be edited.
 

@@ -23,3 +23,12 @@ sdv:
 
   ollama:
     base-url: ${OLLAMA_BASE_URL:http://ollama:11434}
+
+  # M08 MVP OAuth (docs/spec/SDV_M08_TOKEN_CONTRACT.md) - application-local.yml과 동일한 이유.
+  secrets:
+    google-client-id: ${GOOGLE_CLIENT_ID:}
+    google-client-secret: ${GOOGLE_CLIENT_SECRET:}
+    google-redirect-uri: ${GOOGLE_REDIRECT_URI:}
+    token-encryption-key-file: ${SOURCE_TOKEN_ENCRYPTION_KEY_FILE:}
+    token-encryption-key: ${SOURCE_TOKEN_ENCRYPTION_KEY:}
+    token-encryption-key-id: ${SOURCE_TOKEN_ENCRYPTION_KEY_ID:}

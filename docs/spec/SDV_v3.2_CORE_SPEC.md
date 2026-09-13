@@ -615,6 +615,24 @@ Rules:
 - missing token and decryption failure must be distinguishable.
 - `source_connections.token_ref` is a token reference, not the raw token.
 
+**M08 MVP OAuth backing-store decision (2026-09-13).** This section defines the
+conceptual `SourceTokenStore` contract and rules above, but did not by itself specify
+where encrypted token material is durably stored or how it is keyed — that was a real
+gap (previously recorded as a `SPEC GAP / PRODUCT DECISION REQUIRED` in
+`.claude-handoff/latest.md`, not a documentation-sync drift). The user has since
+approved PostgreSQL ciphertext storage with an externally supplied master key. The full
+implementation contract (storage schema, AES/GCM parameters, key handling, OAuth/PKCE
+flow, refresh/disconnect rules, acceptance criteria) is recorded in the supplemental
+document `docs/spec/SDV_M08_TOKEN_CONTRACT.md` — read it together with this section, not
+as a replacement for it. The backing table is `source_oauth_tokens`, added by
+`V006__zero_original_persistence.sql`'s immediate successor migration
+`V007__oauth_token_store.sql` (V001–V007 are all applied; V001–V006 remain Immutable as
+before, and V007 itself must not be edited once applied either). This decision does not
+reopen or restate the storage topology/crypto defaults themselves as canonical
+Excel-sourced facts — `SDV_M08_TOKEN_CONTRACT.md` is explicit that those details are
+coordinator-selected implementation choices within the user's storage-backend
+authorization, not claims copied from the frozen v3.2 workbook.
+
 ---
 
 # 10. Google Drive Boundary

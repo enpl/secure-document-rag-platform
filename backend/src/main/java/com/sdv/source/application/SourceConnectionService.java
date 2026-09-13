@@ -109,9 +109,10 @@ public class SourceConnectionService {
      *       소유이면 존재하지 않을 때와 동일한 {@link NotFoundException}을
      *       던진다(Cross-Account 존재 노출 금지) - Token 삭제를 포함해 어떤
      *       변경도 일어나지 않는다.</li>
-     *   <li>Token 참조가 있으면 {@link SourceTokenStore}로 제거한다 - 사용 가능한
-     *       구현체가 없으면 Fail Closed(성공을 보고하지 않고 예외를 던져
-     *       Transaction 전체를 Rollback한다).</li>
+     *   <li>{@link SourceTokenStore}로 항상 제거를 시도한다(실제로 지울 것이
+     *       있는지는 그 구현체 자신이 Lock을 잡은 뒤 다시 확인한다 - 아래 "M08
+     *       후속 교정" 참고). 사용 가능한 구현체가 없으면 Fail Closed(성공을
+     *       보고하지 않고 예외를 던져 Transaction 전체를 Rollback한다).</li>
      *   <li>연결 상태를 DISABLED로 전이한다.</li>
      *   <li>이 연결의 비삭제 문서를 모두 DELETED로 전이한다.</li>
      *   <li>성공 감사를 기록한다 - 실패하면 위 1~4단계를 포함해 이 Transaction
@@ -119,27 +120,41 @@ public class SourceConnectionService {
      *       단, 이미 실행된 외부 Token 삭제 자체는 DB Rollback으로 되돌릴 수
      *       없다는 한계도 함께 참고).</li>
      * </ol>
-     * 반복 호출해도 안전하다 - 이미 Disconnect된(Token 참조가 이미 비워진)
-     * 연결에 다시 호출하면 Token Store를 다시 호출하지 않고, 문서 전이도
-     * 자연히 no-op이 된다.
+     * 반복 호출해도 안전하다 - 이미 Disconnect된 연결에 다시 호출하면 {@link
+     * SourceTokenStore#delete}가 멱등적으로 아무 일도 하지 않고, 문서 전이도 자연히
+     * no-op이 된다.
+     *
+     * <h2>M08 후속 교정 - "이 Read 시점에 Token이 없었다"만으로 Token Store 호출을
+     * 건너뛰지 않는다</h2>
+     * <p>이전 구현은 이 메서드 맨 위의(Unlocked) 조회가 보여주는 {@code tokenRef}가
+     * {@code null}이면 {@link SourceTokenStore#delete}를 아예 호출하지 않았다 - 그
+     * 조회와 이 Transaction의 최종 Commit(Status 갱신 Flush) 사이에, 같은 Source에
+     * 대한 최초 인증({@code GoogleDriveOAuthService.commitCredential} → {@code
+     * GoogleTokenService.store})이 동시에 끝나 새 Credential 행을 만들었다면, 이
+     * Disconnect는 그 새 행을 절대 알지 못한 채 Source만 DISABLED로 바꾸고 끝나
+     * Credential 행이 Revoke도, 삭제도 되지 않은 채로 고아처럼 남을 수 있었다
+     * ("ensure disconnect coordinates even when no token was present at its
+     * initial read" - 이 작업 지시사항). 이제 {@link SourceTokenStore#delete}를
+     * 항상 호출한다 - 실제로 지울 것이 있는지는 그 Method 자신이(부모 Source를 먼저
+     * 잠근 뒤, 1차 캐시를 우회하는 Native Query로) 다시 확인한다({@code
+     * GoogleTokenService.revoke}) - 그래서 이 시점의 Stale한 Java 값이 아니라 Lock
+     * 시점의 실제 DB 상태를 기준으로 판단한다.</p>
      */
     @Transactional
     public void disconnect(Long id, String ownerSubject) {
         SourceConnectionEntity entity = sourceConnectionJpaRepository.findByIdAndOwnerSubject(id, ownerSubject)
                 .orElseThrow(() -> new NotFoundException("Source connection not found"));
 
-        String tokenRef = entity.getTokenRef();
-        if (tokenRef != null && !tokenRef.isBlank()) {
-            if (sourceTokenStore.isEmpty()) {
-                // Fail Closed: 제거할 Token이 있는데 Token Store가 없으면 성공을
-                // 보고하지 않는다 - 이 예외가 Transaction을 Rollback시킨다.
-                throw new IllegalStateException(
-                        "No SourceTokenStore implementation available; refusing to disconnect source " + id
-                                + " while a token reference still exists");
-            }
-            sourceTokenStore.get().delete(id);
-            entity.updateTokenRef(null);
+        if (sourceTokenStore.isEmpty()) {
+            // Fail Closed: Token Store 자체가 없으면 이 Source에 지금 실제로 Credential이
+            // 있는지 안전하게 확인할 방법이 없다 - 이 Read 시점의 Stale한 tokenRef 값만
+            // 보고 "없다"고 넘겨짚지 않는다. 성공을 보고하지 않고 이 예외로 Transaction
+            // 전체를 Rollback시킨다.
+            throw new IllegalStateException(
+                    "No SourceTokenStore implementation available; refusing to disconnect source " + id);
         }
+        sourceTokenStore.get().delete(id);
+        entity.updateTokenRef(null);
 
         entity.changeStatus(SourceConnection.STATUS_DISABLED);
         sourceDocumentJpaRepository.markAllActiveAsDeletedForSource(id);
