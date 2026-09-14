@@ -22,6 +22,15 @@ public interface SourceOAuthTokenJpaRepository extends JpaRepository<SourceOAuth
 
     Optional<SourceOAuthTokenEntity> findBySourceId(Long sourceId);
 
+    /**
+     * MVP-17({@code docs/plan/SDV_MVP_DEFERRED.md}) - Source 목록 화면이 "생성됐지만
+     * 아직 연결 안 됨"과 "연결됨"을 구분해 보여주기 위한, 부작용 없는(Side-Effect-Free)
+     * 존재 확인 전용 조회다. {@link com.sdv.source.infrastructure.google.GoogleTokenService#load}와
+     * 달리 복호화/Google Refresh Call/재암호화 쓰기를 전혀 하지 않는다 - 단순 목록 조회가
+     * 매번 이런 부작용을 트리거해서는 안 된다는 이 작업 지시사항을 그대로 지킨다.
+     */
+    boolean existsBySourceId(Long sourceId);
+
     @Modifying
     @Query("DELETE FROM SourceOAuthTokenEntity e WHERE e.sourceId = :sourceId")
     int deleteBySourceId(@Param("sourceId") Long sourceId);

@@ -29,11 +29,23 @@ public class SourceApiMapper {
                 null);
     }
 
+    /** 새로 생성된 Source 전용 - 같은 요청 안에서 방금 만든 Source는 Credential을 가질 수 없다. */
     public SourceResponse toResponse(SourceConnection connection) {
+        return toResponse(connection, false);
+    }
+
+    /**
+     * MVP-17 - {@code credentialPresent}는 호출자(Application Service)가 이미
+     * 부작용 없이 계산해 전달한 값을 그대로 옮겨 담을 뿐이다 - 이 Mapper 자신은
+     * Repository/Service를 조회하지 않는다.
+     */
+    public SourceResponse toResponse(SourceConnection connection, boolean credentialPresent) {
         return new SourceResponse(
                 connection.getId(),
                 connection.getType(),
+                connection.getDisplayName(),
                 connection.getStatus(),
-                connection.getLastSyncAt());
+                connection.getLastSyncAt(),
+                credentialPresent);
     }
 }

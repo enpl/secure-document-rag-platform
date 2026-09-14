@@ -1,0 +1,74 @@
+# M16A local testbed profile (docs/runbooks/M16A_LOCAL_TESTBED.md).
+#
+# Isolated from every other profile: separate DB (localhost:15432), separate
+# Keycloak realm/issuer (localhost:18180/realms/sdv-testbed), separate HTTP
+# port (18080). Only started explicitly via
+# scripts/testbed/start-testbed.ps1 (--spring.profiles.active=testbed) -
+# never the default profile, never picked up by application-local.yml/
+# application-compose.yml.
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:15432/sdv}
+    username: ${SPRING_DATASOURCE_USERNAME:sdv}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+
+  # Same bootstrap-superuser-as-Flyway-identity local-dev compromise as
+  # application-local.yml - see that file's comment.
+  #
+  # No explicit spring.flyway.url placeholder is declared here on purpose:
+  # Spring Boot binds an OS environment variable named SPRING_FLYWAY_URL to
+  # spring.flyway.url directly (relaxed binding), regardless of whether any
+  # YAML file references it - so adding a `${SPRING_FLYWAY_URL:...}`
+  # placeholder here would add no real protection, and a hardcoded literal
+  # here would break Testcontainers-backed tests that activate this profile
+  # (they need Flyway to target the dynamically-assigned test container, not
+  # a fixed URL). The actual isolation guarantee lives in
+  # scripts/testbed/start-testbed.ps1 (_lib.ps1's New-IsolatedEnvironment),
+  # which strips any inherited SPRING_* variable - including
+  # SPRING_FLYWAY_URL - from the launched process's environment and then
+  # sets SPRING_DATASOURCE_URL/SPRING_FLYWAY_USER/PASSWORD explicitly to the
+  # testbed's own values before every real (non-test) run.
+  flyway:
+    user: ${SPRING_FLYWAY_USER:sdv_user}
+    password: ${SPRING_FLYWAY_PASSWORD}
+    locations: classpath:db/migration,classpath:db/callback
+
+server:
+  port: ${SERVER_PORT:18080}
+  # Loopback-only - never 0.0.0.0/:: for this profile, with or without the
+  # launcher script (M16A follow-up - a Docker port binding does not
+  # restrict a host-run process; this is the actual control for it).
+  address: ${SERVER_ADDRESS:127.0.0.1}
+
+sdv:
+  keycloak:
+    issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:18180/realms/sdv-testbed}
+    audience: ${KEYCLOAK_AUDIENCE:sdv-backend}
+
+  # M08 MVP OAuth secrets - identical shape to application-local.yml. Blank
+  # values keep the existing fail-closed-at-use (not at startup) behavior, so
+  # the BASELINE testbed stage works with no Google configuration at all.
+  secrets:
+    google-client-id: ${GOOGLE_CLIENT_ID:}
+    google-client-secret: ${GOOGLE_CLIENT_SECRET:}
+    google-redirect-uri: ${GOOGLE_REDIRECT_URI:}
+    token-encryption-key-file: ${SOURCE_TOKEN_ENCRYPTION_KEY_FILE:}
+    token-encryption-key: ${SOURCE_TOKEN_ENCRYPTION_KEY:}
+    token-encryption-key-id: ${SOURCE_TOKEN_ENCRYPTION_KEY_ID:}
+
+  google-oauth:
+    frontend-return-url: ${GOOGLE_OAUTH_FRONTEND_RETURN_URL:}
+    # Loopback-only local testbed over plain http - same override as
+    # application-local.yml, for the same reason.
+    cookie-secure: ${GOOGLE_OAUTH_COOKIE_SECURE:false}
+
+  # M16A follow-up - the one-file live read diagnostic
+  # (com.sdv.testbed.TestbedReadDiagnosticController). Registers only when
+  # BOTH this profile is active AND this flag is explicitly true - see that
+  # class's @Profile("testbed") + @ConditionalOnProperty. Defaults to
+  # disabled even within this profile, so simply running the testbed does
+  # not expose it by accident.
+  testbed:
+    diagnostics:
+      enabled: ${SDV_TESTBED_DIAGNOSTICS_ENABLED:false}
+      allowed-file-id: ${SDV_TESTBED_DIAGNOSTICS_ALLOWED_FILE_ID:}

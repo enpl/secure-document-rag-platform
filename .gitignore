@@ -5,6 +5,12 @@
 infra/secrets/*
 !infra/secrets/README.md
 
+# M16A local testbed (docs/runbooks/M16A_LOCAL_TESTBED.md) - generated
+# passwords/keys and tracked process PIDs, never committed.
+infra/testbed/secrets/
+infra/testbed/.pids/
+*.local.*
+
 # Java / Gradle
 .gradle/
 build/

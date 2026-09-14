@@ -1,0 +1,88 @@
+# M16A local testbed (docs/runbooks/M16A_LOCAL_TESTBED.md).
+#
+# A fully separate Compose project from the canonical stack
+# (infra/docker-compose.dev.yml / root compose.yaml, project "infra") - own
+# name, own containers, own network, own named volumes. It never references
+# an existing "sdv-*" container/volume and must not be started with the same
+# project name as the canonical stack. Run with:
+#   docker compose -p sdv-testbed -f infra/testbed/docker-compose.testbed.yml <up|down|ps> ...
+# (scripts/testbed/*.ps1 do this for you).
+#
+# Only Postgres + Keycloak run in Docker. The backend (Java) and frontend
+# (Vite) run directly on the host via the existing Gradle/npm tooling - see
+# the start script - so this file intentionally does not containerize the
+# whole application.
+name: sdv-testbed
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18
+    container_name: sdv-testbed-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: sdv
+      # Same bootstrap-superuser-as-Flyway-identity pattern as the canonical
+      # stack (infra/docker-compose.dev.yml) - see application-testbed.yml.
+      POSTGRES_USER: sdv_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+
+    # Loopback-only - never reachable from another host on the network.
+    ports:
+      - "127.0.0.1:15432:5432"
+
+    volumes:
+      - sdv-testbed-postgres-data:/var/lib/postgresql
+      # Reuses the existing runtime-role bootstrap script verbatim (it is
+      # environment-agnostic - it only creates the restricted `sdv` login
+      # from the sdv_runtime_password secret). Only runs once, on this
+      # testbed volume's own first (empty) initialization.
+      - ../initdb:/docker-entrypoint-initdb.d:ro
+
+    secrets:
+      - postgres_password
+      - sdv_runtime_password
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sdv_user -d sdv"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.3
+    container_name: sdv-testbed-keycloak
+    restart: unless-stopped
+
+    # --import-realm only creates the realm on a fresh (empty) data
+    # directory/volume - it never re-imports over an already-existing
+    # "sdv-testbed" realm in this volume (Keycloak's own behavior, same as
+    # the canonical stack). It does not touch any other Keycloak instance.
+    command: start-dev --import-realm
+
+    environment:
+      # Keycloak SERVER administrator (this container's own admin console) -
+      # not an SDV application account, and not the application ADMIN role.
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+
+    ports:
+      - "127.0.0.1:18180:8080"
+
+    volumes:
+      - sdv-testbed-keycloak-data:/opt/keycloak/data
+      # No user passwords are baked into this file (see
+      # realm-export.testbed.json) - the start script sets them once via the
+      # Keycloak Admin REST API and stores them in the git-ignored
+      # infra/testbed/secrets/ directory.
+      - ./realm-export.testbed.json:/opt/keycloak/data/import/realm-export.json:ro
+
+volumes:
+  sdv-testbed-postgres-data:
+  sdv-testbed-keycloak-data:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  sdv_runtime_password:
+    file: ./secrets/sdv_runtime_password.txt

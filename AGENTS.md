@@ -546,6 +546,10 @@ Environment / Specification Alignment는 완료됐으며 다음 활성 구현은
 - Agent는 branch/worktree 생성·전환·삭제, add/stage, commit, push/pull/fetch, merge/rebase, reset/restore/checkout, stash/clean, tag, Git 설정 변경을 수행하거나 권한을 요청하지 않는다.
 - 사용자가 작업 branch 준비, 명시적 파일 staging, diff 검토, commit, push, PR, merge 및 `develop` 최신화를 직접 수행한다.
 
+## Forbidden File Access (Agent, 영구 제약)
+
+- Agent(Claude, Codex 등)는 `infra/testbed/secrets/google-oauth.local.env` 파일에 어떤 방식으로도 접근하지 않는다 — 읽기·조회·검색(Grep/Glob 포함)·수정·삭제·복사·작성을 전부 금지하며, 이 파일을 읽는 Launcher/Helper 스크립트를 대신 실행하거나 내용 확인·접근 권한을 요청하는 것도 금지된다(2026-09-14 사용자 지시, 이후 모든 작업에 영구 적용).
+
 ## Deferred Register / MVP 우선 전달 Workflow
 
 `docs/plan/SDV_MVP_DEFERRED.md`(SDV MVP 우선 구현·보완 목록)가 이 저장소의 살아있는 원본이다 — Codex 관제(`outputs/SDV_MVP_DEFERRED.md`)는 최초 스냅샷일 뿐이다. 2026-09-13 사용자 지시로 도입됐다.

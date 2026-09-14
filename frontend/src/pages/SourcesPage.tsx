@@ -1,0 +1,364 @@
+import { useEffect, useRef, useState } from 'react'
+import type { FormEvent } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
+import { useApiClient } from '../api/useApiClient'
+import { authorizeGoogleSource, createGoogleDriveSource, disconnectSource, listSources } from '../api/sources'
+import type { SourceResponse } from '../api/sources'
+import { ApiError } from '../api/client'
+import { TestbedDiagnosticPanel } from '../components/TestbedDiagnosticPanel'
+
+type ListState =
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'loaded'; sources: SourceResponse[] }
+
+/**
+ * ADMIN-only Connection management (owner-scoped Google Drive Sources only -
+ * Local Vault is retired/v1.4-excluded, SharePoint/S3 are contract-only server
+ * side). A non-ADMIN who reaches this route (e.g. by typing the URL) sees an
+ * honest limited state, never the admin content - the sidebar link is already
+ * hidden for them, and the server independently still enforces ADMIN-only on
+ * every request regardless of what this page renders.
+ */
+export function SourcesPage() {
+  const { isAdmin } = useAuth()
+
+  if (!isAdmin) {
+    return (
+      <>
+        <h1>연결 관리</h1>
+        <div className="status-banner">
+          연결 관리는 관리자만 사용할 수 있습니다. 필요하면 관리자에게 Google Drive 연결을 요청해 주세요.
+        </div>
+      </>
+    )
+  }
+
+  return <AdminSourcesPage />
+}
+
+function AdminSourcesPage() {
+  const apiClient = useApiClient()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [state, setState] = useState<ListState>({ kind: 'loading' })
+
+  const [newName, setNewName] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+
+  const [connectingId, setConnectingId] = useState<number | null>(null)
+  const [confirmingId, setConfirmingId] = useState<number | null>(null)
+  const [disconnectingId, setDisconnectingId] = useState<number | null>(null)
+  const [rowErrors, setRowErrors] = useState<Record<number, string>>({})
+
+  // M16A follow-up 버그 수정 - callbackHint를 매 Render마다 searchParams에서
+  // 다시 계산하면, 아래 Effect가 URL에서 googleConnect를 지우자마자 바로 다음
+  // Render에서 배너가 사라져 버렸다(URL 자체가 유일한 진실 공급원이었기 때문).
+  // 이제 Mount 시점 값을 한 번만 State로 캡처해 URL 정리와 분리한다 - 배너는
+  // 이 컴포넌트가 Unmount(예: 다른 페이지로 이동 후 재방문)될 때까지 유지되고,
+  // 실제 연결 상태의 진실 공급원은 여전히 서버 목록 응답(credentialPresent)이다.
+  const [callbackHint] = useState(() => toCallbackHint(searchParams.get('googleConnect')))
+
+  // 여러 Fetch가 겹칠 때(Mount 시점의 목록 Effect와 Callback 정리 Effect가 동시에
+  // 나갈 수 있다, 또는 사용자가 다시 시도를 연타할 때) 먼저 나간 요청의 응답이
+  // 나중에 도착해 이미 최신인 State를 되돌리지 않도록 요청마다 증가하는 순번을
+  // 매기고, 가장 최근에 발행한 요청의 응답만 반영한다.
+  const fetchSequenceRef = useRef(0)
+
+  // 실제 목록 요청 자체는 항상 비동기 콜백(.then/.catch) 안에서만 setState한다 -
+  // react-hooks/set-state-in-effect가 금지하는 "Effect Body에서의 동기 setState"를
+  // 만들지 않기 위함이다. 초기 State가 이미 'loading'이므로 최초 Mount는 이것만으로
+  // 충분하다.
+  function fetchSources() {
+    const requestId = ++fetchSequenceRef.current
+    listSources(apiClient)
+      .then((sources) => {
+        if (fetchSequenceRef.current !== requestId) return // 더 최신 요청이 이미 발행됨 - 이 응답은 버린다.
+        setState({ kind: 'loaded', sources })
+      })
+      .catch((error: unknown) => {
+        if (fetchSequenceRef.current !== requestId) return
+        setState({ kind: 'error', message: describeError(error) })
+      })
+  }
+
+  /** 사용자가 직접 트리거하는 재조회(재시도 버튼, 등록/연결 해제 성공 이후)에서만 쓴다 - Effect 안에서는 호출하지 않는다. */
+  function refresh() {
+    setState({ kind: 'loading' })
+    fetchSources()
+  }
+
+  useEffect(() => {
+    fetchSources()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- apiClient만 실제로 바뀌는 의존성이다.
+  }, [apiClient])
+
+  useEffect(() => {
+    if (callbackHint === null) {
+      return
+    }
+    const next = new URLSearchParams(searchParams)
+    next.delete('googleConnect')
+    setSearchParams(next, { replace: true })
+    fetchSources()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- callbackHint는 Mount 시점 한 번만 값이 정해지는 State이므로 이 Effect도 Mount당 한 번만 실행되면 된다.
+  }, [callbackHint])
+
+  async function handleCreate(event: FormEvent) {
+    event.preventDefault()
+    if (creating) {
+      return
+    }
+    const name = newName.trim()
+    if (!name) {
+      return
+    }
+    setCreating(true)
+    setCreateError(null)
+    try {
+      await createGoogleDriveSource(apiClient, name)
+      setNewName('')
+      refresh()
+    } catch (error) {
+      setCreateError(describeError(error))
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function handleConnect(source: SourceResponse) {
+    if (connectingId !== null) {
+      return
+    }
+    setConnectingId(source.id)
+    clearRowError(source.id)
+    try {
+      const result = await authorizeGoogleSource(apiClient, source.id)
+      // 전체 Browser Navigation이다 - Fetch/XHR이 아니다(Google 동의 화면으로
+      // 실제로 이동해야 한다). 이후 코드는 실행되지 않으므로 connectingId를
+      // 여기서 되돌리지 않는다.
+      redirectBrowserTo(result.authorizationUrl)
+    } catch (error) {
+      setRowError(source.id, describeError(error))
+      setConnectingId(null)
+    }
+  }
+
+  async function handleDisconnect(source: SourceResponse) {
+    if (disconnectingId !== null) {
+      return
+    }
+    setDisconnectingId(source.id)
+    try {
+      await disconnectSource(apiClient, source.id)
+      setConfirmingId(null)
+      refresh()
+    } catch (error) {
+      setRowError(source.id, describeError(error))
+    } finally {
+      setDisconnectingId(null)
+    }
+  }
+
+  function setRowError(id: number, message: string) {
+    setRowErrors((prev) => ({ ...prev, [id]: message }))
+  }
+
+  function clearRowError(id: number) {
+    setRowErrors((prev) => {
+      if (!(id in prev)) return prev
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+  }
+
+  return (
+    <>
+      <h1>연결 관리</h1>
+      <p className="text-secondary">Google Drive Source를 등록하고 연결하거나, 연결을 해제합니다.</p>
+
+      {callbackHint === 'success' && (
+        <div className="status-banner">
+          Google 연결 요청을 처리했습니다. 아래 목록에서 연결 상태를 확인해 주세요.
+        </div>
+      )}
+      {callbackHint === 'failed' && (
+        <div className="status-banner status-banner--error">
+          Google 연결에 실패했거나 취소되었습니다. 다시 시도해 주세요.
+        </div>
+      )}
+
+      <form className="card" onSubmit={handleCreate}>
+        <label className="form-label" htmlFor="new-source-name">
+          새 Google Drive Source 이름
+        </label>
+        <div className="form-row">
+          <input
+            id="new-source-name"
+            className="input"
+            value={newName}
+            onChange={(event) => setNewName(event.target.value)}
+            placeholder="예: 마케팅팀 공유 드라이브"
+            maxLength={255}
+            disabled={creating}
+          />
+          <button type="submit" className="btn btn--primary" disabled={creating || newName.trim().length === 0}>
+            {creating ? '등록 중...' : 'Source 등록'}
+          </button>
+        </div>
+        {createError && <div className="status-banner status-banner--error form-row">{createError}</div>}
+      </form>
+
+      {state.kind === 'loading' && <div className="status-banner">Source 목록을 불러오는 중입니다...</div>}
+
+      {state.kind === 'error' && (
+        <div className="status-banner status-banner--error">
+          <p style={{ margin: 0 }}>Source 목록을 불러오지 못했습니다: {state.message}</p>
+          <div className="form-row">
+            <button type="button" className="btn" onClick={refresh}>
+              다시 시도
+            </button>
+          </div>
+        </div>
+      )}
+
+      {state.kind === 'loaded' && state.sources.length === 0 && (
+        <div className="status-banner">등록된 Source가 없습니다. 위에서 Google Drive Source를 먼저 등록해 주세요.</div>
+      )}
+
+      {state.kind === 'loaded' && state.sources.length > 0 && (
+        <ul className="source-list">
+          {state.sources.map((source) => (
+            <SourceRow
+              key={source.id}
+              source={source}
+              connecting={connectingId === source.id}
+              disconnecting={disconnectingId === source.id}
+              confirming={confirmingId === source.id}
+              error={rowErrors[source.id]}
+              onConnect={() => handleConnect(source)}
+              onAskDisconnect={() => setConfirmingId(source.id)}
+              onCancelDisconnect={() => setConfirmingId(null)}
+              onConfirmDisconnect={() => handleDisconnect(source)}
+            />
+          ))}
+        </ul>
+      )}
+
+      {state.kind === 'loaded' && import.meta.env.VITE_TESTBED_MODE === 'true' && (
+        <TestbedDiagnosticPanel sources={state.sources} />
+      )}
+    </>
+  )
+}
+
+interface SourceRowProps {
+  source: SourceResponse
+  connecting: boolean
+  disconnecting: boolean
+  confirming: boolean
+  error?: string
+  onConnect: () => void
+  onAskDisconnect: () => void
+  onCancelDisconnect: () => void
+  onConfirmDisconnect: () => void
+}
+
+function SourceRow({
+  source,
+  connecting,
+  disconnecting,
+  confirming,
+  error,
+  onConnect,
+  onAskDisconnect,
+  onCancelDisconnect,
+  onConfirmDisconnect,
+}: SourceRowProps) {
+  const isActive = source.status === 'ACTIVE'
+
+  return (
+    <li className="source-row">
+      <div className="source-row__meta">
+        <span className="source-row__name">{source.name}</span>
+        <StatusPill source={source} />
+        {error && <span className="status-banner status-banner--error">{error}</span>}
+      </div>
+      <div className="source-row__actions">
+        {!isActive && (
+          <span className="text-secondary">
+            연결 해제된 Source는 다시 연결할 수 없습니다. 필요하면 새 Source를 등록해 주세요.
+          </span>
+        )}
+        {isActive && confirming && (
+          <>
+            <span>정말 연결을 해제할까요?</span>
+            <button type="button" className="btn" onClick={onCancelDisconnect} disabled={disconnecting}>
+              취소
+            </button>
+            <button type="button" className="btn btn--danger" onClick={onConfirmDisconnect} disabled={disconnecting}>
+              {disconnecting ? '해제 중...' : '연결 해제 확인'}
+            </button>
+          </>
+        )}
+        {isActive && !confirming && (
+          <>
+            <button type="button" className="btn btn--primary" onClick={onConnect} disabled={connecting}>
+              {connecting ? '연결 중...' : source.credentialPresent ? 'Google 재연결' : 'Google 연결'}
+            </button>
+            <button type="button" className="btn btn--danger" onClick={onAskDisconnect} disabled={disconnecting}>
+              연결 해제
+            </button>
+          </>
+        )}
+      </div>
+    </li>
+  )
+}
+
+function StatusPill({ source }: { source: SourceResponse }) {
+  if (source.status !== 'ACTIVE') {
+    return <span className="pill pill--disabled">연결 해제됨</span>
+  }
+  if (source.credentialPresent) {
+    // 존재 여부일 뿐이다 - 지금 이 순간 Google에서 여전히 유효한지의 증거가 아니다.
+    return <span className="pill pill--connected">Google 계정 연결됨</span>
+  }
+  return <span className="pill pill--pending">Google 계정 연결 필요</span>
+}
+
+function toCallbackHint(flag: string | null): 'success' | 'failed' | null {
+  return flag === 'success' || flag === 'failed' ? flag : null
+}
+
+/** 별도(비-Component) 함수로 뽑아둔다 - Component 함수 안에서 직접 `window.location`을 대입하면 안 된다. */
+function redirectBrowserTo(url: string): void {
+  window.location.href = url
+}
+
+function describeError(error: unknown): string {
+  if (error instanceof ApiError) {
+    switch (error.code) {
+      case 'AUTHENTICATION_REQUIRED':
+        // "만료"로 단정하지 않는다 - 실제로 만료 여부를 이 코드에서 확인할 수 없고,
+        // 만료가 아닌 다른 이유(예: 발급된 Token 자체가 유효하지 않음)로도 같은
+        // 코드가 내려올 수 있다(M16A follow-up 안전성 교정 - 실제 관찰된 사례).
+        return '로그인 인증을 확인하지 못했습니다. 다시 로그인해 주세요.'
+      case 'ACCESS_DENIED':
+        return '이 작업을 수행할 권한이 없습니다.'
+      case 'NOT_FOUND':
+        return '해당 Source를 찾을 수 없습니다.'
+      case 'VALIDATION_ERROR':
+        return '입력값을 확인해 주세요.'
+      case 'OAUTH_UNAVAILABLE':
+        return 'Google 연결 기능을 현재 사용할 수 없습니다. 서버 설정을 확인해 주세요.'
+      case 'NETWORK_ERROR':
+        return '서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.'
+      default:
+        return '알 수 없는 오류가 발생했습니다.'
+    }
+  }
+  return '알 수 없는 오류가 발생했습니다.'
+}
