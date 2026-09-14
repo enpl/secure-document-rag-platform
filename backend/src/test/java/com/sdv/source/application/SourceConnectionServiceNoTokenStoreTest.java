@@ -5,6 +5,7 @@ import com.sdv.source.infrastructure.persistence.entity.SourceConnectionEntity;
 import com.sdv.source.infrastructure.persistence.mapper.SourcePersistenceMapper;
 import com.sdv.source.infrastructure.persistence.repository.SourceConnectionJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRepository;
+import com.sdv.source.infrastructure.persistence.repository.SourceOAuthTokenJpaRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -41,6 +42,8 @@ class SourceConnectionServiceNoTokenStoreTest {
     @Mock
     private SourceDocumentJpaRepository sourceDocumentJpaRepository;
     @Mock
+    private SourceOAuthTokenJpaRepository sourceOAuthTokenJpaRepository;
+    @Mock
     private SourcePersistenceMapper sourcePersistenceMapper;
     @Mock
     private AuditService auditService;
@@ -48,7 +51,8 @@ class SourceConnectionServiceNoTokenStoreTest {
     @Test
     void nonBlankTokenRefWithNoStoreBeanAtAllFailsClosedWithoutMutatingOrAuditing() {
         SourceConnectionService service = new SourceConnectionService(sourceConnectionJpaRepository,
-                sourceDocumentJpaRepository, sourcePersistenceMapper, Optional.empty(), auditService);
+                sourceDocumentJpaRepository, sourceOAuthTokenJpaRepository, sourcePersistenceMapper, Optional.empty(),
+                auditService);
         SourceConnectionEntity entity = new SourceConnectionEntity("GOOGLE_DRIVE", "Test Source", "ACTIVE", "FULL",
                 "owner-no-store-bean");
         entity.updateTokenRef("pre-existing-token-ref");

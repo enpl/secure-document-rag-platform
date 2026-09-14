@@ -8,6 +8,7 @@ import com.sdv.source.infrastructure.persistence.entity.SourceConnectionEntity;
 import com.sdv.source.infrastructure.persistence.mapper.SourcePersistenceMapper;
 import com.sdv.source.infrastructure.persistence.repository.SourceConnectionJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRepository;
+import com.sdv.source.infrastructure.persistence.repository.SourceOAuthTokenJpaRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -56,6 +57,7 @@ public class SourceConnectionService {
 
     private final SourceConnectionJpaRepository sourceConnectionJpaRepository;
     private final SourceDocumentJpaRepository sourceDocumentJpaRepository;
+    private final SourceOAuthTokenJpaRepository sourceOAuthTokenJpaRepository;
     private final SourcePersistenceMapper sourcePersistenceMapper;
     private final Optional<SourceTokenStore> sourceTokenStore;
     private final AuditService auditService;
@@ -63,11 +65,13 @@ public class SourceConnectionService {
     public SourceConnectionService(
             SourceConnectionJpaRepository sourceConnectionJpaRepository,
             SourceDocumentJpaRepository sourceDocumentJpaRepository,
+            SourceOAuthTokenJpaRepository sourceOAuthTokenJpaRepository,
             SourcePersistenceMapper sourcePersistenceMapper,
             Optional<SourceTokenStore> sourceTokenStore,
             AuditService auditService) {
         this.sourceConnectionJpaRepository = sourceConnectionJpaRepository;
         this.sourceDocumentJpaRepository = sourceDocumentJpaRepository;
+        this.sourceOAuthTokenJpaRepository = sourceOAuthTokenJpaRepository;
         this.sourcePersistenceMapper = sourcePersistenceMapper;
         this.sourceTokenStore = sourceTokenStore;
         this.auditService = auditService;
@@ -95,10 +99,20 @@ public class SourceConnectionService {
         return created;
     }
 
+    /**
+     * MVP-17({@code docs/plan/SDV_MVP_DEFERRED.md}) - 각 Source에 대해
+     * {@code credentialPresent}(로컬 암호화 Credential 존재 여부)를 함께 계산해
+     * 반환한다. {@link SourceOAuthTokenJpaRepository#existsBySourceId}만
+     * 사용한다 - {@link SourceTokenStore#load}는 절대 호출하지 않는다(그 쪽은
+     * 만료 시 실제 Google Refresh Call + 재암호화 DB 쓰기까지 수행하는 부작용이
+     * 있어, 단순 목록 조회가 매번 그것을 트리거하면 안 된다).
+     */
     @Transactional(readOnly = true)
-    public List<SourceConnection> list(String ownerSubject) {
+    public List<SourceListItem> list(String ownerSubject) {
         return sourceConnectionJpaRepository.findAllByOwnerSubject(ownerSubject).stream()
-                .map(sourcePersistenceMapper::toDomain)
+                .map(entity -> new SourceListItem(
+                        sourcePersistenceMapper.toDomain(entity),
+                        sourceOAuthTokenJpaRepository.existsBySourceId(entity.getId())))
                 .toList();
     }
 
@@ -168,5 +182,9 @@ public class SourceConnectionService {
         sourceDocumentJpaRepository.deleteEmbeddingIndexForSource(id);
 
         auditService.record(ownerSubject, "SOURCE_DISCONNECTED", "source:" + id, SUCCESS, OK, Map.of());
+    }
+
+    /** MVP-17 - {@link #list(String)}의 반환 항목. {@code credentialPresent}는 존재 여부일 뿐 유효성 증거가 아니다. */
+    public record SourceListItem(SourceConnection connection, boolean credentialPresent) {
     }
 }

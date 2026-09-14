@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ko">
+  <body>
+    <!--
+      M16A - keycloak-js `onLoad: 'check-sso'` loads this in a hidden iframe to
+      silently check for an existing Keycloak session without a full-page
+      redirect. It never runs top-level; it only relays the callback URL back
+      to the parent window. See src/auth/keycloak.ts.
+    -->
+    <script>
+      parent.postMessage(location.href, location.origin)
+    </script>
+  </body>
+</html>

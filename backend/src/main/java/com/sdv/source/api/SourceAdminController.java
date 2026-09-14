@@ -46,7 +46,7 @@ public class SourceAdminController {
     public List<SourceResponse> list() {
         String ownerSubject = currentUserProvider.getCurrentUser().subject();
         return sourceConnectionService.list(ownerSubject).stream()
-                .map(sourceApiMapper::toResponse)
+                .map(item -> sourceApiMapper.toResponse(item.connection(), item.credentialPresent()))
                 .toList();
     }
 
