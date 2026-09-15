@@ -50,5 +50,35 @@ public enum PolicyReasonCode {
     AI_USAGE_DENIED,
 
     /** External Provider 사용이 요청됐지만 정책상 허용되지 않는다(INV-AI-002). */
-    AI_EXTERNAL_PROVIDER_DENIED
+    AI_EXTERNAL_PROVIDER_DENIED,
+
+    /**
+     * M10B 신규(SHR-001, `docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.13) - 이 요청자에게
+     * 이 문서·행위를 허용하는 활성(미철회) 공유가 없다. 공유 자체가 없음/철회됨/
+     * 요청자가 수신자 명단에 없음/요청한 행위가 부여되지 않음을 모두 이 하나의
+     * 값으로 통일한다(공유 존재 여부를 노출하지 않는다 - {@link #RESOURCE_NOT_FOUND}가
+     * "존재하지 않음"과 "다른 계정 소유"를 통일하는 것과 같은 원칙).
+     */
+    SHARE_NOT_AUTHORIZED,
+
+    /** M10B 신규 - 공유 자체는 유효하지만 ADMIN이 명시적으로 차단했다(게시자는 스스로 해제할 수 없다). */
+    SHARE_ADMIN_BLOCKED,
+
+    /**
+     * M10B 보안 교정 신규 - 호출자가 들고 있는 {@link com.sdv.source.domain.SourceAccessContext}의
+     * 공유/연결 세대(Generation/Epoch)가 지금 저장된 값과 다르다. 공유가 그 사이 갱신/철회/
+     * 차단됐거나, Source가 Disconnect된 뒤 그 값이 반영되기 전의 낡은 판단을 그대로 재사용하려는
+     * 시도다 - 어느 쪽이 바뀌었는지는 노출하지 않고 이 하나의 값으로 통일한다(Fail Closed).
+     */
+    STALE_AUTHORIZATION_CONTEXT,
+
+    /**
+     * M10B 보안 교정 신규 - 이 공유가 걸린 Source 연결이 아직 한 번도 검증된 Provider
+     * 신원({@code source_connections.provider_account_id})을 확인받지 못했다(M10B
+     * 이전 Legacy 연결 포함). 이메일 일치나 SDV Owner 동일성만으로 같은 Provider
+     * 계정이라고 추정하지 않는다 - 소유자가 명시적으로 재인증({@link
+     * com.sdv.source.application.GoogleDriveOAuthService})해 Identity를 확정할 때까지
+     * 공유 기반 접근을 열어주지 않는다(Fail Closed).
+     */
+    SOURCE_IDENTITY_UNVERIFIED
 }

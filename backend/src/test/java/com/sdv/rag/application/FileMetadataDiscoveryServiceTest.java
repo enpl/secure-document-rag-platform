@@ -17,12 +17,14 @@ import com.sdv.source.domain.SourceMetadataVerificationOutcome;
 import com.sdv.source.domain.SourceMetadataVerificationResult;
 import com.sdv.source.domain.SourcePermissionsResult;
 import com.sdv.source.domain.SourceType;
+import com.sdv.source.infrastructure.persistence.entity.DocumentShareEntity;
+import com.sdv.source.infrastructure.persistence.entity.DocumentShareRecipientEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourceConnectionEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourceDocumentEntity;
-import com.sdv.source.infrastructure.persistence.entity.SourcePermissionEntity;
+import com.sdv.source.infrastructure.persistence.repository.DocumentShareJpaRepository;
+import com.sdv.source.infrastructure.persistence.repository.DocumentShareRecipientJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.SourceConnectionJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRepository;
-import com.sdv.source.infrastructure.persistence.repository.SourcePermissionJpaRepository;
 import com.sdv.testsupport.TestcontainersConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,11 +48,28 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * M10 신규(RAG-011 File Metadata Discovery) - {@link FileMetadataDiscoveryService}의
- * 유스케이스 전체(Catalog Prefilter → Same-user Live 재확인 → Live 값 재필터 →
- * 노출 직전 재인가 → 확인된 위치 기준 연속 Scan에 의한 Page/{@code hasMore}/Coverage
- * 판단)를 실제 Testcontainers PostgreSQL + 실제 {@link EffectivePermissionService}
- * Bean으로 검증한다.
+ * M10B 교정(SHR-001, `docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.13) - {@link
+ * FileMetadataDiscoveryService}의 유스케이스 전체(공유 기반 Prefilter →
+ * Publisher-Bound Live 재확인 → Live 값 재필터 → 노출 직전 재인가 → 확인된 위치
+ * 기준 연속 Scan에 의한 Page/{@code hasMore}/Coverage 판단)를 실제 Testcontainers
+ * PostgreSQL + 실제 {@link EffectivePermissionService} Bean으로 검증한다.
+ *
+ * <h2>M10 → M10B: Owner-Only Prefilter를 공유 기반 Prefilter로 교체</h2>
+ * <p>이 파일은 M10 시점에는 "문서 소유자 본인이 자신의 ACL Read 권한을 스스로
+ * 부여받아 자기 문서를 검색"하는 시나리오로 Scan 알고리즘(연속 위치 기반 Page,
+ * Bounded Cap, Deadline Soft-Stop, Unknown 처리)을 검증했다. M10B는 공통 검색의
+ * 인가 모델 자체를 B안(명시적 공유)으로 바꿨다 - 이제 "게시자(Publisher)가 정확한
+ * 파일을 지정 수신자(Recipient)에게 명시적으로 공유해야만" 그 수신자의 검색에
+ * 나타난다. 이 Test는 정확히 같은 Scan 알고리즘 회귀를 그대로 보존하면서, Fixture만
+ * "소유자가 스스로에게 ACL Read를 부여"에서 "게시자가 지정 수신자에게 공유를
+ * 게시"로 바꿨다 - 알고리즘 자체(Cap/Deadline/Unknown/Pagination)는 이번 교정
+ * 대상이 아니다(FileMetadataDiscoveryService.search의 Scan Loop는 손대지 않았다).</p>
+ *
+ * <p><b>격리 방식(M10B):</b> 이전에는 검색이 항상 Owner로 Scope됐으므로 매 Test가
+ * 고유한 Owner 문자열 하나만으로 서로 격리됐다. 이제 검색은 수신자(Recipient) 기준
+ * (Owner와 무관)이므로, 이 Class(Rollback 없이 같은 PostgreSQL을 재사용한다)의 매
+ * Test는 게시자뿐 아니라 수신자도 매번 새로 발급한다({@link #recipient()}) - 그래야
+ * 앞선 Test가 남긴 공유가 뒤 Test의 무필터 검색 결과에 섞이지 않는다.</p>
  *
  * <p>Google Drive는 이 클래스가 직접 구성한 {@link FakeConnector}(Spring Bean이
  * 아니다)로 대체한다 - {@code GoogleDriveConnector}와 함께 두면 {@link
@@ -72,7 +91,9 @@ class FileMetadataDiscoveryServiceTest {
     @Autowired
     private SourceDocumentJpaRepository sourceDocumentJpaRepository;
     @Autowired
-    private SourcePermissionJpaRepository sourcePermissionJpaRepository;
+    private DocumentShareJpaRepository documentShareJpaRepository;
+    @Autowired
+    private DocumentShareRecipientJpaRepository documentShareRecipientJpaRepository;
     @Autowired
     private EffectivePermissionService effectivePermissionService;
 
@@ -86,19 +107,21 @@ class FileMetadataDiscoveryServiceTest {
     }
 
     // ------------------------------------------------------------------
-    // 기존 유스케이스(Prefilter/Live 재확인/Live 필터 재적용/노출 직전 재인가)
+    // 기존 유스케이스(공유 기반 Prefilter/Publisher-Bound Live 재확인/Live 필터
+    // 재적용/노출 직전 재인가)
     // ------------------------------------------------------------------
 
     @Test
-    void ownerSeesOnlyTheirOwnDiscoverableDocumentsRegardlessOfIndexStatus() {
-        String owner = "owner-" + unique();
-        Fixture fixture = createDocument(owner, "ACTIVE", "ACTIVE", "Diagram.png", "image/png", "v1",
+    void recipientSeesExplicitlySharedDocumentsRegardlessOfIndexStatus() {
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Diagram.png", "image/png", "v1",
                 "SKIPPED_UNSUPPORTED");
-        grantFreshRead(fixture.documentId(), owner);
+        shareWith(fixture, publisher, recipient);
         fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(),
                 SourceMetadataVerificationResult.verified("Diagram.png", "image/png", "v1", clock.instant(), true));
 
-        RagFileSearchResponse response = search(owner, emptyQuery());
+        RagFileSearchResponse response = search(recipient, emptyQuery());
 
         assertThat(response.items()).hasSize(1);
         RagFileItem item = response.items().get(0);
@@ -109,54 +132,85 @@ class FileMetadataDiscoveryServiceTest {
                 + "/view");
     }
 
+    /**
+     * §2A.4 "including the owner's common discovery" - 게시자 본인도 자신이
+     * 스스로에게 공유하지 않은 이상 공통 검색에서 자신의 문서를 볼 수 없다(비공개
+     * 선택기는 별도 경로 - {@code SourceUserController}).
+     */
     @Test
-    void anotherOwnersDocumentIsNeverReturnedEvenWhenTargetingItsSourceId() {
-        String realOwner = "owner-real-" + unique();
-        String attacker = "attacker-" + unique();
-        Fixture fixture = createDocument(realOwner, "ACTIVE", "ACTIVE", "Secret.pdf", "application/pdf", "v1",
+    void publisherDoesNotSeeTheirOwnUnsharedDocumentInCommonDiscovery() {
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Private.pdf", "application/pdf", "v1",
                 "PENDING");
-        grantFreshRead(fixture.documentId(), realOwner);
+        shareWith(fixture, publisher, recipient); // 다른 사람에게는 공유했지만 자기 자신에게는 아니다.
+
+        RagFileSearchResponse response = search(publisher, emptyQuery());
+
+        assertThat(response.items()).isEmpty();
+        assertThat(fakeConnector.verifyCalls()).isEmpty();
+    }
+
+    @Test
+    void anUnauthorizedThirdPartyNeverSeesTheDocumentEvenWhenTargetingItsSourceIdDirectly() {
+        String publisher = "publisher-real-" + unique();
+        String recipient = recipient();
+        String thirdParty = "third-party-C-" + unique();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Secret.pdf", "application/pdf", "v1",
+                "PENDING");
+        shareWith(fixture, publisher, recipient); // C는 수신자가 아니다.
 
         RagFileSearchQuery query = new RagFileSearchQuery(null, null, fixture.sourceId(), null, null,
                 RagFileSortKey.MODIFIED_AT_DESC, 0, 20);
-        RagFileSearchResponse response = search(attacker, query);
+        RagFileSearchResponse response = search(thirdParty, query);
 
         assertThat(response.items()).isEmpty();
         assertThat(fakeConnector.verifyCalls())
-                .as("cross-account source-id tampering must never reach a Google Live call").isEmpty();
+                .as("an unauthorized third party's source-id targeting must never reach a Google Live call")
+                .isEmpty();
     }
 
     @Test
-    void deletedDocumentIsExcluded() {
-        String owner = "owner-" + unique();
-        Fixture fixture = createDocument(owner, "ACTIVE", "DELETED", "Gone.pdf", "application/pdf", "v1", "PENDING");
-        grantFreshRead(fixture.documentId(), owner);
+    void deletedDocumentIsExcludedEvenWithAnActiveShare() {
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "DELETED", "Gone.pdf", "application/pdf", "v1",
+                "PENDING");
+        shareWith(fixture, publisher, recipient);
 
-        RagFileSearchResponse response = search(owner, emptyQuery());
+        RagFileSearchResponse response = search(recipient, emptyQuery());
 
         assertThat(response.items()).isEmpty();
         assertThat(fakeConnector.verifyCalls()).isEmpty();
     }
 
     @Test
-    void inactiveSourceIsExcluded() {
-        String owner = "owner-" + unique();
-        Fixture fixture = createDocument(owner, "DISABLED", "ACTIVE", "Doc.pdf", "application/pdf", "v1", "PENDING");
-        grantFreshRead(fixture.documentId(), owner);
+    void inactiveSourceIsExcludedEvenWithAnActiveShare() {
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "DISABLED", "ACTIVE", "Doc.pdf", "application/pdf", "v1",
+                "PENDING");
+        shareWith(fixture, publisher, recipient);
 
-        RagFileSearchResponse response = search(owner, emptyQuery());
+        RagFileSearchResponse response = search(recipient, emptyQuery());
 
         assertThat(response.items()).isEmpty();
-        assertThat(fakeConnector.verifyCalls()).isEmpty();
+        assertThat(fakeConnector.verifyCalls())
+                .as("disconnect must exclude the document without any Google call, but must not have erased the share")
+                .isEmpty();
+        assertThat(documentShareJpaRepository.findByDocumentIdAndRevokedAtIsNull(fixture.documentId()))
+                .as("a paused connection must not silently unshare the document")
+                .isPresent();
     }
 
     @Test
-    void untrustedOrMissingAclDeniesDiscoveryWithoutAnyLiveCall() {
-        String owner = "owner-" + unique();
-        // grantFreshRead를 호출하지 않는다 - 0개 permission row는 Untrusted Evidence다.
-        createDocument(owner, "ACTIVE", "ACTIVE", "Doc.pdf", "application/pdf", "v1", "PENDING");
+    void noActiveShareDeniesDiscoveryWithoutAnyLiveCall() {
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        // shareWith를 호출하지 않는다 - 공유 자체가 없으면 Prefilter에서 확정적으로 배제된다.
+        createDocument(publisher, "ACTIVE", "ACTIVE", "Doc.pdf", "application/pdf", "v1", "PENDING");
 
-        RagFileSearchResponse response = search(owner, emptyQuery());
+        RagFileSearchResponse response = search(recipient, emptyQuery());
 
         assertThat(response.items()).isEmpty();
         assertThat(fakeConnector.verifyCalls())
@@ -165,33 +219,36 @@ class FileMetadataDiscoveryServiceTest {
 
     @Test
     void overlayDenyExcludesAnOtherwiseAllowedDocument() {
-        String owner = "owner-" + unique();
-        Fixture fixture = createDocument(owner, "ACTIVE", "ACTIVE", "Doc.pdf", "application/pdf", "v1", "PENDING");
-        grantFreshRead(fixture.documentId(), owner);
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Doc.pdf", "application/pdf", "v1",
+                "PENDING");
+        shareWith(fixture, publisher, recipient);
         // 실제 OverlayPolicyService 경로를 그대로 재사용하는 대신, 이미 검증된
-        // EffectivePermissionService의 evaluate 결과 자체를 신뢰한다 - 별도 Overlay
+        // EffectivePermissionService의 evaluateSharedAccess 결과 자체를 신뢰한다 - 별도 Overlay
         // Row Insert는 EffectivePermissionServiceDecisionTest가 이미 충분히 검증했다.
-        // 여기서는 filterAllowed 자체가 이 Service의 유일한 인가 경로임을 확인하기 위해
+        // 여기서는 evaluateSharedAccess 자체가 이 Service의 유일한 인가 경로임을 확인하기 위해
         // 문서 상태를 DELETED로 바꿔 같은 "Prefilter Deny" 효과를 재사용한다.
         SourceDocumentEntity document = sourceDocumentJpaRepository.findById(fixture.documentId()).orElseThrow();
         document.markDeleted();
         sourceDocumentJpaRepository.saveAndFlush(document);
 
-        RagFileSearchResponse response = search(owner, emptyQuery());
+        RagFileSearchResponse response = search(recipient, emptyQuery());
 
         assertThat(response.items()).isEmpty();
     }
 
     @Test
     void renamedFileIsExposedUnderItsLiveNameNotTheStaleCatalogName() {
-        String owner = "owner-" + unique();
-        Fixture fixture = createDocument(owner, "ACTIVE", "ACTIVE", "Old Name.pdf", "application/pdf", "v1",
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Old Name.pdf", "application/pdf", "v1",
                 "PENDING");
-        grantFreshRead(fixture.documentId(), owner);
+        shareWith(fixture, publisher, recipient);
         fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(), SourceMetadataVerificationResult.verified(
                 "New Name.pdf", "application/pdf", "v2", clock.instant(), true));
 
-        RagFileSearchResponse response = search(owner, emptyQuery());
+        RagFileSearchResponse response = search(recipient, emptyQuery());
 
         assertThat(response.items()).hasSize(1);
         assertThat(response.items().get(0).name()).isEqualTo("New Name.pdf");
@@ -202,17 +259,18 @@ class FileMetadataDiscoveryServiceTest {
 
     @Test
     void aNameFilterMatchingTheStaleCatalogNameIsRecheckedAgainstTheLiveNameAndExcludedIfItNoLongerMatches() {
-        String owner = "owner-" + unique();
-        Fixture fixture = createDocument(owner, "ACTIVE", "ACTIVE", "Budget Report.pdf", "application/pdf", "v1",
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Budget Report.pdf", "application/pdf", "v1",
                 "PENDING");
-        grantFreshRead(fixture.documentId(), owner);
+        shareWith(fixture, publisher, recipient);
         // Catalog Query(SQL LIKE)는 통과하지만, Live 재확인 시점에는 이미 개명됐다.
         fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(), SourceMetadataVerificationResult.verified(
                 "Unrelated File.pdf", "application/pdf", "v1", clock.instant(), true));
 
         RagFileSearchQuery query = new RagFileSearchQuery("Budget", null, null, null, null,
                 RagFileSortKey.MODIFIED_AT_DESC, 0, 20);
-        RagFileSearchResponse response = search(owner, query);
+        RagFileSearchResponse response = search(recipient, query);
 
         assertThat(response.items())
                 .as("a rename discovered only during the live check must not surface under the stale filter match")
@@ -221,13 +279,15 @@ class FileMetadataDiscoveryServiceTest {
 
     @Test
     void aDefinitiveLiveExclusionIsExcludedWithoutFallingBackToTheCatalogNameAndDoesNotMarkCoverageIncomplete() {
-        String owner = "owner-" + unique();
-        Fixture fixture = createDocument(owner, "ACTIVE", "ACTIVE", "Doc.pdf", "application/pdf", "v1", "PENDING");
-        grantFreshRead(fixture.documentId(), owner);
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Doc.pdf", "application/pdf", "v1",
+                "PENDING");
+        shareWith(fixture, publisher, recipient);
         fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(),
                 SourceMetadataVerificationResult.failed(SourceMetadataVerificationOutcome.NOT_FOUND, "gone"));
 
-        RagFileSearchResponse response = search(owner, emptyQuery());
+        RagFileSearchResponse response = search(recipient, emptyQuery());
 
         assertThat(response.items()).isEmpty();
         assertThat(response.hasMore()).as("no more raw candidates exist regardless of the definitive exclusion")
@@ -239,24 +299,28 @@ class FileMetadataDiscoveryServiceTest {
 
     @Test
     void neverCallsFetchContentOrAnyOtherContentBearingConnectorMethod() {
-        String owner = "owner-" + unique();
-        Fixture fixture = createDocument(owner, "ACTIVE", "ACTIVE", "Report.pdf", "application/pdf", "v1", "PENDING");
-        grantFreshRead(fixture.documentId(), owner);
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Report.pdf", "application/pdf", "v1",
+                "PENDING");
+        shareWith(fixture, publisher, recipient);
         fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(), SourceMetadataVerificationResult.verified(
                 "Report.pdf", "application/pdf", "v1", clock.instant(), true));
 
         // fakeConnector.fetchContent/getMetadata/getPermissions/findChanges/listMetadata
         // 는 전부 UnsupportedOperationException을 던진다 - 예외 없이 끝나면 호출되지 않은 것이다.
-        RagFileSearchResponse response = search(owner, emptyQuery());
+        RagFileSearchResponse response = search(recipient, emptyQuery());
 
         assertThat(response.items()).hasSize(1);
     }
 
     @Test
     void aDisconnectDuringTheLiveCheckExcludesTheItemAndIsTreatedAsADefinitiveResolutionNotUnknown() {
-        String owner = "owner-" + unique();
-        Fixture fixture = createDocument(owner, "ACTIVE", "ACTIVE", "Doc.pdf", "application/pdf", "v1", "PENDING");
-        grantFreshRead(fixture.documentId(), owner);
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Doc.pdf", "application/pdf", "v1",
+                "PENDING");
+        shareWith(fixture, publisher, recipient);
         fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(),
                 SourceMetadataVerificationResult.verified("Doc.pdf", "application/pdf", "v1", clock.instant(), true));
         // Google 호출이 "성공"으로 돌아오는 바로 그 순간, 다른 요청이 이 Source를 Disconnect했다고 가정한다.
@@ -267,7 +331,7 @@ class FileMetadataDiscoveryServiceTest {
             sourceConnectionJpaRepository.saveAndFlush(connection);
         });
 
-        RagFileSearchResponse response = search(owner, emptyQuery());
+        RagFileSearchResponse response = search(recipient, emptyQuery());
 
         assertThat(response.items())
                 .as("a disconnect observed during the external I/O must be caught by the post-check re-evaluation")
@@ -278,36 +342,146 @@ class FileMetadataDiscoveryServiceTest {
     }
 
     @Test
+    void aRevocationObservedDuringTheLiveCheckExcludesTheItemAndIsTreatedAsADefinitiveResolutionNotUnknown() {
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Doc.pdf", "application/pdf", "v1",
+                "PENDING");
+        DocumentShareEntity share = shareWith(fixture, publisher, recipient);
+        fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(),
+                SourceMetadataVerificationResult.verified("Doc.pdf", "application/pdf", "v1", clock.instant(), true));
+        // Google 호출이 성공으로 돌아오는 바로 그 순간, 게시자가 명시적으로 unshare했다고 가정한다.
+        fakeConnector.onNextVerify(() -> {
+            DocumentShareEntity current = documentShareJpaRepository.findById(share.getId()).orElseThrow();
+            current.revoke(clock.instant());
+            documentShareJpaRepository.saveAndFlush(current);
+        });
+
+        RagFileSearchResponse response = search(recipient, emptyQuery());
+
+        assertThat(response.items())
+                .as("an unshare observed during the external I/O must be caught by the post-check re-evaluation")
+                .isEmpty();
+        assertThat(response.partial()).isFalse();
+    }
+
+    /**
+     * M10B 보안 교정(그룹 C) - "don't enable sharing for legacy connection with unknown
+     * provider identity." {@code providerAccountId}가 null인 연결(M10B 이전 Legacy
+     * 연결, 또는 아직 한 번도 재인증을 완료하지 않은 연결)은 Token/Status가 모두
+     * 정상이어도 공유 기반 검색을 허용하지 않는다 - 이메일이나 SDV Owner 동일성만으로
+     * 같은 Google 계정이라고 추정하지 않는다. 소유자가 실제로 재인증해 Identity가
+     * 채택된 뒤에만 검색이 열린다.
+     */
+    @Test
+    void anUnverifiedLegacyProviderIdentityCannotGrantSharedDiscoveryUntilVerifiedBindingIsEstablished() {
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        // createDocument() Helper와 달리 adoptProviderAccountId를 절대 호출하지 않는다 -
+        // 이 Connection의 providerAccountId는 그대로 null(Legacy/미확인 상태)이다.
+        SourceConnectionEntity connection = new SourceConnectionEntity("GOOGLE_DRIVE", "Test Source", "ACTIVE",
+                "FULL", publisher);
+        sourceConnectionJpaRepository.saveAndFlush(connection);
+        String sourceDocumentId = "file-" + unique();
+        SourceDocumentEntity document = new SourceDocumentEntity(connection.getId(), sourceDocumentId, "Doc.pdf",
+                "application/pdf", "v1", clock.instant(), "ACTIVE", "PENDING", null);
+        sourceDocumentJpaRepository.saveAndFlush(document);
+        Fixture fixture = new Fixture(connection.getId(), document.getId(), sourceDocumentId);
+        shareWith(fixture, publisher, recipient);
+        fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(),
+                SourceMetadataVerificationResult.verified("Doc.pdf", "application/pdf", "v1", clock.instant(), true));
+
+        RagFileSearchResponse response = search(recipient, emptyQuery());
+
+        assertThat(response.items())
+                .as("an unverified legacy provider identity must not grant shared discovery")
+                .isEmpty();
+        assertThat(response.partial())
+                .as("this is a resolved/definitive exclusion, not an inability to verify")
+                .isFalse();
+
+        // 소유자가 실제로 재인증해 Identity를 채택하면(이 Test는 GoogleDriveOAuthService를
+        // 거치지 않고 그 결과만 직접 반영한다) 같은 공유가 그제서야 발견된다.
+        connection.adoptProviderAccountId("account-" + publisher);
+        sourceConnectionJpaRepository.saveAndFlush(connection);
+
+        RagFileSearchResponse afterVerification = search(recipient, emptyQuery());
+        assertThat(afterVerification.items())
+                .as("once a verified identity is established, the pre-existing share becomes discoverable")
+                .hasSize(1);
+    }
+
+    /**
+     * M10B 보안 교정(그룹 C) - "A disconnect/reconnect cycle must not make a
+     * pre-disconnect result valid again just because status is ACTIVE again."
+     * Live 확인이 진행되는 바로 그 순간 Disconnect와 재연결이 모두 끝난다 - 재확인
+     * 시점에는 Status가 다시 ACTIVE로 보이므로 예전 Status 검사만으로는 이 요청을
+     * 잡아내지 못했다. {@code connection_epoch}가 그 사이 올라갔다는 사실이 이
+     * Context를 낡은 것으로 판정해야 한다.
+     */
+    @Test
+    void aDisconnectReconnectCycleDuringTheLiveCheckExcludesTheItemEvenThoughStatusReadsActiveAgain() {
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Doc.pdf", "application/pdf", "v1",
+                "PENDING");
+        shareWith(fixture, publisher, recipient);
+        fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(),
+                SourceMetadataVerificationResult.verified("Doc.pdf", "application/pdf", "v1", clock.instant(), true));
+        // Google 호출이 성공으로 돌아오는 바로 그 순간, 다른 요청이 이 Source를 Disconnect한 뒤
+        // 곧바로 재연결한다고 가정한다 - Status는 최종적으로 다시 ACTIVE지만 Epoch는 올라갔다.
+        fakeConnector.onNextVerify(() -> {
+            SourceConnectionEntity connection = sourceConnectionJpaRepository.findById(fixture.sourceId())
+                    .orElseThrow();
+            connection.changeStatus("DISABLED");
+            connection.bumpConnectionEpoch();
+            sourceConnectionJpaRepository.saveAndFlush(connection);
+            connection.changeStatus("ACTIVE");
+            sourceConnectionJpaRepository.saveAndFlush(connection);
+        });
+
+        RagFileSearchResponse response = search(recipient, emptyQuery());
+
+        assertThat(response.items())
+                .as("status reading ACTIVE again after a disconnect/reconnect cycle must not resurrect a decision "
+                        + "made before it")
+                .isEmpty();
+        assertThat(response.partial()).isFalse();
+    }
+
+    @Test
     void sortByNameDescendingOrdersResultsDeterministically() {
-        String owner = "owner-" + unique();
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
         List<String> names = List.of("Alpha.pdf", "Charlie.pdf", "Bravo.pdf");
         for (String name : names) {
-            Fixture fixture = createDocument(owner, "ACTIVE", "ACTIVE", name, "application/pdf", "v1", "PENDING");
-            grantFreshRead(fixture.documentId(), owner);
+            Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", name, "application/pdf", "v1", "PENDING");
+            shareWith(fixture, publisher, recipient);
             fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(),
                     SourceMetadataVerificationResult.verified(name, "application/pdf", "v1", clock.instant(), true));
         }
 
         RagFileSearchQuery query = new RagFileSearchQuery(null, null, null, null, null, RagFileSortKey.NAME_DESC, 0,
                 20);
-        RagFileSearchResponse response = search(owner, query);
+        RagFileSearchResponse response = search(recipient, query);
 
         assertThat(response.items().stream().map(RagFileItem::name).toList())
                 .containsExactly("Charlie.pdf", "Bravo.pdf", "Alpha.pdf");
     }
 
     // ------------------------------------------------------------------
-    // 공개 Page는 원시 DB 행이 아니라 확인된(Verified) 위치를 센다(이번 교정의 핵심).
+    // 공개 Page는 원시 DB 행이 아니라 확인된(Verified) 위치를 센다.
     // ------------------------------------------------------------------
 
     @Test
     void hiddenOnlyCandidatesProduceAConfirmedEmptyPageNotAFalseHasMore() {
-        String owner = "owner-" + unique();
-        // 둘 다 권한 부여를 하지 않는다 - Prefilter에서 확정적으로 배제된다(Google 호출 0회).
-        createDocument(owner, "ACTIVE", "ACTIVE", "Hidden-A.pdf", "application/pdf", "v1", "PENDING");
-        createDocument(owner, "ACTIVE", "ACTIVE", "Hidden-B.pdf", "application/pdf", "v1", "PENDING");
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        // 둘 다 공유하지 않는다 - Prefilter에서 확정적으로 배제된다(Google 호출 0회).
+        createDocument(publisher, "ACTIVE", "ACTIVE", "Hidden-A.pdf", "application/pdf", "v1", "PENDING");
+        createDocument(publisher, "ACTIVE", "ACTIVE", "Hidden-B.pdf", "application/pdf", "v1", "PENDING");
 
-        RagFileSearchResponse response = search(owner, emptyQuery());
+        RagFileSearchResponse response = search(recipient, emptyQuery());
 
         assertThat(response.items()).isEmpty();
         assertThat(response.hasMore()).as("raw catalog is exhausted - confirmed, not merely absent from this page")
@@ -318,15 +492,16 @@ class FileMetadataDiscoveryServiceTest {
 
     @Test
     void mixedVisibleAndHiddenCandidatesReturnsOnlyTheVisibleOnes() {
-        String owner = "owner-" + unique();
-        createDocument(owner, "ACTIVE", "ACTIVE", "Hidden.pdf", "application/pdf", "v1", "PENDING");
-        Fixture visible = createDocument(owner, "ACTIVE", "ACTIVE", "Visible.pdf", "application/pdf", "v1",
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        createDocument(publisher, "ACTIVE", "ACTIVE", "Hidden.pdf", "application/pdf", "v1", "PENDING");
+        Fixture visible = createDocument(publisher, "ACTIVE", "ACTIVE", "Visible.pdf", "application/pdf", "v1",
                 "PENDING");
-        grantFreshRead(visible.documentId(), owner);
+        shareWith(visible, publisher, recipient);
         fakeConnector.stub(visible.sourceId(), visible.sourceDocumentId(), SourceMetadataVerificationResult.verified(
                 "Visible.pdf", "application/pdf", "v1", clock.instant(), true));
 
-        RagFileSearchResponse response = search(owner, emptyQuery());
+        RagFileSearchResponse response = search(recipient, emptyQuery());
 
         assertThat(response.items().stream().map(RagFileItem::name).toList()).containsExactly("Visible.pdf");
         assertThat(response.hasMore()).isFalse();
@@ -334,32 +509,33 @@ class FileMetadataDiscoveryServiceTest {
     }
 
     /**
-     * 이번 교정의 핵심 회귀 - 같은 보이는 파일 V가 숨은(권한 없는) 파일이 그 앞에
-     * 0개/1개/여러 개 섞여도 항상 같은 Page 0에서 같은 값으로 반환돼야 한다. 교정
-     * 전에는 숨은 파일 개수만큼 V가 뒤 Page로 밀려나 Page 0이 비어버리고 {@code
-     * hasMore=true}만 남는 결함이 있었다(이 결함을 그대로 "정상"으로 취급하던
-     * 이전 회귀 Test는 삭제했다 - 아래 참고).
+     * 이번 교정의 핵심 회귀 - 같은 보이는 파일 V가 숨은(공유되지 않은) 파일이 그 앞에
+     * 0개/1개/여러 개 섞여도 항상 같은 Page 0에서 같은 값으로 반환돼야 한다. 세 시나리오
+     * 모두 독립된 수신자를 써서 서로 격리한다(공유되지 않은 파일이 검색 결과에 섞이지
+     * 않는다는 것과, 서로 다른 시나리오의 수신자가 섞이지 않는다는 것은 별개다).
      */
     @Test
     void theSameVisibleFileAppearsOnPageZeroRegardlessOfHowManyHiddenFilesPrecedeIt() {
         RagFileSearchQuery pageOfOne = new RagFileSearchQuery(null, null, null, null, null,
                 RagFileSortKey.NAME_ASC, 0, 1);
 
-        String ownerNoHidden = "owner-0hidden-" + unique();
-        stubVisible(ownerNoHidden, "9-Visible.pdf");
-        RagFileSearchResponse noHidden = search(ownerNoHidden, pageOfOne);
+        String recipientNoHidden = recipient();
+        stubVisible("publisher-0hidden-" + unique(), recipientNoHidden, "9-Visible.pdf");
+        RagFileSearchResponse noHidden = search(recipientNoHidden, pageOfOne);
 
-        String ownerOneHidden = "owner-1hidden-" + unique();
-        createDocument(ownerOneHidden, "ACTIVE", "ACTIVE", "1-Hidden.pdf", "application/pdf", "v1", "PENDING");
-        stubVisible(ownerOneHidden, "9-Visible.pdf");
-        RagFileSearchResponse oneHidden = search(ownerOneHidden, pageOfOne);
+        String recipientOneHidden = recipient();
+        String publisherOneHidden = "publisher-1hidden-" + unique();
+        createDocument(publisherOneHidden, "ACTIVE", "ACTIVE", "1-Hidden.pdf", "application/pdf", "v1", "PENDING");
+        stubVisible(publisherOneHidden, recipientOneHidden, "9-Visible.pdf");
+        RagFileSearchResponse oneHidden = search(recipientOneHidden, pageOfOne);
 
-        String ownerManyHidden = "owner-manyhidden-" + unique();
-        createDocument(ownerManyHidden, "ACTIVE", "ACTIVE", "1-Hidden.pdf", "application/pdf", "v1", "PENDING");
-        createDocument(ownerManyHidden, "ACTIVE", "ACTIVE", "2-Hidden.pdf", "application/pdf", "v1", "PENDING");
-        createDocument(ownerManyHidden, "ACTIVE", "ACTIVE", "3-Hidden.pdf", "application/pdf", "v1", "PENDING");
-        stubVisible(ownerManyHidden, "9-Visible.pdf");
-        RagFileSearchResponse manyHidden = search(ownerManyHidden, pageOfOne);
+        String recipientManyHidden = recipient();
+        String publisherManyHidden = "publisher-manyhidden-" + unique();
+        createDocument(publisherManyHidden, "ACTIVE", "ACTIVE", "1-Hidden.pdf", "application/pdf", "v1", "PENDING");
+        createDocument(publisherManyHidden, "ACTIVE", "ACTIVE", "2-Hidden.pdf", "application/pdf", "v1", "PENDING");
+        createDocument(publisherManyHidden, "ACTIVE", "ACTIVE", "3-Hidden.pdf", "application/pdf", "v1", "PENDING");
+        stubVisible(publisherManyHidden, recipientManyHidden, "9-Visible.pdf");
+        RagFileSearchResponse manyHidden = search(recipientManyHidden, pageOfOne);
 
         List<String> expectedNames = List.of("9-Visible.pdf");
         assertThat(noHidden.items().stream().map(RagFileItem::name).toList()).isEqualTo(expectedNames);
@@ -379,34 +555,37 @@ class FileMetadataDiscoveryServiceTest {
      */
     @Test
     void multipleVisibleFilesInterspersedWithHiddenFilesMatchTheNoHiddenBaselineAtVariousPageSizes() {
-        String ownerBaseline = "owner-baseline-" + unique();
-        stubVisible(ownerBaseline, "2-V1.pdf");
-        stubVisible(ownerBaseline, "4-V2.pdf");
-        stubVisible(ownerBaseline, "6-V3.pdf");
+        String recipientBaseline = recipient();
+        String publisherBaseline = "publisher-baseline-" + unique();
+        stubVisible(publisherBaseline, recipientBaseline, "2-V1.pdf");
+        stubVisible(publisherBaseline, recipientBaseline, "4-V2.pdf");
+        stubVisible(publisherBaseline, recipientBaseline, "6-V3.pdf");
 
-        String ownerInterspersed = "owner-interspersed-" + unique();
-        createDocument(ownerInterspersed, "ACTIVE", "ACTIVE", "1-Hidden.pdf", "application/pdf", "v1", "PENDING");
-        stubVisible(ownerInterspersed, "2-V1.pdf");
-        createDocument(ownerInterspersed, "ACTIVE", "ACTIVE", "3-Hidden.pdf", "application/pdf", "v1", "PENDING");
-        stubVisible(ownerInterspersed, "4-V2.pdf");
-        createDocument(ownerInterspersed, "ACTIVE", "ACTIVE", "5-Hidden.pdf", "application/pdf", "v1", "PENDING");
-        stubVisible(ownerInterspersed, "6-V3.pdf");
-        createDocument(ownerInterspersed, "ACTIVE", "ACTIVE", "7-Hidden.pdf", "application/pdf", "v1", "PENDING");
+        String recipientInterspersed = recipient();
+        String publisherInterspersed = "publisher-interspersed-" + unique();
+        createDocument(publisherInterspersed, "ACTIVE", "ACTIVE", "1-Hidden.pdf", "application/pdf", "v1", "PENDING");
+        stubVisible(publisherInterspersed, recipientInterspersed, "2-V1.pdf");
+        createDocument(publisherInterspersed, "ACTIVE", "ACTIVE", "3-Hidden.pdf", "application/pdf", "v1", "PENDING");
+        stubVisible(publisherInterspersed, recipientInterspersed, "4-V2.pdf");
+        createDocument(publisherInterspersed, "ACTIVE", "ACTIVE", "5-Hidden.pdf", "application/pdf", "v1", "PENDING");
+        stubVisible(publisherInterspersed, recipientInterspersed, "6-V3.pdf");
+        createDocument(publisherInterspersed, "ACTIVE", "ACTIVE", "7-Hidden.pdf", "application/pdf", "v1", "PENDING");
 
         for (int size : new int[] {1, 2, 5}) {
-            List<String> baselineNames = collectAllVisibleNames(ownerBaseline, size);
-            List<String> interspersedNames = collectAllVisibleNames(ownerInterspersed, size);
+            List<String> baselineNames = collectAllVisibleNames(recipientBaseline, size);
+            List<String> interspersedNames = collectAllVisibleNames(recipientInterspersed, size);
             assertThat(interspersedNames).as("page size=" + size).isEqualTo(baselineNames);
         }
     }
 
     @Test
     void pagingReportsHasMoreWithoutExposingRawTotals() {
-        String owner = "owner-" + unique();
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
         for (int i = 0; i < 3; i++) {
-            Fixture fixture = createDocument(owner, "ACTIVE", "ACTIVE", "File-" + i + ".pdf", "application/pdf", "v1",
-                    "PENDING");
-            grantFreshRead(fixture.documentId(), owner);
+            Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "File-" + i + ".pdf", "application/pdf",
+                    "v1", "PENDING");
+            shareWith(fixture, publisher, recipient);
             fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(), SourceMetadataVerificationResult
                     .verified("File-" + i + ".pdf", "application/pdf", "v1", clock.instant(), true));
         }
@@ -416,8 +595,8 @@ class FileMetadataDiscoveryServiceTest {
         RagFileSearchQuery secondPage = new RagFileSearchQuery(null, null, null, null, null,
                 RagFileSortKey.NAME_ASC, 1, 2);
 
-        RagFileSearchResponse page1 = search(owner, firstPage);
-        RagFileSearchResponse page2 = search(owner, secondPage);
+        RagFileSearchResponse page1 = search(recipient, firstPage);
+        RagFileSearchResponse page2 = search(recipient, secondPage);
 
         assertThat(page1.items()).hasSize(2);
         assertThat(page1.hasMore()).isTrue();
@@ -434,11 +613,12 @@ class FileMetadataDiscoveryServiceTest {
     void aCandidateCapNotDivisibleByTheFetchBatchSizeNeverEvaluatesBeyondTheCap() {
         // cap=50, size=30 - 두 번째 DB Batch(offset 30, size 30)는 남은 21개를 읽어오지만
         // 남은 평가 여력은 20개뿐이다(50-30) - 정확히 20개만 평가되고 21번째는 평가되지 않아야 한다.
-        String owner = "owner-" + unique();
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
         for (int i = 0; i < 51; i++) {
-            Fixture fixture = createDocument(owner, "ACTIVE", "ACTIVE", String.format("%03d-Doc.pdf", i),
+            Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", String.format("%03d-Doc.pdf", i),
                     "application/pdf", "v1", "PENDING");
-            grantFreshRead(fixture.documentId(), owner);
+            shareWith(fixture, publisher, recipient);
             if (i < 50) {
                 // 51번째(Index 50)는 의도적으로 Stub하지 않는다 - 상한(50)을 넘어 평가되면
                 // FakeConnector가 IllegalStateException을 던져 이 Test 자체가 실패한다.
@@ -450,7 +630,7 @@ class FileMetadataDiscoveryServiceTest {
         RagFileSearchQuery query = new RagFileSearchQuery(null, null, null, null, null, RagFileSortKey.NAME_ASC, 0,
                 30);
         FileMetadataDiscoveryService service = newService(properties(10_000L, 50));
-        RagFileSearchResponse response = service.search(userContext(owner), query);
+        RagFileSearchResponse response = service.search(userContext(recipient), query);
 
         assertThat(response.items()).isEmpty();
         assertThat(response.hasMore()).as("the cap was reached before exhaustion could be confirmed").isNull();
@@ -462,19 +642,22 @@ class FileMetadataDiscoveryServiceTest {
     @Test
     void aCandidateCapSmallerThanTheFetchBatchSizeNeverEvaluatesMoreThanTheCap() {
         // cap=1, size=20 - 한 Batch(20개 요청)가 실제로는 2개만 반환해도, 상한 1개만 평가돼야 한다.
-        String owner = "owner-" + unique();
-        Fixture first = createDocument(owner, "ACTIVE", "ACTIVE", "1-Doc.pdf", "application/pdf", "v1", "PENDING");
-        grantFreshRead(first.documentId(), owner);
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture first = createDocument(publisher, "ACTIVE", "ACTIVE", "1-Doc.pdf", "application/pdf", "v1",
+                "PENDING");
+        shareWith(first, publisher, recipient);
         fakeConnector.stub(first.sourceId(), first.sourceDocumentId(),
                 SourceMetadataVerificationResult.failed(SourceMetadataVerificationOutcome.NOT_FOUND, "gone"));
-        Fixture second = createDocument(owner, "ACTIVE", "ACTIVE", "2-Doc.pdf", "application/pdf", "v1", "PENDING");
-        grantFreshRead(second.documentId(), owner);
+        Fixture second = createDocument(publisher, "ACTIVE", "ACTIVE", "2-Doc.pdf", "application/pdf", "v1",
+                "PENDING");
+        shareWith(second, publisher, recipient);
         // second는 의도적으로 Stub하지 않는다 - 상한(1)을 넘어 평가되면 즉시 실패한다.
 
         RagFileSearchQuery query = new RagFileSearchQuery(null, null, null, null, null, RagFileSortKey.NAME_ASC, 0,
                 20);
         FileMetadataDiscoveryService service = newService(properties(10_000L, 1));
-        RagFileSearchResponse response = service.search(userContext(owner), query);
+        RagFileSearchResponse response = service.search(userContext(recipient), query);
 
         assertThat(response.items()).isEmpty();
         assertThat(response.hasMore()).isNull();
@@ -488,14 +671,16 @@ class FileMetadataDiscoveryServiceTest {
 
     @Test
     void anOnlyCandidateThatFailsVerificationMarksCoverageAsUnknownNotConfirmedEmpty() {
-        String owner = "owner-" + unique();
-        Fixture fixture = createDocument(owner, "ACTIVE", "ACTIVE", "Doc.pdf", "application/pdf", "v1", "PENDING");
-        grantFreshRead(fixture.documentId(), owner);
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Doc.pdf", "application/pdf", "v1",
+                "PENDING");
+        shareWith(fixture, publisher, recipient);
         fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(),
                 SourceMetadataVerificationResult.failed(SourceMetadataVerificationOutcome.FAILED,
                         "malformed upstream response"));
 
-        RagFileSearchResponse response = search(owner, emptyQuery());
+        RagFileSearchResponse response = search(recipient, emptyQuery());
 
         assertThat(response.items()).isEmpty();
         assertThat(response.hasMore())
@@ -507,15 +692,16 @@ class FileMetadataDiscoveryServiceTest {
 
     @Test
     void aConfirmedVisibleItemBeforeAnUnknownCandidateIsKeptWhileCoverageStaysHonestlyIncomplete() {
-        String owner = "owner-" + unique();
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
         // 정렬 순서상 Visible이 Unknown보다 먼저 오도록 접두사를 준다 - Visible은 Unknown을
         // 만나기 전에 이미 확정되므로 그대로 유지돼야 한다("확인 못한 것만 보류").
-        Fixture visible = createDocument(owner, "ACTIVE", "ACTIVE", "1-Visible.pdf", "application/pdf", "v1",
+        Fixture visible = createDocument(publisher, "ACTIVE", "ACTIVE", "1-Visible.pdf", "application/pdf", "v1",
                 "PENDING");
-        Fixture unknown = createDocument(owner, "ACTIVE", "ACTIVE", "2-Unknown.pdf", "application/pdf", "v1",
+        Fixture unknown = createDocument(publisher, "ACTIVE", "ACTIVE", "2-Unknown.pdf", "application/pdf", "v1",
                 "PENDING");
-        grantFreshRead(visible.documentId(), owner);
-        grantFreshRead(unknown.documentId(), owner);
+        shareWith(visible, publisher, recipient);
+        shareWith(unknown, publisher, recipient);
         fakeConnector.stub(visible.sourceId(), visible.sourceDocumentId(), SourceMetadataVerificationResult.verified(
                 "1-Visible.pdf", "application/pdf", "v1", clock.instant(), true));
         fakeConnector.stub(unknown.sourceId(), unknown.sourceDocumentId(),
@@ -524,7 +710,7 @@ class FileMetadataDiscoveryServiceTest {
 
         RagFileSearchQuery query = new RagFileSearchQuery(null, null, null, null, null, RagFileSortKey.NAME_ASC, 0,
                 20);
-        RagFileSearchResponse response = search(owner, query);
+        RagFileSearchResponse response = search(recipient, query);
 
         assertThat(response.items().stream().map(RagFileItem::name).toList()).containsExactly("1-Visible.pdf");
         assertThat(response.hasMore())
@@ -536,9 +722,11 @@ class FileMetadataDiscoveryServiceTest {
 
     @Test
     void anOnlyCandidateCrossingTheDeadlineDuringItsOwnCallDoesNotFalselyMarkIncompleteWhenNothingElseWasSkipped() {
-        String owner = "owner-" + unique();
-        Fixture fixture = createDocument(owner, "ACTIVE", "ACTIVE", "Doc.pdf", "application/pdf", "v1", "PENDING");
-        grantFreshRead(fixture.documentId(), owner);
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Doc.pdf", "application/pdf", "v1",
+                "PENDING");
+        shareWith(fixture, publisher, recipient);
         fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(),
                 SourceMetadataVerificationResult.verified("Doc.pdf", "application/pdf", "v1", clock.instant(), true));
         // 이 유일한 호출이 끝나는 바로 그 순간 예산이 소진된다 - 그러나 건너뛴 다른 후보가 없고,
@@ -546,7 +734,7 @@ class FileMetadataDiscoveryServiceTest {
         fakeConnector.onNextVerify(() -> clock.advance(Duration.ofDays(1)));
 
         FileMetadataDiscoveryService service = newService(properties(1L, 50));
-        RagFileSearchResponse response = service.search(userContext(owner), emptyQuery());
+        RagFileSearchResponse response = service.search(userContext(recipient), emptyQuery());
 
         assertThat(response.items()).hasSize(1);
         assertThat(response.hasMore()).as("no more raw rows exist - nothing was left to check").isFalse();
@@ -559,14 +747,15 @@ class FileMetadataDiscoveryServiceTest {
     void theLastCallCrossingTheDeadlineBlocksSubsequentWorkInsteadOfContinuingUncheckedWork() {
         // 이름에 순서 접두사를 둔다 - NAME_ASC 정렬로 첫 Batch(Page 0)가 먼저, 그 다음 Raw
         // 후보(Beyond)가 그 다음이 되도록 강제한다.
-        String owner = "owner-" + unique();
-        Fixture windowItem = createDocument(owner, "ACTIVE", "ACTIVE", "1-Window.pdf", "application/pdf", "v1",
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture windowItem = createDocument(publisher, "ACTIVE", "ACTIVE", "1-Window.pdf", "application/pdf", "v1",
                 "PENDING");
         // 예산이 이미 소진됐으므로 절대 확인되면 안 된다.
-        Fixture beyond = createDocument(owner, "ACTIVE", "ACTIVE", "2-Beyond.pdf", "application/pdf", "v1",
+        Fixture beyond = createDocument(publisher, "ACTIVE", "ACTIVE", "2-Beyond.pdf", "application/pdf", "v1",
                 "PENDING");
-        grantFreshRead(windowItem.documentId(), owner);
-        grantFreshRead(beyond.documentId(), owner);
+        shareWith(windowItem, publisher, recipient);
+        shareWith(beyond, publisher, recipient);
         fakeConnector.stub(windowItem.sourceId(), windowItem.sourceDocumentId(), SourceMetadataVerificationResult
                 .verified("1-Window.pdf", "application/pdf", "v1", clock.instant(), true));
         fakeConnector.stub(beyond.sourceId(), beyond.sourceDocumentId(), SourceMetadataVerificationResult.verified(
@@ -576,7 +765,7 @@ class FileMetadataDiscoveryServiceTest {
         RagFileSearchQuery pageOfOne = new RagFileSearchQuery(null, null, null, null, null,
                 RagFileSortKey.NAME_ASC, 0, 1);
         FileMetadataDiscoveryService service = newService(properties(1L, 50));
-        RagFileSearchResponse response = service.search(userContext(owner), pageOfOne);
+        RagFileSearchResponse response = service.search(userContext(recipient), pageOfOne);
 
         assertThat(response.items()).hasSize(1);
         assertThat(response.hasMore())
@@ -589,11 +778,12 @@ class FileMetadataDiscoveryServiceTest {
 
     @Test
     void theExactDeadlineInstantIsTreatedAsExpiredNotAsRemainingBudget() {
-        String owner = "owner-" + unique();
-        Fixture first = createDocument(owner, "ACTIVE", "ACTIVE", "A.pdf", "application/pdf", "v1", "PENDING");
-        Fixture second = createDocument(owner, "ACTIVE", "ACTIVE", "B.pdf", "application/pdf", "v1", "PENDING");
-        grantFreshRead(first.documentId(), owner);
-        grantFreshRead(second.documentId(), owner);
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture first = createDocument(publisher, "ACTIVE", "ACTIVE", "A.pdf", "application/pdf", "v1", "PENDING");
+        Fixture second = createDocument(publisher, "ACTIVE", "ACTIVE", "B.pdf", "application/pdf", "v1", "PENDING");
+        shareWith(first, publisher, recipient);
+        shareWith(second, publisher, recipient);
         fakeConnector.stub(first.sourceId(), first.sourceDocumentId(),
                 SourceMetadataVerificationResult.verified("A.pdf", "application/pdf", "v1", clock.instant(), true));
         fakeConnector.stub(second.sourceId(), second.sourceDocumentId(),
@@ -605,7 +795,7 @@ class FileMetadataDiscoveryServiceTest {
         RagFileSearchQuery query = new RagFileSearchQuery(null, null, null, null, null, RagFileSortKey.NAME_ASC, 0,
                 20);
         FileMetadataDiscoveryService service = newService(properties(10L, 50));
-        RagFileSearchResponse response = service.search(userContext(owner), query);
+        RagFileSearchResponse response = service.search(userContext(recipient), query);
 
         assertThat(response.items()).as("exactly-at-deadline must count as expired, not as remaining budget")
                 .hasSize(1);
@@ -615,9 +805,7 @@ class FileMetadataDiscoveryServiceTest {
 
     @Test
     void aGenuinelyEmptyCatalogIsConfirmedNotPartial() {
-        String owner = "owner-" + unique();
-
-        RagFileSearchResponse response = search(owner, emptyQuery());
+        RagFileSearchResponse response = search(recipient(), emptyQuery());
 
         assertThat(response.items()).isEmpty();
         assertThat(response.hasMore()).isFalse();
@@ -627,11 +815,12 @@ class FileMetadataDiscoveryServiceTest {
 
     @Test
     void liveCheckBudgetExhaustionStopsEarlyAndReportsIncompleteCoverageHonestly() {
-        String owner = "owner-" + unique();
-        Fixture first = createDocument(owner, "ACTIVE", "ACTIVE", "A.pdf", "application/pdf", "v1", "PENDING");
-        Fixture second = createDocument(owner, "ACTIVE", "ACTIVE", "B.pdf", "application/pdf", "v1", "PENDING");
-        grantFreshRead(first.documentId(), owner);
-        grantFreshRead(second.documentId(), owner);
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture first = createDocument(publisher, "ACTIVE", "ACTIVE", "A.pdf", "application/pdf", "v1", "PENDING");
+        Fixture second = createDocument(publisher, "ACTIVE", "ACTIVE", "B.pdf", "application/pdf", "v1", "PENDING");
+        shareWith(first, publisher, recipient);
+        shareWith(second, publisher, recipient);
         fakeConnector.stub(first.sourceId(), first.sourceDocumentId(),
                 SourceMetadataVerificationResult.verified("A.pdf", "application/pdf", "v1", clock.instant(), true));
         fakeConnector.stub(second.sourceId(), second.sourceDocumentId(),
@@ -644,7 +833,7 @@ class FileMetadataDiscoveryServiceTest {
         RagFileSearchQuery query = new RagFileSearchQuery(null, null, null, null, null,
                 RagFileSortKey.NAME_ASC, 0, 20);
         FileMetadataDiscoveryService service = newService(properties(1L, 50));
-        RagFileSearchResponse response = service.search(userContext(owner), query);
+        RagFileSearchResponse response = service.search(userContext(recipient), query);
 
         assertThat(response.partial()).as("budget exhaustion must be reported honestly").isTrue();
         assertThat(response.items()).hasSize(1);
@@ -658,14 +847,14 @@ class FileMetadataDiscoveryServiceTest {
     // helpers
     // ------------------------------------------------------------------
 
-    private RagFileSearchResponse search(String owner, RagFileSearchQuery query) {
+    private RagFileSearchResponse search(String subject, RagFileSearchQuery query) {
         FileMetadataDiscoveryService service = newService(defaultProperties());
-        return service.search(userContext(owner), query);
+        return service.search(userContext(subject), query);
     }
 
     private FileMetadataDiscoveryService newService(RagDiscoveryProperties properties) {
         SourceConnectorRegistry registry = new SourceConnectorRegistry(List.of(fakeConnector));
-        return new FileMetadataDiscoveryService(sourceDocumentJpaRepository, effectivePermissionService, registry,
+        return new FileMetadataDiscoveryService(documentShareJpaRepository, effectivePermissionService, registry,
                 properties, clock);
     }
 
@@ -681,10 +870,10 @@ class FileMetadataDiscoveryServiceTest {
         return new RagFileSearchQuery(null, null, null, null, null, RagFileSortKey.MODIFIED_AT_DESC, 0, 20);
     }
 
-    /** 이름 그대로 보이는(권한 있음+Live VERIFIED) 문서를 만들고 Fake Connector에도 등록한다. */
-    private Fixture stubVisible(String owner, String name) {
-        Fixture fixture = createDocument(owner, "ACTIVE", "ACTIVE", name, "application/pdf", "v1", "PENDING");
-        grantFreshRead(fixture.documentId(), owner);
+    /** 이름 그대로 보이는(공유됨+Live VERIFIED) 문서를 만들고 Fake Connector에도 등록한다. */
+    private Fixture stubVisible(String publisher, String recipient, String name) {
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", name, "application/pdf", "v1", "PENDING");
+        shareWith(fixture, publisher, recipient);
         fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(),
                 SourceMetadataVerificationResult.verified(name, "application/pdf", "v1", clock.instant(), true));
         return fixture;
@@ -695,13 +884,13 @@ class FileMetadataDiscoveryServiceTest {
      * 요청해 실제로 보이는 파일 이름을 순서대로 모은다 - Test 전용 Bounded Loop({@code
      * hasMore}가 {@code null}이면 안전하게 멈춘다, 이 Test들의 시나리오에서는 발생하지 않는다).
      */
-    private List<String> collectAllVisibleNames(String owner, int size) {
+    private List<String> collectAllVisibleNames(String recipient, int size) {
         List<String> names = new ArrayList<>();
         int page = 0;
         while (true) {
             RagFileSearchQuery query = new RagFileSearchQuery(null, null, null, null, null, RagFileSortKey.NAME_ASC,
                     page, size);
-            RagFileSearchResponse response = search(owner, query);
+            RagFileSearchResponse response = search(recipient, query);
             for (RagFileItem item : response.items()) {
                 names.add(item.name());
             }
@@ -713,10 +902,16 @@ class FileMetadataDiscoveryServiceTest {
         return names;
     }
 
-    private Fixture createDocument(String ownerSubject, String connectionStatus, String documentState, String name,
-            String mimeType, String sourceVersion, String indexStatus) {
+    private Fixture createDocument(String publisherSubject, String connectionStatus, String documentState,
+            String name, String mimeType, String sourceVersion, String indexStatus) {
         SourceConnectionEntity connection = new SourceConnectionEntity("GOOGLE_DRIVE", "Test Source",
-                connectionStatus, "FULL", ownerSubject);
+                connectionStatus, "FULL", publisherSubject);
+        // M10B 보안 교정(그룹 C) - 이 Fixture는 "이미 정상적으로 재인증을 거쳐 Provider
+        // 신원이 확인된" 일반적인 연결을 나타낸다(EffectivePermissionService.decideShared의
+        // SOURCE_IDENTITY_UNVERIFIED 검사를 통과시킨다). Identity 미확인 자체를 검증하는
+        // 것이 목적인 Test는 아래 anUnverifiedLegacyProviderIdentity...Test처럼 이 Helper를
+        // 쓰지 않고 직접 만든다.
+        connection.adoptProviderAccountId("verified-account-" + publisherSubject);
         sourceConnectionJpaRepository.saveAndFlush(connection);
         String sourceDocumentId = "file-" + unique();
         SourceDocumentEntity document = new SourceDocumentEntity(connection.getId(), sourceDocumentId, name,
@@ -725,9 +920,24 @@ class FileMetadataDiscoveryServiceTest {
         return new Fixture(connection.getId(), document.getId(), sourceDocumentId);
     }
 
-    private void grantFreshRead(long documentId, String ownerSubject) {
-        sourcePermissionJpaRepository.saveAndFlush(
-                new SourcePermissionEntity(documentId, "user", ownerSubject, "READ", Instant.now()));
+    /** M10B - ACL grant 대신 명시적 공유(VIEW, INTERNAL 등급)를 지정 수신자에게 게시한다. */
+    private DocumentShareEntity shareWith(Fixture fixture, String publisherSubject, String recipientSubject) {
+        DocumentShareEntity share = new DocumentShareEntity(publisherSubject, fixture.sourceId(),
+                fixture.documentId(), "INTERNAL", "VIEW", clock.instant());
+        documentShareJpaRepository.saveAndFlush(share);
+        documentShareRecipientJpaRepository
+                .saveAndFlush(new DocumentShareRecipientEntity(share.getId(), recipientSubject));
+        return share;
+    }
+
+    /**
+     * M10B - 검색이 더 이상 Owner Scope가 아니라 Recipient Scope이므로(같은
+     * PostgreSQL을 Rollback 없이 재사용하는 이 Class에서), 매 Test가 고유한 수신자를
+     * 새로 발급해 앞선 Test가 남긴 공유가 섞이지 않게 한다({@code publisher}가
+     * 이전에 이미 그랬던 것과 같은 격리 원칙).
+     */
+    private static String recipient() {
+        return "recipient-" + unique();
     }
 
     private static UserContext userContext(String subject) {

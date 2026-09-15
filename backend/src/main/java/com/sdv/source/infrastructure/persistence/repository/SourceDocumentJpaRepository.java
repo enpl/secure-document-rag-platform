@@ -103,16 +103,20 @@ public interface SourceDocumentJpaRepository extends JpaRepository<SourceDocumen
      * {@code SourceConnectionService.disconnect}(Bulk UPDATE)가 끼어드는
      * 경쟁을 막는 것이었다.
      *
-     * <p><b>M07A 교정 - 현재 상태(정확한 서술):</b> V006이 {@code
-     * document_extracted_content}를 제거하면서 {@code ContentExtractionService}의
-     * Claim/Fetch/Parse/Publish 로직 전체({@code finalizePublish} 포함)가
-     * 함께 제거됐다 - 이 메서드는 현재 어떤 호출자도 없다(더 이상 쓰이지
-     * 않는다는 뜻이지, 잘못됐다는 뜻이 아니다). Lock 자체의 의미(같은
-     * {@code source_documents} 행을 두고 Disconnect의 Bulk UPDATE와 경쟁하는
-     * 것을 막는다는 것, {@code source_connections}는 여기서 Lock을 걸지
-     * 않으므로 Lock 순서 역전 위험이 없다는 것)는 여전히 유효하며, M11이
-     * 실제 발행/재인덱싱 Orchestration을 구현할 때 그대로 재사용할 수 있게
-     * 남겨둔다 - 지금 이 메서드를 지우거나 지어낸 호출자를 붙이지 않는다.</p>
+     * <p><b>M07A 교정 - 당시 상태:</b> V006이 {@code document_extracted_content}를
+     * 제거하면서 {@code ContentExtractionService}의 Claim/Fetch/Parse/Publish
+     * 로직 전체({@code finalizePublish} 포함)가 함께 제거돼, 그 시점에는 이
+     * 메서드를 호출하는 곳이 없었다. Lock 자체의 의미(같은 {@code
+     * source_documents} 행을 두고 경쟁하는 다른 Writer를 막는다는 것, {@code
+     * source_connections}는 여기서 Lock을 걸지 않으므로 Lock 순서 역전 위험이
+     * 없다는 것)는 그대로 유효하다.</p>
+     *
+     * <p><b>M10B 보안 교정 - 실제 호출자가 생겼다:</b> {@code
+     * SourceSharingService.createShare}/{@code adminSetBlocked}가 이제 이
+     * 메서드로 대상 문서 행을 잠근 뒤 {@code document_share_restrictions}(V011)를
+     * 읽고 쓴다 - 같은 문서에 대한 "관리자 차단"과 "게시자의 Unshare 후 재게시"가
+     * 서로 경쟁해 관리자 차단이 새 공유에 반영되지 않고 사라지는 것(Lost
+     * Update)을 막기 위해서다.</p>
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT e FROM SourceDocumentEntity e WHERE e.id = :documentId")
@@ -183,4 +187,19 @@ public interface SourceDocumentJpaRepository extends JpaRepository<SourceDocumen
             @Param("hasModifiedFrom") boolean hasModifiedFrom, @Param("modifiedFrom") Instant modifiedFrom,
             @Param("hasModifiedTo") boolean hasModifiedTo, @Param("modifiedTo") Instant modifiedTo,
             Pageable pageable);
+
+    /**
+     * M10B 신규(SHR-001 소유자 전용 비공개 Metadata 선택기, {@code GET
+     * /api/sources/{id}/files}) - 정확히 이 {@code sourceId}를 소유한 요청자에게만
+     * 그 Source의 ACTIVE 문서를 Bounded/Paginated로 보여준다. 이 결과를 보는 것 자체는
+     * 공유/공개 검색(RAG-011)과 무관하다 - 여기 나타난다고 다른 사용자에게 노출되는
+     * 것은 절대 아니다({@code SourceSharingService}가 공유를 명시적으로 만들어야만
+     * {@code document_shares}를 통해 노출된다). {@code searchDiscoverable}과 같은
+     * 이유로 Count Query 없는 {@link Slice}만 쓴다 - 원시 총계를 노출하지 않는다.
+     */
+    @Query("SELECT d FROM SourceDocumentEntity d JOIN SourceConnectionEntity c ON c.id = d.sourceId "
+            + "WHERE c.ownerSubject = :ownerSubject AND d.sourceId = :sourceId "
+            + "AND c.type = 'GOOGLE_DRIVE' AND c.status = 'ACTIVE' AND d.state = 'ACTIVE'")
+    Slice<SourceDocumentEntity> findOwnedForPicker(@Param("ownerSubject") String ownerSubject,
+            @Param("sourceId") Long sourceId, Pageable pageable);
 }

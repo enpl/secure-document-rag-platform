@@ -176,6 +176,32 @@ public class GoogleDriveClient {
         });
     }
 
+    /**
+     * M10B 신규(`docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.14 same-account reconnect) -
+     * {@code about.get}으로 지금 이 Access Token이 속한 Google 계정의 안정적 식별자
+     * ({@code user.permissionId})만 반환한다(이메일/표시 이름이 아니다) - 이미 보유한
+     * {@code drive.readonly} Scope만으로 호출 가능하다(추가 Scope/동의 불필요). 응답
+     * DTO({@link GoogleAbout}/{@link GoogleAboutUser})는 이 Package 밖으로 노출하지
+     * 않는다(Class Javadoc 원칙) - 재연결 판단에 실제로 필요한 값 하나만 반환한다.
+     */
+    public String getAccountIdentity(String accessToken) {
+        Deadline deadline = Deadline.startingNow(operationDeadline);
+        return withRetry(deadline, () -> {
+            try {
+                GoogleAbout about = restClient.get()
+                        .uri("/drive/v3/about?fields=user(permissionId,emailAddress)")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(accessToken))
+                        .retrieve()
+                        .body(GoogleAbout.class);
+                return requireValidAbout(about).user().permissionId();
+            } catch (RestClientResponseException e) {
+                throw translate(e);
+            } catch (RestClientException e) {
+                throw malformedResponse(e);
+            }
+        });
+    }
+
     /** {@code changes.getStartPageToken} - 새 변경 추적을 시작할 때의 최초 Token. */
     public String getStartPageToken(String accessToken) {
         Deadline deadline = Deadline.startingNow(operationDeadline);
@@ -469,6 +495,13 @@ public class GoogleDriveClient {
         return page;
     }
 
+    private static GoogleAbout requireValidAbout(GoogleAbout about) {
+        if (about == null || about.user() == null || isBlank(about.user().permissionId())) {
+            throw new GoogleApiException(GoogleApiException.Category.UNKNOWN, "malformed about response from google");
+        }
+        return about;
+    }
+
     private static GoogleChangesPage requireValidChangesPage(GoogleChangesPage page) {
         if (page == null) {
             throw new GoogleApiException(GoogleApiException.Category.UNKNOWN, "empty changes response from google");
@@ -597,6 +630,12 @@ public class GoogleDriveClient {
     }
 
     record GoogleStartPageTokenResponse(String startPageToken) {
+    }
+
+    record GoogleAbout(GoogleAboutUser user) {
+    }
+
+    record GoogleAboutUser(String permissionId, String emailAddress) {
     }
 
     record GoogleChangesPage(String nextPageToken, String newStartPageToken, List<GoogleChange> changes) {

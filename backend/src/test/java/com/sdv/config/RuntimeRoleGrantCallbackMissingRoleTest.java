@@ -76,8 +76,9 @@ class RuntimeRoleGrantCallbackMissingRoleTest {
                 assertThat(rs.getBoolean("success")).isTrue();
                 versions.add(rs.getString("version"));
             }
-            // M09A 교정이 V009를 추가했다.
-            assertThat(versions).containsExactly("001", "002", "003", "004", "005", "006", "007", "008", "009");
+            // M10B 보안 교정이 V011을 추가했다.
+            assertThat(versions).containsExactly("001", "002", "003", "004", "005", "006", "007", "008", "009",
+                    "010", "011");
 
             assertThat(st.executeQuery(
                             "SELECT count(*) FROM pg_roles WHERE rolname = 'sdv'").next())

@@ -8,11 +8,14 @@ import com.sdv.rag.api.dto.RagFileSearchResponse;
 import com.sdv.rag.api.dto.RagFileSortKey;
 import com.sdv.source.application.SourceConnectorRegistry;
 import com.sdv.source.application.port.DocumentSourceConnector;
+import com.sdv.source.domain.ShareAction;
+import com.sdv.source.domain.SourceAccessContext;
 import com.sdv.source.domain.SourceMetadataVerificationOutcome;
 import com.sdv.source.domain.SourceMetadataVerificationResult;
 import com.sdv.source.domain.SourceType;
 import com.sdv.source.infrastructure.persistence.entity.SourceDocumentEntity;
-import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRepository;
+import com.sdv.source.infrastructure.persistence.repository.DocumentShareJpaRepository;
+import com.sdv.source.infrastructure.persistence.repository.DocumentShareJpaRepository.SharedDiscoveryCandidate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -25,7 +28,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -108,7 +110,6 @@ import java.util.Set;
 @Service
 public class FileMetadataDiscoveryService {
 
-    private static final String VIEW_ACTION = "VIEW";
     private static final String DRIVE_VIEW_URL_PREFIX = "https://drive.google.com/file/d/";
     private static final String DRIVE_VIEW_URL_SUFFIX = "/view";
     /**
@@ -120,25 +121,25 @@ public class FileMetadataDiscoveryService {
     private static final String NO_FILTER_SENTINEL = "";
     private static final long NO_SOURCE_ID_SENTINEL = 0L;
 
-    private final SourceDocumentJpaRepository sourceDocumentJpaRepository;
+    private final DocumentShareJpaRepository documentShareJpaRepository;
     private final EffectivePermissionService effectivePermissionService;
     private final SourceConnectorRegistry sourceConnectorRegistry;
     private final RagDiscoveryProperties properties;
     private final Clock clock;
 
     @Autowired
-    public FileMetadataDiscoveryService(SourceDocumentJpaRepository sourceDocumentJpaRepository,
+    public FileMetadataDiscoveryService(DocumentShareJpaRepository documentShareJpaRepository,
             EffectivePermissionService effectivePermissionService, SourceConnectorRegistry sourceConnectorRegistry,
             RagDiscoveryProperties properties) {
-        this(sourceDocumentJpaRepository, effectivePermissionService, sourceConnectorRegistry, properties,
+        this(documentShareJpaRepository, effectivePermissionService, sourceConnectorRegistry, properties,
                 Clock.systemUTC());
     }
 
     /** 테스트가 Live 검증 예산(Budget) 소진을 결정론적으로 재현하기 위한 패키지 전용 생성자. */
-    FileMetadataDiscoveryService(SourceDocumentJpaRepository sourceDocumentJpaRepository,
+    FileMetadataDiscoveryService(DocumentShareJpaRepository documentShareJpaRepository,
             EffectivePermissionService effectivePermissionService, SourceConnectorRegistry sourceConnectorRegistry,
             RagDiscoveryProperties properties, Clock clock) {
-        this.sourceDocumentJpaRepository = sourceDocumentJpaRepository;
+        this.documentShareJpaRepository = documentShareJpaRepository;
         this.effectivePermissionService = effectivePermissionService;
         this.sourceConnectorRegistry = sourceConnectorRegistry;
         this.properties = properties;
@@ -171,8 +172,8 @@ public class FileMetadataDiscoveryService {
             }
 
             Pageable pageable = PageRequest.of(page, query.size(), buildSort(query.sort()));
-            Slice<SourceDocumentEntity> slice = fetchCandidates(user, query, pageable);
-            List<SourceDocumentEntity> batch = slice.getContent();
+            Slice<SharedDiscoveryCandidate> slice = fetchCandidates(user, query, pageable);
+            List<SharedDiscoveryCandidate> batch = slice.getContent();
             if (batch.isEmpty()) {
                 stop = StopReason.RAW_END;
                 break;
@@ -182,17 +183,9 @@ public class FileMetadataDiscoveryService {
             // DB에서 더 읽어온 나머지 행은 정책/Live 어느 쪽으로도 평가하지 않는다.
             int remaining = cap - scanned;
             boolean trimmed = batch.size() > remaining;
-            List<SourceDocumentEntity> toEvaluate = trimmed ? batch.subList(0, remaining) : batch;
+            List<SharedDiscoveryCandidate> toEvaluate = trimmed ? batch.subList(0, remaining) : batch;
 
-            List<Long> candidateIds = new ArrayList<>(toEvaluate.size());
-            for (SourceDocumentEntity candidate : toEvaluate) {
-                candidateIds.add(candidate.getId());
-            }
-            // ACL/Overlay/문서 상태 Prefilter - 아직 최종 인가가 아니다(§2A.4).
-            Set<Long> allowedIds = new HashSet<>(
-                    effectivePermissionService.filterAllowed(user, candidateIds, VIEW_ACTION, null));
-
-            for (SourceDocumentEntity candidate : toEvaluate) {
+            for (SharedDiscoveryCandidate candidate : toEvaluate) {
                 if (scanned >= cap) {
                     stop = StopReason.CAP;
                     break scan;
@@ -203,7 +196,15 @@ public class FileMetadataDiscoveryService {
                 }
                 scanned++;
 
-                if (!allowedIds.contains(candidate.getId())) {
+                SourceDocumentEntity document = candidate.document();
+                SourceAccessContext accessContext = new SourceAccessContext(user.subject(),
+                        candidate.publisherSubject(), document.getSourceId(), document.getId(),
+                        candidate.share().getId(), ShareAction.VIEW, candidate.share().getGeneration(),
+                        candidate.connectionEpoch());
+
+                // 공유 기반 Prefilter - B의 SDV 인가(수신자/행위/등급/게시/차단/게시자 문서 상태)만
+                // 확인한다. A(게시자)의 Provider 접근 자체는 아직 확인하지 않았다(§2A.4).
+                if (!effectivePermissionService.evaluateSharedAccess(user, accessContext, null).isAllowed()) {
                     // 확정적으로 배제됨(Prefilter Deny) - 위치를 건드리지 않고 계속 진행한다.
                     continue;
                 }
@@ -213,16 +214,21 @@ public class FileMetadataDiscoveryService {
                     break scan;
                 }
 
-                // Same-user Live 재확인 - Content Byte는 요청하지 않는다.
-                SourceMetadataVerificationResult liveResult = connector.get().verifyCurrentMetadata(user,
-                        candidate.getSourceId(), candidate.getSourceDocumentId());
+                // Publisher-Bound Live 재확인 - B가 아니라 A(게시자, Source Owner)의 Credential로
+                // 수행한다(GoogleDriveConnector는 requestingUser==Source Owner만 신뢰한다 - A가
+                // 정확히 그 Owner이므로 그대로 재사용할 수 있다). Content Byte는 요청하지 않는다.
+                UserContext publisherContext = new UserContext(candidate.publisherSubject(), null, Set.of(),
+                        Set.of());
+                SourceMetadataVerificationResult liveResult = connector.get().verifyCurrentMetadata(publisherContext,
+                        document.getSourceId(), document.getSourceDocumentId());
 
                 boolean visible = false;
                 if (liveResult.outcome() == SourceMetadataVerificationOutcome.VERIFIED) {
-                    // Live 값으로 요청 필터를 다시 적용 + 노출 직전 재인가 - 둘 다 지금 막 확인한
-                    // 확정적 결론이다(개명/외부 I/O 중 Disconnect 등) - Unknown이 아니다.
+                    // Live 값으로 요청 필터를 다시 적용 + 노출 직전 재인가(B의 공유 인가를 다시 한번,
+                    // 게시자의 Live I/O가 진행되는 동안 Unshare/Admin Block/세대 변경이 없었는지) -
+                    // 둘 다 지금 막 확인한 확정적 결론이다(Unknown이 아니다).
                     visible = matchesLiveFilters(query, liveResult) && effectivePermissionService
-                            .evaluate(user, candidate.getId(), VIEW_ACTION, null).isAllowed();
+                            .evaluateSharedAccess(user, accessContext, null).isAllowed();
                 } else if (!liveResult.outcome().isDefinitiveExclusion()) {
                     // Missing/Unknown/Malformed/Credential 문제 - "확인 못함"이지 "확인 결과 안
                     // 보인다"가 아니다. 이 뒤의 위치는 신뢰할 수 없으므로 즉시 멈춘다(Fail Closed).
@@ -234,7 +240,7 @@ public class FileMetadataDiscoveryService {
 
                 if (visible) {
                     if (visiblePosition >= start && visiblePosition < end) {
-                        items.add(toItem(candidate, liveResult));
+                        items.add(toItem(document, liveResult));
                     } else if (visiblePosition == end) {
                         // 요청한 Page 바로 다음 위치에서 실제로 보이는 후보를 확인했다 - 더 볼 필요 없다.
                         stop = StopReason.FOUND_BEYOND;
@@ -289,9 +295,17 @@ public class FileMetadataDiscoveryService {
         };
     }
 
-    private Slice<SourceDocumentEntity> fetchCandidates(UserContext user, RagFileSearchQuery query,
+    /**
+     * M10B 교정 - 이전에는 {@code sourceDocumentJpaRepository.searchDiscoverable(user.subject(),
+     * ...)}로 "내가 소유한 문서"를 후보로 삼았다(Owner-Only Fallback). 이제 후보는
+     * "나(recipient)에게 명시적으로 활성 공유된 문서"뿐이다 - 게시자 본인이 자신의 문서를
+     * 검색해도, 스스로에게 공유하지 않은 이상 이 공통 검색에는 나타나지 않는다(§2A.4
+     * "including the owner's common discovery") - 비공개 선택기({@code
+     * SourceUserController#files})는 완전히 별도 경로다.
+     */
+    private Slice<SharedDiscoveryCandidate> fetchCandidates(UserContext user, RagFileSearchQuery query,
             Pageable pageable) {
-        return sourceDocumentJpaRepository.searchDiscoverable(user.subject(),
+        return documentShareJpaRepository.searchSharedDiscoverable(user.subject(),
                 query.sourceId() != null, query.sourceId() != null ? query.sourceId() : NO_SOURCE_ID_SENTINEL,
                 query.mimeType() != null, query.mimeType() != null ? query.mimeType() : NO_FILTER_SENTINEL,
                 query.q() != null, query.q() != null ? toLikePattern(query.q()) : NO_FILTER_SENTINEL,

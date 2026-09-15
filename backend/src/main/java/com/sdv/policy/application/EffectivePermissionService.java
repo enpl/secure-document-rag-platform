@@ -7,11 +7,14 @@ import com.sdv.policy.domain.AiRequestContext;
 import com.sdv.policy.domain.PolicyDecision;
 import com.sdv.policy.domain.PolicyReasonCode;
 import com.sdv.policy.domain.SecurityLevel;
+import com.sdv.source.domain.SourceAccessContext;
 import com.sdv.source.domain.SourceConnection;
 import com.sdv.source.domain.SourcePrincipal;
+import com.sdv.source.infrastructure.persistence.entity.DocumentShareEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourceConnectionEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourceDocumentEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourcePermissionEntity;
+import com.sdv.source.infrastructure.persistence.repository.DocumentShareJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.SourceConnectionJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.SourcePermissionJpaRepository;
@@ -24,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * F-BE-081. 하나로 중앙화된, 재사용 가능한 최종 접근 판단 경로(v3.2 §17, §18):
@@ -103,6 +107,7 @@ public class EffectivePermissionService {
     private final SourceDocumentJpaRepository sourceDocumentJpaRepository;
     private final SourceConnectionJpaRepository sourceConnectionJpaRepository;
     private final SourcePermissionJpaRepository sourcePermissionJpaRepository;
+    private final DocumentShareJpaRepository documentShareJpaRepository;
     private final PermissionFreshnessPolicy permissionFreshnessPolicy;
     private final SecurityLabelService securityLabelService;
     private final OverlayPolicyService overlayPolicyService;
@@ -113,6 +118,7 @@ public class EffectivePermissionService {
             SourceDocumentJpaRepository sourceDocumentJpaRepository,
             SourceConnectionJpaRepository sourceConnectionJpaRepository,
             SourcePermissionJpaRepository sourcePermissionJpaRepository,
+            DocumentShareJpaRepository documentShareJpaRepository,
             PermissionFreshnessPolicy permissionFreshnessPolicy,
             SecurityLabelService securityLabelService,
             OverlayPolicyService overlayPolicyService,
@@ -121,6 +127,7 @@ public class EffectivePermissionService {
         this.sourceDocumentJpaRepository = sourceDocumentJpaRepository;
         this.sourceConnectionJpaRepository = sourceConnectionJpaRepository;
         this.sourcePermissionJpaRepository = sourcePermissionJpaRepository;
+        this.documentShareJpaRepository = documentShareJpaRepository;
         this.permissionFreshnessPolicy = permissionFreshnessPolicy;
         this.securityLabelService = securityLabelService;
         this.overlayPolicyService = overlayPolicyService;
@@ -165,6 +172,157 @@ public class EffectivePermissionService {
             }
         }
         return List.copyOf(allowed);
+    }
+
+    /**
+     * M10B 신규(SHR-001, `docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.13) - B안 공유 기반
+     * 접근 판단. {@link #evaluate}(Owner-Only, {@code source_documents →
+     * source_connections.owner_subject}로 요청자 본인 소유 문서만 로드)와 의도적으로
+     * 분리된 경로다 - 요청자(B)는 문서 소유자가 아니므로 그 경로를 재사용할 수 없다.
+     * 그래도 이 Service 하나 안에서만 판단하고({@code Controller}/Repository/RAG에
+     * 중복하지 않는다), Overlay/AI Usage Policy 등 나머지 협력자는 그대로 재사용한다.
+     *
+     * <h2>판단 순서</h2>
+     * <ol>
+     *   <li>{@code context.shareId()}로 공유를 로드한다 - 없으면 {@link
+     *       PolicyReasonCode#SHARE_NOT_AUTHORIZED}(공유 부재/철회를 구분 노출하지 않음).</li>
+     *   <li>그 공유가 실제로 {@code context}가 가리키는 문서/Source/게시자와 정확히
+     *       결합돼 있는지 재확인한다 - 위조되거나 낡은 {@code shareId}가 다른
+     *       문서로의 접근을 넓히지 못하게 한다(사용자가 제공한 식별자는 인가
+     *       증거가 아니다).</li>
+     *   <li>공유가 철회됐으면(§2A.14 "explicit unshare removes active grants without
+     *       allowing reconnect revival") {@link PolicyReasonCode#SHARE_NOT_AUTHORIZED}.</li>
+     *   <li>ADMIN이 차단했으면 {@link PolicyReasonCode#SHARE_ADMIN_BLOCKED}(게시자는
+     *       이를 해제할 방법이 없다).</li>
+     *   <li>요청자가 수신자 명단에 없거나, 요청한 행위가 부여되지 않았으면 {@link
+     *       PolicyReasonCode#SHARE_NOT_AUTHORIZED}.</li>
+     *   <li>게시자 소유 범위로 문서/Source가 여전히 존재·ACTIVE인지 재확인한다({@link
+     *       #evaluate}의 2~3단계와 동일한 검사, Owner를 {@code context.publisherSubject()}로
+     *       바꿔 재사용) - 문서가 그 사이 삭제됐거나 Source가 비활성화됐으면 공유
+     *       자체가 여전히 유효해도 거부한다.</li>
+     *   <li>공유가 게시 시점에 확정한 {@code classification}(문서 자체의 {@code
+     *       document_security_labels}가 아니다 - CORE_SPEC §2A.13, 게시자가 공유마다
+     *       직접 확인하는 값)으로 Overlay/AI Usage Policy를 평가한다 - {@link #evaluate}의
+     *       6~7단계와 동일한 원칙(Overlay DENY는 항상 이기고, ALLOW는 비-authoritative).</li>
+     * </ol>
+     */
+    @Transactional
+    public PolicyDecision evaluateSharedAccess(UserContext requester, SourceAccessContext context,
+            AiRequestContext aiRequestContext) {
+        requireValidUser(requester);
+        Objects.requireNonNull(context, "context must not be null");
+        if (!requester.subject().equals(context.requesterSubject())) {
+            throw new IllegalArgumentException("context.requesterSubject must match the authenticated requester");
+        }
+        PolicyDecision decision = decideShared(requester, context, aiRequestContext);
+        recordAudit(requester, context.documentId(), context.requestedAction().name(), decision);
+        return decision;
+    }
+
+    private PolicyDecision decideShared(UserContext requester, SourceAccessContext context,
+            AiRequestContext aiRequestContext) {
+        Optional<DocumentShareEntity> maybeShare = documentShareJpaRepository.findById(context.shareId());
+        if (maybeShare.isEmpty()) {
+            return PolicyDecision.deny(PolicyReasonCode.SHARE_NOT_AUTHORIZED);
+        }
+        DocumentShareEntity share = maybeShare.get();
+        if (!share.getDocumentId().equals(context.documentId()) || !share.getSourceId().equals(context.sourceId())
+                || !share.getPublisherSubject().equals(context.publisherSubject())) {
+            // 위조/낡은 shareId - 실제로는 다른 문서를 가리킨다. 존재는 하지만 이 맥락에는
+            // 적용되지 않는다는 사실을 노출하지 않고 그냥 "인가되지 않음"으로 통일한다.
+            return PolicyDecision.deny(PolicyReasonCode.SHARE_NOT_AUTHORIZED);
+        }
+        if (!share.isActive()) {
+            return PolicyDecision.deny(PolicyReasonCode.SHARE_NOT_AUTHORIZED);
+        }
+        if (share.isAdminBlocked()) {
+            return PolicyDecision.deny(PolicyReasonCode.SHARE_ADMIN_BLOCKED);
+        }
+        if (share.getGeneration() != context.shareGeneration()) {
+            // M10B 보안 교정 - 호출자가 들고 있는 Context는 이 공유가 갱신/철회/차단되기
+            // 이전 세대를 기준으로 만들어졌다(예: FileMetadataDiscoveryService의 노출 직전
+            // 재확인이 Live I/O 도중 갱신된 상태를 그대로 신뢰하지 않게 한다). 위의 개별
+            // 필드 재확인(isActive/isAdminBlocked/recipients/actions)이 이미 실제 변경
+            // 대부분을 잡아내지만, 이 비교가 그 사실을 명시적으로 강제한다 - 향후 이
+            // Entity에 새 필드가 추가돼도 이 한 줄이 "무엇이든 바뀌면 거부"를 보장한다.
+            return PolicyDecision.deny(PolicyReasonCode.STALE_AUTHORIZATION_CONTEXT);
+        }
+        List<String> recipients = documentShareJpaRepository.findRecipientSubjects(share.getId());
+        if (!recipients.contains(requester.subject())) {
+            return PolicyDecision.deny(PolicyReasonCode.SHARE_NOT_AUTHORIZED);
+        }
+        Set<String> allowedActions = Set.of(share.getAllowedActions().split(","));
+        if (!allowedActions.contains(context.requestedAction().name())) {
+            return PolicyDecision.deny(PolicyReasonCode.SHARE_NOT_AUTHORIZED);
+        }
+
+        // 게시자(Source Owner) 범위로 문서/Source가 여전히 유효한지 재확인한다 - evaluate()의
+        // 2~3단계와 원칙은 같되, Owner를 요청자가 아니라 context.publisherSubject()로 쓴다.
+        Optional<SourceDocumentEntity> maybeDocument = sourceDocumentJpaRepository
+                .findByIdAndOwnerSubject(context.documentId(), context.publisherSubject());
+        if (maybeDocument.isEmpty()) {
+            return PolicyDecision.deny(PolicyReasonCode.RESOURCE_NOT_FOUND);
+        }
+        SourceDocumentEntity document = maybeDocument.get();
+        if (DELETED_STATE.equals(document.getState())) {
+            return PolicyDecision.deny(PolicyReasonCode.DOCUMENT_DELETED);
+        }
+        if (!ACTIVE_STATE.equals(document.getState())) {
+            return PolicyDecision.deny(PolicyReasonCode.DOCUMENT_STATE_UNRECOGNIZED);
+        }
+        Optional<SourceConnectionEntity> maybeConnection = sourceConnectionJpaRepository
+                .findByIdAndOwnerSubject(document.getSourceId(), context.publisherSubject());
+        if (maybeConnection.isEmpty()) {
+            return PolicyDecision.deny(PolicyReasonCode.RESOURCE_NOT_FOUND);
+        }
+        SourceConnectionEntity connection = maybeConnection.get();
+        if (!SourceConnection.STATUS_ACTIVE.equals(connection.getStatus())) {
+            return PolicyDecision.deny(PolicyReasonCode.SOURCE_INACTIVE);
+        }
+        if (connection.getProviderAccountId() == null) {
+            // M10B 보안 교정(그룹 C) - 이 Connection은 ACTIVE/Token은 있어도 아직 한 번도
+            // 검증된 Provider 신원을 확인받지 못했다(M10B 이전 Legacy 연결 등). 이메일이나
+            // SDV Owner 동일성만으로 같은 Google 계정이라고 추정해 공유를 열어주지 않는다 -
+            // 소유자가 실제로 재인증해 GoogleDriveOAuthService가 identity를 채택할 때까지
+            // Fail Closed 한다("do not infer identity from email").
+            return PolicyDecision.deny(PolicyReasonCode.SOURCE_IDENTITY_UNVERIFIED);
+        }
+        if (connection.getConnectionEpoch() != context.connectionGeneration()) {
+            // M10B 보안 교정(V011) - Status만 다시 확인하는 것으로는 부족했다: Disconnect
+            // 이후 재연결이 성공하면 Status는 다시 ACTIVE로 보이지만, 이 Context는 그
+            // Disconnect보다 먼저 계산된 판단일 수 있다("A disconnect/reconnect cycle
+            // must not make a pre-disconnect result valid again just because status is
+            // ACTIVE again"). 이 값이 다르면 지금 이 순간 기준으로 다시 계산해야 한다 -
+            // 다음 검색 요청이 새 Epoch로 처음부터 다시 판단한다(Reapply on every request).
+            return PolicyDecision.deny(PolicyReasonCode.STALE_AUTHORIZATION_CONTEXT);
+        }
+
+        // Overlay/AI Usage Policy는 공유가 게시 시점에 확정한 등급을 쓴다(문서 자체의
+        // document_security_labels가 아니다) - DB CHECK 제약이 이미 4개 값만 허용하지만,
+        // 방어적으로 한 번 더 확인한다(Fail Closed).
+        SecurityLevel classification = parseSecurityLevelOrNull(share.getClassification());
+        if (classification == null) {
+            return PolicyDecision.deny(PolicyReasonCode.SHARE_NOT_AUTHORIZED);
+        }
+        if (overlayPolicyService.evaluate(requester, context.requestedAction().name(), classification)
+                == OverlayVerdict.DENY) {
+            return PolicyDecision.deny(PolicyReasonCode.OVERLAY_DENIED);
+        }
+        if (aiRequestContext != null) {
+            PolicyDecision aiDecision = aiUsagePolicyService.evaluate(classification, aiRequestContext);
+            if (aiDecision.isDenied()) {
+                return aiDecision;
+            }
+        }
+        return PolicyDecision.allow();
+    }
+
+    private static SecurityLevel parseSecurityLevelOrNull(String rawLevel) {
+        try {
+            return SecurityLevel.valueOf(rawLevel);
+        } catch (IllegalArgumentException | NullPointerException e) {
+            return null;
+        }
     }
 
     private static void requireValidUser(UserContext user) {

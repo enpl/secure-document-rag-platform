@@ -145,8 +145,15 @@ class SourceAdminControllerWebTest {
         assertThat(sourceConnectionJpaRepository.findById(id)).as("row must still exist").isPresent();
     }
 
+    /**
+     * M10B 교정(CORE_SPEC §2A.14) - 이전에는 Disconnect가 이 Source의 모든 문서를
+     * DELETED로 전이시켰다("연결 중단"과 "Provider에서 실제로 파일이 지워짐"을 혼동한
+     * 결함, {@code SourceConnectionService.disconnect} Class Javadoc "M10B 교정" 참고).
+     * 이제 문서 행은 전혀 건드리지 않는다 - 접근 차단은 {@code status=DISABLED} 하나로
+     * 충분하다(이 이름은 그 교정 전 결함 있는 동작을 가리켰다 - 이제는 정반대를 검증한다).
+     */
     @Test
-    void disconnectMarksAssociatedNonDeletedDocumentsAsDeleted() throws Exception {
+    void disconnectDoesNotMarkAssociatedDocumentsAsDeleted() throws Exception {
         Long id = createSource("owner-disconnect-docs", "With Documents");
         sourceDocumentJpaRepository.saveAndFlush(
                 new SourceDocumentEntity(id, "doc-a", "Doc A", "text/plain", null, null, "ACTIVE", "PENDING", null));
@@ -156,7 +163,9 @@ class SourceAdminControllerWebTest {
         mockMvc.perform(delete("/api/admin/sources/" + id).with(adminSubject("owner-disconnect-docs")))
                 .andExpect(status().isNoContent());
 
-        assertThat(sourceDocumentJpaRepository.findBySourceIdAndStateNot(id, "DELETED")).isEmpty();
+        assertThat(sourceDocumentJpaRepository.findBySourceIdAndStateNot(id, "DELETED"))
+                .as("disconnect must not conflate connection loss with actual provider-file deletion")
+                .hasSize(2);
     }
 
     @Test

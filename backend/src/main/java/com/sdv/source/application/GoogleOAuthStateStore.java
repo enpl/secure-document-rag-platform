@@ -47,11 +47,17 @@ class GoogleOAuthStateStore {
         this.clock = clock;
     }
 
-    /** 새 OAuth 시도를 등록하고 그 State 값을 반환한다. 등록 시마다 이미 만료된 기존 항목을 함께 정리한다. */
-    String create(String subject, Long sourceId, String browserBinding, String codeVerifier) {
+    /**
+     * 새 OAuth 시도를 등록하고 그 State 값을 반환한다. 등록 시마다 이미 만료된 기존 항목을
+     * 함께 정리한다. {@code connectionEpoch}는 이 시도를 시작하는 시점에 호출자가 읽은
+     * {@code source_connections.connection_epoch}(V011) 값이다 - 이 시도가 나중에
+     * Callback으로 완료될 때, 그 사이 Disconnect가 있었는지(값이 달라졌는지)를 판단하는
+     * 근거가 된다({@code GoogleDriveOAuthService.commitCredential}).
+     */
+    String create(String subject, Long sourceId, String browserBinding, String codeVerifier, long connectionEpoch) {
         attempts.values().removeIf(attempt -> clock.instant().isAfter(attempt.expiresAt()));
         String state = randomToken();
-        attempts.put(state, new Attempt(subject, sourceId, browserBinding, codeVerifier,
+        attempts.put(state, new Attempt(subject, sourceId, browserBinding, codeVerifier, connectionEpoch,
                 clock.instant().plus(TTL)));
         return state;
     }
@@ -89,6 +95,7 @@ class GoogleOAuthStateStore {
         return MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8), actual.getBytes(StandardCharsets.UTF_8));
     }
 
-    record Attempt(String subject, Long sourceId, String browserBinding, String codeVerifier, Instant expiresAt) {
+    record Attempt(String subject, Long sourceId, String browserBinding, String codeVerifier, long connectionEpoch,
+            Instant expiresAt) {
     }
 }

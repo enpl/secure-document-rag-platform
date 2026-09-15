@@ -6,6 +6,7 @@ import com.sdv.common.model.UserContext;
 import com.sdv.policy.domain.PolicyDecision;
 import com.sdv.policy.domain.PolicyReasonCode;
 import com.sdv.source.infrastructure.persistence.entity.SourceDocumentEntity;
+import com.sdv.source.infrastructure.persistence.repository.DocumentShareJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.SourceConnectionJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.SourcePermissionJpaRepository;
@@ -45,6 +46,8 @@ class EffectivePermissionServiceUnitTest {
     @Mock
     private SourcePermissionJpaRepository sourcePermissionJpaRepository;
     @Mock
+    private DocumentShareJpaRepository documentShareJpaRepository;
+    @Mock
     private PermissionFreshnessPolicy permissionFreshnessPolicy;
     @Mock
     private SecurityLabelService securityLabelService;
@@ -57,8 +60,8 @@ class EffectivePermissionServiceUnitTest {
 
     private EffectivePermissionService newService() {
         return new EffectivePermissionService(sourceDocumentJpaRepository, sourceConnectionJpaRepository,
-                sourcePermissionJpaRepository, permissionFreshnessPolicy, securityLabelService,
-                overlayPolicyService, aiUsagePolicyService, auditService);
+                sourcePermissionJpaRepository, documentShareJpaRepository, permissionFreshnessPolicy,
+                securityLabelService, overlayPolicyService, aiUsagePolicyService, auditService);
     }
 
     @Test

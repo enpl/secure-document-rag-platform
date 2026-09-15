@@ -64,22 +64,55 @@ class GoogleDriveOAuthServiceTest {
     private static final BlockingQueue<String> LAST_REQUEST_BODY = new ArrayBlockingQueue<>(8);
     private static volatile String scriptedScope = "https://www.googleapis.com/auth/drive.readonly";
     private static volatile boolean scriptedOmitRefreshToken = false;
+    // M10B - about.get이 반환할 안정적 Google 계정 식별자. 기본값은 "account-a"라는
+    // 하나의 계정을 흉내낸다 - 다른 계정을 흉내내려는 Test는 "account-b" 등으로 바꾼다.
+    private static volatile String scriptedPermissionId = "account-a";
+    private static volatile boolean scriptedAboutFails = false;
 
     @DynamicPropertySource
-    static void registerMockTokenUri(DynamicPropertyRegistry registry) {
+    static void registerMockServerUris(DynamicPropertyRegistry registry) {
         registry.add("sdv.google-oauth.token-uri",
                 () -> "http://localhost:" + MOCK_TOKEN_SERVER.getAddress().getPort() + "/token");
+        // GoogleDriveClient.getAbout()이 호출하는 Base URL - 같은 Local Mock Server의
+        // 다른 Context("/drive/v3/about")를 가리키게 한다.
+        registry.add("sdv.google-drive.api-base-url",
+                () -> "http://localhost:" + MOCK_TOKEN_SERVER.getAddress().getPort());
+        // M10B 후속 교정 - 이 Test 파일이 이제 실제 disconnect()(GoogleTokenService.revoke
+        // -> GoogleOAuthClient.revokeToken)를 호출하는 Test를 포함한다. 이 property가
+        // 없으면 revokeToken()이 실제 Google Endpoint(기본값
+        // https://oauth2.googleapis.com/revoke)로 나가려 하므로, 같은 Local Mock
+        // Server의 "/revoke" Context를 가리키게 한다("No real Google/Keycloak calls").
+        registry.add("sdv.google-oauth.revoke-uri",
+                () -> "http://localhost:" + MOCK_TOKEN_SERVER.getAddress().getPort() + "/revoke");
     }
 
     private static HttpServer startMockServer() {
         try {
             HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
             server.createContext("/token", GoogleDriveOAuthServiceTest::handleTokenRequest);
+            server.createContext("/drive/v3/about", GoogleDriveOAuthServiceTest::handleAboutRequest);
+            server.createContext("/revoke", GoogleDriveOAuthServiceTest::handleRevokeRequest);
             server.setExecutor(Executors.newCachedThreadPool());
             server.start();
             return server;
         } catch (IOException e) {
             throw new IllegalStateException("failed to start local mock Google token server", e);
+        }
+    }
+
+    /**
+     * M10B 후속 교정 - {@code GoogleOAuthClient.revokeToken}이 호출하는 Mock
+     * Revoke Endpoint. 실제 Google처럼 빈 본문 200을 돌려주기만 하면 된다({@code
+     * toBodilessEntity()}만 확인하므로) - Content-Free 성공 응답이며 Token 값
+     * 자체는 이 Mock이 검사하지 않는다(실제 Google 계약을 재현하는 것이 목적이
+     * 아니라, "이 호출이 실패하지 않고 로컬 Loopback으로만 나간다"만 보장한다).
+     */
+    private static void handleRevokeRequest(HttpExchange exchange) throws IOException {
+        try {
+            exchange.getRequestBody().readAllBytes();
+            exchange.sendResponseHeaders(200, -1);
+        } finally {
+            exchange.close();
         }
     }
 
@@ -101,6 +134,26 @@ class GoogleDriveOAuthServiceTest {
         }
     }
 
+    /** M10B - {@code GoogleDriveClient.getAbout}이 호출하는 {@code about.get} Mock 응답. */
+    private static void handleAboutRequest(HttpExchange exchange) throws IOException {
+        try {
+            if (scriptedAboutFails) {
+                exchange.sendResponseHeaders(503, -1);
+                return;
+            }
+            String json = "{\"user\":{\"permissionId\":\"" + scriptedPermissionId
+                    + "\",\"emailAddress\":\"mock@example.com\"}}";
+            byte[] body = json.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(body);
+            }
+        } finally {
+            exchange.close();
+        }
+    }
+
     @Autowired
     private GoogleDriveOAuthService googleDriveOAuthService;
     @Autowired
@@ -109,11 +162,15 @@ class GoogleDriveOAuthServiceTest {
     private SourceTokenStore sourceTokenStore; // 실제 GoogleTokenStoreAdapter Bean - Fake가 아니다.
     @Autowired
     private com.sdv.source.infrastructure.google.GoogleTokenService googleTokenService;
+    @Autowired
+    private SourceConnectionService sourceConnectionService;
 
     @BeforeEach
     void resetScript() {
         scriptedScope = "https://www.googleapis.com/auth/drive.readonly";
         scriptedOmitRefreshToken = false;
+        scriptedPermissionId = "account-a";
+        scriptedAboutFails = false;
         LAST_REQUEST_BODY.clear();
     }
 
@@ -121,6 +178,8 @@ class GoogleDriveOAuthServiceTest {
     void resetAfter() {
         scriptedScope = "https://www.googleapis.com/auth/drive.readonly";
         scriptedOmitRefreshToken = false;
+        scriptedPermissionId = "account-a";
+        scriptedAboutFails = false;
     }
 
     @Test
@@ -148,6 +207,9 @@ class GoogleDriveOAuthServiceTest {
 
         SourceConnectionEntity connection = sourceConnectionJpaRepository.findById(sourceId).orElseThrow();
         assertThat(connection.getTokenRef()).isNotBlank();
+        assertThat(connection.getStatus()).isEqualTo("ACTIVE");
+        // M10B - 최초 연결이므로 지금 확인된 계정을 그대로 채택한다.
+        assertThat(connection.getProviderAccountId()).isEqualTo("account-a");
 
         // PKCE code_verifier가 실제로 Token 요청 본문에 실렸는지 확인한다(Spring Security 라이브러리가
         // AbstractRestClientOAuth2AccessTokenResponseClient를 통해 자동으로 붙인다).
@@ -272,25 +334,139 @@ class GoogleDriveOAuthServiceTest {
         assertThat(stillStored.get().refreshToken()).isEqualTo("previously-stored-refresh-token");
     }
 
+    /**
+     * M10B 교정 - 이 Test의 이름/의도가 바뀌었다: 이전에는 "Disconnect된 Source는
+     * 절대 재연결할 수 없다"는 것이 옳은 동작이었지만, CORE_SPEC §2A.14가 정확히
+     * 이 시나리오(같은 인증된 소유자가 검증된 동일 Provider 계정으로 재연결)를
+     * 지원하도록 요구한다. 신원(permissionId)이 그대로 일치하면 이 Callback은
+     * 이제 성공하고 Source를 ACTIVE로 되돌린다 - 안전성은 더 이상 "Disabled면
+     * 무조건 거부"가 아니라 "다른 계정이면 거부"에서 나온다(아래 identity mismatch
+     * Test 참고).
+     */
     @Test
-    void handleCallbackDoesNotResurrectATokenForASourceThatWasDisconnectedAfterAuthorizeStarted() {
+    void handleCallbackReconnectsADisabledSourceWhenTheVerifiedProviderIdentityStillMatches() {
+        String owner = owner();
+        long sourceId = createSource(owner, "ACTIVE");
+        // 최초 연결로 identity(account-a)를 먼저 채택시킨다.
+        GoogleDriveOAuthService.AuthorizeResult firstAuthorize = googleDriveOAuthService.startAuthorization(owner,
+                sourceId);
+        googleDriveOAuthService.handleCallback(extractQueryParam(firstAuthorize.authorizationUrl(), "state"),
+                "first-code", firstAuthorize.browserBinding());
+
+        // 사용자가 연결을 끊는다(Disconnect) - 이 Test는 SourceConnectionService를
+        // 거치지 않고 직접 상태만 바꿔 이 Service 자신의 재연결 논리만 검증한다.
+        SourceConnectionEntity disabled = sourceConnectionJpaRepository.findById(sourceId).orElseThrow();
+        disabled.changeStatus("DISABLED");
+        sourceConnectionJpaRepository.saveAndFlush(disabled);
+
+        GoogleDriveOAuthService.AuthorizeResult reconnectAuthorize = googleDriveOAuthService.startAuthorization(owner,
+                sourceId);
+        String state = extractQueryParam(reconnectAuthorize.authorizationUrl(), "state");
+
+        GoogleDriveOAuthService.CallbackOutcome outcome = googleDriveOAuthService.handleCallback(state,
+                "reconnect-code", reconnectAuthorize.browserBinding());
+
+        assertThat(outcome.success()).as("a same-identity reconnect of a disabled source must succeed").isTrue();
+        SourceConnectionEntity reconnected = sourceConnectionJpaRepository.findById(sourceId).orElseThrow();
+        assertThat(reconnected.getStatus()).isEqualTo("ACTIVE");
+        assertThat(reconnected.getProviderAccountId())
+                .as("the originally adopted identity must be unchanged, not silently replaced")
+                .isEqualTo("account-a");
+        assertThat(sourceTokenStore.load(sourceId)).isPresent();
+    }
+
+    /**
+     * M10B 신규 - CORE_SPEC §2A.14 "Reject a different provider account without
+     * overwriting the original identity/share binding." 다른 Google 계정으로의
+     * 재연결 시도는 실패해야 하고, 기존에 채택된 Identity/Credential 무엇도
+     * 바뀌지 않아야 한다.
+     */
+    @Test
+    void handleCallbackRejectsAReconnectFromADifferentGoogleAccountWithoutOverwritingTheOriginalIdentity() {
+        String owner = owner();
+        long sourceId = createSource(owner, "ACTIVE");
+        GoogleDriveOAuthService.AuthorizeResult firstAuthorize = googleDriveOAuthService.startAuthorization(owner,
+                sourceId);
+        googleDriveOAuthService.handleCallback(extractQueryParam(firstAuthorize.authorizationUrl(), "state"),
+                "first-code", firstAuthorize.browserBinding());
+        TokenEnvelope originalCredential = sourceTokenStore.load(sourceId).orElseThrow();
+
+        SourceConnectionEntity disabled = sourceConnectionJpaRepository.findById(sourceId).orElseThrow();
+        disabled.changeStatus("DISABLED");
+        sourceConnectionJpaRepository.saveAndFlush(disabled);
+
+        GoogleDriveOAuthService.AuthorizeResult reconnectAuthorize = googleDriveOAuthService.startAuthorization(owner,
+                sourceId);
+        String state = extractQueryParam(reconnectAuthorize.authorizationUrl(), "state");
+        scriptedPermissionId = "account-b"; // 다른 Google 계정으로 동의했다고 가정한다.
+
+        GoogleDriveOAuthService.CallbackOutcome outcome = googleDriveOAuthService.handleCallback(state,
+                "wrong-account-code", reconnectAuthorize.browserBinding());
+
+        assertThat(outcome.success()).as("a different Google account must never complete a reconnect").isFalse();
+        SourceConnectionEntity unchanged = sourceConnectionJpaRepository.findById(sourceId).orElseThrow();
+        assertThat(unchanged.getStatus()).as("must stay disabled - not silently reactivated").isEqualTo("DISABLED");
+        assertThat(unchanged.getProviderAccountId())
+                .as("the original identity must not be overwritten by the rejected attempt")
+                .isEqualTo("account-a");
+        assertThat(sourceTokenStore.load(sourceId))
+                .as("the original credential must be preserved untouched")
+                .contains(originalCredential);
+    }
+
+    /**
+     * M10B 후속 교정 검증 - "A fresh same-identity reconnect after the final
+     * disconnect still succeeds." 연결 인가 세대 손실 방지 교정({@code
+     * SourceConnectionService.disconnect}가 이제 원자적 DB 증가를 쓴다)이 겹치지
+     * 않는 정상적인 두 번 연속 Disconnect 뒤의 평범한 재연결 흐름 자체를 깨뜨리지
+     * 않았음을 확인한다 - 경쟁이 전혀 없는 이 경로는 교정 전/후 모두 Epoch가
+     * 정확히 +2 전진해야 하고, 그 최종 Epoch를 기준으로 시작한 새 재인증은
+     * 정상 성공해야 한다.
+     */
+    @Test
+    void handleCallbackSucceedsForAFreshSameIdentityReconnectAfterTwoSuccessiveDisconnects() {
+        String owner = owner();
+        long sourceId = createSource(owner, "ACTIVE");
+        GoogleDriveOAuthService.AuthorizeResult firstAuthorize = googleDriveOAuthService.startAuthorization(owner,
+                sourceId);
+        googleDriveOAuthService.handleCallback(extractQueryParam(firstAuthorize.authorizationUrl(), "state"),
+                "first-code", firstAuthorize.browserBinding());
+
+        sourceConnectionService.disconnect(sourceId, owner);
+        sourceConnectionService.disconnect(sourceId, owner); // 겹치지 않는, 곧바로 이어지는 두 번째 Disconnect.
+
+        GoogleDriveOAuthService.AuthorizeResult reconnectAuthorize = googleDriveOAuthService.startAuthorization(owner,
+                sourceId);
+        String state = extractQueryParam(reconnectAuthorize.authorizationUrl(), "state");
+
+        GoogleDriveOAuthService.CallbackOutcome outcome = googleDriveOAuthService.handleCallback(state,
+                "reconnect-code", reconnectAuthorize.browserBinding());
+
+        assertThat(outcome.success())
+                .as("a fresh same-identity reconnect started after both disconnects completed must still succeed")
+                .isTrue();
+        SourceConnectionEntity reconnected = sourceConnectionJpaRepository.findById(sourceId).orElseThrow();
+        assertThat(reconnected.getStatus()).isEqualTo("ACTIVE");
+        assertThat(reconnected.getProviderAccountId())
+                .as("the originally adopted identity must be unchanged")
+                .isEqualTo("account-a");
+        assertThat(sourceTokenStore.load(sourceId)).isPresent();
+    }
+
+    /** M10B 신규 - Identity 확인 자체가 실패하면(Network/Malformed 등) 추측하지 않고 재인증 필요로 안전하게 실패한다. */
+    @Test
+    void handleCallbackFailsClosedWhenTheIdentityCheckItselfFails() {
         String owner = owner();
         long sourceId = createSource(owner, "ACTIVE");
         GoogleDriveOAuthService.AuthorizeResult authorizeResult = googleDriveOAuthService.startAuthorization(owner,
                 sourceId);
         String state = extractQueryParam(authorizeResult.authorizationUrl(), "state");
-
-        // 사용자가 동의 화면에 머무는 동안 Source가 Disconnect(DISABLED)됐다고 가정한다.
-        SourceConnectionEntity connection = sourceConnectionJpaRepository.findById(sourceId).orElseThrow();
-        connection.changeStatus("DISABLED");
-        sourceConnectionJpaRepository.saveAndFlush(connection);
+        scriptedAboutFails = true;
 
         GoogleDriveOAuthService.CallbackOutcome outcome = googleDriveOAuthService.handleCallback(state, "some-code",
                 authorizeResult.browserBinding());
 
-        assertThat(outcome.success())
-                .as("a late callback must not resurrect a token for a source that is no longer active")
-                .isFalse();
+        assertThat(outcome.success()).isFalse();
         assertThat(sourceTokenStore.load(sourceId)).isEmpty();
     }
 
@@ -304,14 +480,64 @@ class GoogleDriveOAuthServiceTest {
                 .isInstanceOf(com.sdv.common.exception.NotFoundException.class);
     }
 
+    /**
+     * M10B 교정 - 이전에는 DISABLED Source가 재인증 자체를 시작할 수 없었다(그래서
+     * 이 Test 이름이 "RejectsAnInactiveSource"였다). CORE_SPEC §2A.14의 재연결을
+     * 지원하려면 소유자 자신의 DISABLED Source가 이 단계를 통과해야 한다 - 실제
+     * 안전장치(다른 계정 거부)는 {@link #handleCallback} 시점으로 옮겨졌다.
+     */
     @Test
-    void startAuthorizationRejectsAnInactiveSource() {
+    void startAuthorizationAllowsReauthorizingTheOwnersOwnDisabledSourceForReconnect() {
         String owner = owner();
         long sourceId = createSource(owner, "DISABLED");
 
+        GoogleDriveOAuthService.AuthorizeResult result = googleDriveOAuthService.startAuthorization(owner, sourceId);
+
+        assertThat(result.authorizationUrl()).isNotBlank();
+    }
+
+    @Test
+    void startAuthorizationRejectsANonGoogleDriveSourceRegardlessOfStatus() {
+        String owner = owner();
+        SourceConnectionEntity entity = new SourceConnectionEntity("SOME_OTHER_TYPE", "Test Source", "ACTIVE", "FULL",
+                owner);
+        sourceConnectionJpaRepository.saveAndFlush(entity);
+
         org.assertj.core.api.Assertions
-                .assertThatThrownBy(() -> googleDriveOAuthService.startAuthorization(owner, sourceId))
+                .assertThatThrownBy(() -> googleDriveOAuthService.startAuthorization(owner, entity.getId()))
                 .isInstanceOf(com.sdv.common.exception.NotFoundException.class);
+    }
+
+    /**
+     * M10B 보안 교정(그룹 C) - {@code commitCredential}의 새 {@code connectionEpoch}
+     * 확인만 단독으로 검증한다({@code SourceTokenConcurrencyTest}의 두 Latch 기반
+     * Test처럼 실제 Thread로 이 자체를 이미 재현하지만, 이 Test는 Status 검사와
+     * 완전히 분리해 이 특정 방어선을 결정론적/순차적으로 고정한다). Disconnect를
+     * 거치지 않고 Epoch만 직접 올려, "Status는 그대로 ACTIVE인데 Epoch만 바뀐"
+     * 경우에도 이 Callback이 거부되는지 확인한다.
+     */
+    @Test
+    void handleCallbackFailsClosedWhenTheConnectionEpochAdvancedAfterAuthorizationStarted() {
+        String owner = owner();
+        long sourceId = createSource(owner, "ACTIVE");
+        GoogleDriveOAuthService.AuthorizeResult authorizeResult = googleDriveOAuthService.startAuthorization(owner,
+                sourceId);
+        String state = extractQueryParam(authorizeResult.authorizationUrl(), "state");
+
+        SourceConnectionEntity connection = sourceConnectionJpaRepository.findById(sourceId).orElseThrow();
+        connection.bumpConnectionEpoch();
+        sourceConnectionJpaRepository.saveAndFlush(connection);
+
+        GoogleDriveOAuthService.CallbackOutcome outcome = googleDriveOAuthService.handleCallback(state,
+                "authorization-code-from-google", authorizeResult.browserBinding());
+
+        assertThat(outcome.success())
+                .as("an attempt started before the connection epoch advanced must not be allowed to publish "
+                        + "a credential, even though status is still ACTIVE")
+                .isFalse();
+        assertThat(sourceTokenStore.load(sourceId)).isEmpty();
+        SourceConnectionEntity unchanged = sourceConnectionJpaRepository.findById(sourceId).orElseThrow();
+        assertThat(unchanged.getTokenRef()).isNull();
     }
 
     private long createSource(String ownerSubject, String status) {
