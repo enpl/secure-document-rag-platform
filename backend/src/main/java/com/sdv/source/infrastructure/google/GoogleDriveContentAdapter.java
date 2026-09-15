@@ -2,10 +2,13 @@ package com.sdv.source.infrastructure.google;
 
 import com.sdv.source.domain.SourceContentOutcome;
 import com.sdv.source.domain.SourceContentResult;
+import com.sdv.source.domain.SourceDownloadResult;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;
 import java.util.Set;
+import java.util.Arrays;
+import java.time.Duration;
 
 /**
  * F-BE-046 (M08 신규, Review 교정 반영). Google Docs/Slides/허용된 파일 형식의
@@ -87,6 +90,95 @@ public class GoogleDriveContentAdapter {
 
     public SourceContentResult fetchVerified(String accessToken, String fileId, String expectedSourceVersion) {
         return fetchVerified(accessToken, fileId, expectedSourceVersion, true);
+    }
+
+    /**
+     * Separate transport for SHR-004.  It deliberately accepts provider-downloadable binary
+     * files without treating them as AI/parser-eligible content.
+     */
+    public SourceDownloadResult fetchVerifiedDownload(String accessToken, String fileId, String expectedSourceVersion,
+            long maxBytes, long deadlineMs) {
+        return fetchVerifiedDownload(accessToken, fileId, expectedSourceVersion, maxBytes,
+                GoogleDriveClient.Deadline.startingNow(Duration.ofMillis(deadlineMs)), true);
+    }
+
+    private SourceDownloadResult fetchVerifiedDownload(String accessToken, String fileId, String expectedSourceVersion,
+            long maxBytes, GoogleDriveClient.Deadline deadline, boolean allowRetryOnChange) {
+        GoogleDriveClient.GoogleFile preFetch;
+        try {
+            preFetch = client.getFile(accessToken, fileId, deadline);
+        } catch (GoogleApiException e) {
+            return SourceDownloadResult.failed(outcomeForMetadataFailure(e), safeReason(e));
+        }
+        if (!fileId.equals(preFetch.id())) {
+            return SourceDownloadResult.failed(SourceContentOutcome.FAILED, "provider file identity mismatch");
+        }
+        Optional<SourceContentOutcome> preCheck = verify(preFetch, expectedSourceVersion);
+        if (preCheck.isPresent()) {
+            return SourceDownloadResult.failed(preCheck.get(), "pre-fetch verification failed");
+        }
+
+        DownloadFormatDecision format = decideDownloadFormat(preFetch.mimeType());
+        if (format.unsupported()) {
+            return SourceDownloadResult.failed(SourceContentOutcome.UNSUPPORTED_FORMAT,
+                    "workspace export is not supported for this file type");
+        }
+
+        byte[] content;
+        try {
+            content = format.isWorkspaceExport()
+                    ? client.exportFile(accessToken, fileId, format.outputMimeType(), maxBytes, deadline)
+                    : client.downloadMedia(accessToken, fileId, maxBytes, deadline);
+        } catch (GoogleContentSizeLimitExceededException e) {
+            return SourceDownloadResult.failed(format.isWorkspaceExport()
+                    ? SourceContentOutcome.EXPORT_LIMIT_EXCEEDED : SourceContentOutcome.FAILED,
+                    "content exceeded the configured size limit");
+        } catch (GoogleApiException e) {
+            return SourceDownloadResult.failed(outcomeForMetadataFailure(e), safeReason(e));
+        }
+
+        GoogleDriveClient.GoogleFile postFetch;
+        try {
+            postFetch = client.getFile(accessToken, fileId, deadline);
+        } catch (GoogleApiException e) {
+            discard(content);
+            return SourceDownloadResult.failed(outcomeForMetadataFailure(e), safeReason(e));
+        }
+        if (!fileId.equals(postFetch.id())) {
+            discard(content);
+            return SourceDownloadResult.failed(SourceContentOutcome.FAILED, "provider file identity mismatch");
+        }
+        if (postFetch.mimeType() == null || postFetch.mimeType().isBlank() || postFetch.name() == null
+                || postFetch.name().isBlank()) {
+            discard(content);
+            return SourceDownloadResult.failed(SourceContentOutcome.FAILED, "provider metadata response was incomplete");
+        }
+        Optional<SourceContentOutcome> postCheck = verify(postFetch, expectedSourceVersion);
+        if (postCheck.isPresent()) {
+            discard(content);
+            if (postCheck.get() == SourceContentOutcome.VERSION_MISMATCH && allowRetryOnChange) {
+                return fetchVerifiedDownload(accessToken, fileId, expectedSourceVersion, maxBytes, deadline, false);
+            }
+            return SourceDownloadResult.failed(postCheck.get() == SourceContentOutcome.VERSION_MISMATCH
+                    ? SourceContentOutcome.DOCUMENT_CHANGED : postCheck.get(), "post-fetch verification failed");
+        }
+
+        String outputName = format.isWorkspaceExport() ? pdfFilename(postFetch.name()) : postFetch.name();
+        String outputMime = format.isWorkspaceExport() ? format.outputMimeType() : postFetch.mimeType();
+        return SourceDownloadResult.verified(content, outputName, outputMime, postFetch.version(),
+                format.isWorkspaceExport());
+    }
+
+    private static void discard(byte[] content) {
+        if (content != null) {
+            Arrays.fill(content, (byte) 0);
+        }
+    }
+
+    private static String pdfFilename(String original) {
+        int dot = original.lastIndexOf('.');
+        String stem = dot > 0 ? original.substring(0, dot) : original;
+        return stem + ".pdf";
     }
 
     private SourceContentResult fetchVerified(String accessToken, String fileId, String expectedSourceVersion,
@@ -215,6 +307,19 @@ public class GoogleDriveContentAdapter {
         return FormatDecision.UNSUPPORTED;
     }
 
+    private static DownloadFormatDecision decideDownloadFormat(String mimeType) {
+        if (mimeType == null || mimeType.isBlank()) {
+            return DownloadFormatDecision.UNSUPPORTED;
+        }
+        if (GOOGLE_DOC_MIME.equals(mimeType)) {
+            return DownloadFormatDecision.workspaceExport(GOOGLE_DOC_EXPORT_MIME);
+        }
+        if (mimeType.startsWith("application/vnd.google-apps.")) {
+            return DownloadFormatDecision.UNSUPPORTED;
+        }
+        return DownloadFormatDecision.binary();
+    }
+
     /** {@code mimeType} 하나를 "일반 Binary/Workspace Export/미지원" 셋 중 하나로 분류한 결과. */
     private record FormatDecision(Kind kind, String exportMimeType) {
         private enum Kind { BINARY, WORKSPACE_EXPORT, UNSUPPORTED }
@@ -227,6 +332,28 @@ public class GoogleDriveContentAdapter {
 
         static FormatDecision workspaceExport(String exportMimeType) {
             return new FormatDecision(Kind.WORKSPACE_EXPORT, exportMimeType);
+        }
+
+        boolean unsupported() {
+            return kind == Kind.UNSUPPORTED;
+        }
+
+        boolean isWorkspaceExport() {
+            return kind == Kind.WORKSPACE_EXPORT;
+        }
+    }
+
+    private record DownloadFormatDecision(Kind kind, String outputMimeType) {
+        private enum Kind { BINARY, WORKSPACE_EXPORT, UNSUPPORTED }
+
+        private static final DownloadFormatDecision UNSUPPORTED = new DownloadFormatDecision(Kind.UNSUPPORTED, null);
+
+        static DownloadFormatDecision binary() {
+            return new DownloadFormatDecision(Kind.BINARY, null);
+        }
+
+        static DownloadFormatDecision workspaceExport(String outputMimeType) {
+            return new DownloadFormatDecision(Kind.WORKSPACE_EXPORT, outputMimeType);
         }
 
         boolean unsupported() {

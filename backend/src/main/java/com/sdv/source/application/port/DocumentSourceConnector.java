@@ -3,6 +3,8 @@ package com.sdv.source.application.port;
 import com.sdv.common.model.UserContext;
 import com.sdv.source.domain.SourceChangePage;
 import com.sdv.source.domain.SourceContentResult;
+import com.sdv.source.domain.SourceDownloadResult;
+import com.sdv.source.domain.SourceAccessContext;
 import com.sdv.source.domain.SourceDocument;
 import com.sdv.source.domain.SourceMetadataPage;
 import com.sdv.source.domain.SourceMetadataVerificationResult;
@@ -95,6 +97,23 @@ public interface DocumentSourceConnector {
      */
     SourceContentResult fetchContent(UserContext requestingUser, Long sourceId, String sourceDocumentId,
             String expectedSourceVersion);
+
+    /**
+     * Server-created share context only.  This is intentionally separate from AI content retrieval:
+     * it may use the publisher's exact file-bound delegation for an authorized recipient.
+     */
+    default SourceMetadataVerificationResult verifyDownload(SourceAccessContext context, long deadlineMs) {
+        return SourceMetadataVerificationResult.failed(
+                com.sdv.source.domain.SourceMetadataVerificationOutcome.FAILED,
+                "shared download is not supported by this connector");
+    }
+
+    /** Bounded, non-AI download transport; the caller owns bytes only after VERIFIED. */
+    default SourceDownloadResult fetchDownload(SourceAccessContext context, String expectedSourceVersion,
+            long maxBytes, long deadlineMs) {
+        return SourceDownloadResult.failed(com.sdv.source.domain.SourceContentOutcome.FAILED,
+                "shared download is not supported by this connector");
+    }
 
     /**
      * Catalog Sync용 ACL 조회 - Source Owner의 Credential로 수행된다. 모든
