@@ -59,3 +59,12 @@ sdv:
     run:
       max-duration-ms: ${SDV_SYNC_RUN_MAX_DURATION_MS:1800000}
       max-pages-per-run: ${SDV_SYNC_RUN_MAX_PAGES_PER_RUN:2000}
+  # M10 (RAG-011 File Metadata Discovery) - GET /api/rag/files의 Page 크기/개수
+  # 상한과 Live(Google) 재검증 전체에 허용되는 벽시계 시간 예산.
+  rag:
+    discovery:
+      default-page-size: ${SDV_RAG_DISCOVERY_DEFAULT_PAGE_SIZE:20}
+      max-page-size: ${SDV_RAG_DISCOVERY_MAX_PAGE_SIZE:50}
+      max-page-index: ${SDV_RAG_DISCOVERY_MAX_PAGE_INDEX:500}
+      live-check-budget-ms: ${SDV_RAG_DISCOVERY_LIVE_CHECK_BUDGET_MS:10000}
+      max-candidate-scan: ${SDV_RAG_DISCOVERY_MAX_CANDIDATE_SCAN:200}

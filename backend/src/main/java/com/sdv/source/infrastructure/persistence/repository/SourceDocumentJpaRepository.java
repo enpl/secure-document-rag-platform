@@ -2,12 +2,15 @@ package com.sdv.source.infrastructure.persistence.repository;
 
 import com.sdv.source.infrastructure.persistence.entity.SourceDocumentEntity;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -141,4 +144,43 @@ public interface SourceDocumentJpaRepository extends JpaRepository<SourceDocumen
     @Modifying
     @Query(value = "DELETE FROM document_embedding_index WHERE document_id = :documentId", nativeQuery = true)
     int deleteEmbeddingIndexForDocument(@Param("documentId") Long documentId);
+
+    /**
+     * M10 신규(RAG-011 File Metadata Discovery) - Chunk/Embedding 존재 여부나
+     * {@code index_status}와 무관하게(§2A.4: File Discovery는 {@code
+     * document_chunks}에 의존하지 않는다), 인증된 사용자가 소유한 ACTIVE Google
+     * Drive Source에 속한 ACTIVE 문서만 후보로 삼는다({@code findIndexEligibleIds}와
+     * 달리 색인 완료 여부를 조건으로 쓰지 않는다). {@link Slice}를 반환해 Count
+     * Query 없이 {@code pageSize + 1}행만 조회한다 - 원시 총계를 계산/노출하지
+     * 않는다(요구사항: raw catalog totals 비노출). 정렬은 호출자가 넘긴
+     * {@link Pageable}의 {@code Sort}를 그대로 따른다 - 허용 목록(name/modifiedAt)과
+     * {@code id} Tie-breaker는 호출자({@code FileMetadataDiscoveryService})가
+     * 보장한다. {@code namePattern}은 호출자가 이미 소문자로 변환하고 {@code %}/{@code _}/
+     * {@code \}를 이스케이프해 넘겨야 한다.
+     *
+     * <p>각 선택적 필터는 {@code hasXxx}(항상 non-null Boolean) + 실제 값(필터가
+     * 없을 때는 호출자가 임의의 non-null Sentinel 값을 넘긴다, 예: {@code
+     * FileMetadataDiscoveryService}) 쌍으로 받는다 - {@code (:param IS NULL OR ...)}
+     * 형태 대신인 이유: PostgreSQL/Hibernate가 어떤 named parameter를 한 Query 안에서
+     * 두 번 이상 참조할 때, 그 값이 실제로 SQL {@code NULL}이면 (Java {@code Instant}
+     * 등 일부 Type에서) 그 Bind Parameter의 Type을 {@code bytea}로 잘못 추론해
+     * {@code cannot cast type bytea to timestamp} 등으로 실패하는 것을 실제로
+     * 재현/확인했다(Hibernate 7 + PostgreSQL JDBC 조합). 이 필터들에는 실제 SQL
+     * {@code NULL}을 절대 바인딩하지 않음으로써 그 결함 자체를 구조적으로 피한다.</p>
+     */
+    @Query("SELECT d FROM SourceDocumentEntity d JOIN SourceConnectionEntity c ON c.id = d.sourceId "
+            + "WHERE c.ownerSubject = :ownerSubject AND c.type = 'GOOGLE_DRIVE' AND c.status = 'ACTIVE' "
+            + "AND d.state = 'ACTIVE' "
+            + "AND (:hasSourceId = false OR d.sourceId = :sourceId) "
+            + "AND (:hasMimeType = false OR d.mimeType = :mimeType) "
+            + "AND (:hasNamePattern = false OR LOWER(d.name) LIKE :namePattern ESCAPE '\\') "
+            + "AND (:hasModifiedFrom = false OR d.modifiedAt >= :modifiedFrom) "
+            + "AND (:hasModifiedTo = false OR d.modifiedAt <= :modifiedTo)")
+    Slice<SourceDocumentEntity> searchDiscoverable(@Param("ownerSubject") String ownerSubject,
+            @Param("hasSourceId") boolean hasSourceId, @Param("sourceId") Long sourceId,
+            @Param("hasMimeType") boolean hasMimeType, @Param("mimeType") String mimeType,
+            @Param("hasNamePattern") boolean hasNamePattern, @Param("namePattern") String namePattern,
+            @Param("hasModifiedFrom") boolean hasModifiedFrom, @Param("modifiedFrom") Instant modifiedFrom,
+            @Param("hasModifiedTo") boolean hasModifiedTo, @Param("modifiedTo") Instant modifiedTo,
+            Pageable pageable);
 }

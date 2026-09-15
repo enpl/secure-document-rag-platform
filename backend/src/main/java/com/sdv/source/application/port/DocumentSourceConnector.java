@@ -5,6 +5,7 @@ import com.sdv.source.domain.SourceChangePage;
 import com.sdv.source.domain.SourceContentResult;
 import com.sdv.source.domain.SourceDocument;
 import com.sdv.source.domain.SourceMetadataPage;
+import com.sdv.source.domain.SourceMetadataVerificationResult;
 import com.sdv.source.domain.SourcePermissionsResult;
 import com.sdv.source.domain.SourceType;
 
@@ -52,6 +53,14 @@ import com.sdv.source.domain.SourceType;
  * 절대 알아낼 수 없다). {@link #listMetadata}가 그 최소 Page 계약을
  * 채운다 - 실제 최초 Crawl/Cursor Commit Orchestration은 여전히 M09
  * 책임이고, M08은 신뢰 가능한 Primitive만 제공한다.</p>
+ *
+ * <h2>M10 신규 - File Metadata Discovery 전용 Same-user 메타데이터 재확인</h2>
+ * <p>{@link #verifyCurrentMetadata}는 v1.4 File Metadata Discovery(§2A.4)가
+ * ACL Catalog Prefilter를 통과한 후보 하나에 대해, 노출 전 지금 이 순간의
+ * 이름/타입/Version을 재확인하기 위한 것이다. {@link #getMetadata}(Owner
+ * Credential, Catalog Sync 전용)와 달리 요청자 본인 결합을 요구하고,
+ * {@link #fetchContent}와 달리 Content Byte를 전혀 요청하지 않는다(Media/
+ * Export 호출 없음) - 메타데이터 가시성과 콘텐츠 접근은 서로 다른 결정이다.</p>
  */
 public interface DocumentSourceConnector {
 
@@ -102,4 +111,14 @@ public interface DocumentSourceConnector {
      * DB Cursor Commit은 이 메서드의 책임이 아니다(M09).
      */
     SourceChangePage findChanges(Long sourceId, String pageToken);
+
+    /**
+     * M10 신규(RAG-011) - Content Byte를 전혀 Fetch하지 않고, {@code requestingUser}
+     * 본인의 Credential로 이 문서의 지금 이 순간 Google Metadata(이름/타입/Version/
+     * Trashed/{@code canDownload})만 재확인한다. {@link #fetchContent}와 동일하게
+     * 요청자 본인 결합을 요구한다 - 현재 Data Model 한계(Owner-Only Credential
+     * 결합)도 동일하게 적용된다.
+     */
+    SourceMetadataVerificationResult verifyCurrentMetadata(UserContext requestingUser, Long sourceId,
+            String sourceDocumentId);
 }

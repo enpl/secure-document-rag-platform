@@ -15,6 +15,8 @@ import com.sdv.source.domain.SourceContentResult;
 import com.sdv.source.domain.SourceDocument;
 import com.sdv.source.domain.SourceDocumentState;
 import com.sdv.source.domain.SourceMetadataPage;
+import com.sdv.source.domain.SourceMetadataVerificationOutcome;
+import com.sdv.source.domain.SourceMetadataVerificationResult;
 import com.sdv.source.domain.SourcePermissionsResult;
 import com.sdv.source.domain.SourceType;
 import com.sdv.source.infrastructure.persistence.entity.SourceConnectionEntity;
@@ -211,6 +213,158 @@ public class GoogleDriveConnector implements DocumentSourceConnector {
                     "stored credential does not grant the scope required for this read");
         }
         return contentAdapter.fetchVerified(envelope.accessToken(), sourceDocumentId, expectedSourceVersion);
+    }
+
+    /**
+     * M10 신규(RAG-011) - {@link #fetchContent}와 정확히 같은 Owner-Only Credential
+     * 결합 검사(Source 존재/종류/ACTIVE, Credential의 Owner 결합, 만료, Scope)를
+     * 거치되, {@code client.getFile}만 호출한다(Media/Export 호출 없음) - Content
+     * 포맷 화이트리스트({@link GoogleDriveContentAdapter}의 Core 지원 포맷 판단)를
+     * 여기서 적용하지 않는다 - 메타데이터 가시성은 파일 형식과 무관하다(PNG/ZIP 등도
+     * 이름/타입/Version은 그대로 노출 대상이다, `docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.4/§2A.7).
+     *
+     * <h2>M10 후속 교정 - 응답을 요청한 파일에 결합하고 검증한다</h2>
+     * <p>원안은 {@code client.getFile}이 반환한 {@code file}을 그 반환값이 실제로
+     * 요청한 {@code sourceDocumentId}에 대한 것인지 확인하지 않고 곧바로 {@code
+     * VERIFIED}로 승격시켰다 - {@code file.id()}가 요청한 ID와 다르거나(Malformed/
+     * 잘못된 응답), 필수 필드({@code mimeType}/{@code version}/{@code trashed}/
+     * {@code modifiedTime})가 비어있거나 해석 불가능해도 조용히 통과할 수 있었다.
+     * 이제 {@link #validateLiveFile}이 이 모두를 명시적으로 확인한 뒤에만 {@code
+     * verified(...)}를 만든다 - 실패하면 안전한 비-VERIFIED 결과로 대체하고, 원본
+     * Google 응답 본문은 절대 옮기지 않는다.</p>
+     */
+    @Override
+    public SourceMetadataVerificationResult verifyCurrentMetadata(UserContext requestingUser, Long sourceId,
+            String sourceDocumentId) {
+        SourceConnectionEntity connection = sourceConnectionJpaRepository.findById(sourceId).orElse(null);
+        if (connection == null) {
+            return SourceMetadataVerificationResult.failed(SourceMetadataVerificationOutcome.NOT_FOUND,
+                    "source connection not found");
+        }
+        if (!GOOGLE_DRIVE_TYPE.equals(connection.getType())) {
+            return SourceMetadataVerificationResult.failed(SourceMetadataVerificationOutcome.NOT_FOUND,
+                    "source connection is not a google drive source");
+        }
+        if (!ACTIVE_STATUS.equals(connection.getStatus())) {
+            return SourceMetadataVerificationResult.failed(SourceMetadataVerificationOutcome.ACCESS_DENIED,
+                    "source connection is not active");
+        }
+        if (requestingUser == null || requestingUser.subject() == null
+                || !requestingUser.subject().equals(connection.getOwnerSubject())) {
+            return SourceMetadataVerificationResult.failed(
+                    SourceMetadataVerificationOutcome.CREDENTIAL_NOT_BOUND_TO_USER,
+                    "content access is currently bound only to the source owner's credential");
+        }
+        Optional<TokenEnvelope> token;
+        try {
+            token = loadToken(sourceId);
+        } catch (RuntimeException credentialResolutionFailure) {
+            return SourceMetadataVerificationResult.failed(SourceMetadataVerificationOutcome.CREDENTIAL_UNREADABLE,
+                    "stored credential could not be resolved");
+        }
+        if (token.isEmpty()) {
+            return SourceMetadataVerificationResult.failed(SourceMetadataVerificationOutcome.MISSING_CREDENTIAL,
+                    "no credential is available for this source");
+        }
+        TokenEnvelope envelope = token.get();
+        if (!requestingUser.subject().equals(envelope.boundSubject())) {
+            return SourceMetadataVerificationResult.failed(
+                    SourceMetadataVerificationOutcome.CREDENTIAL_NOT_BOUND_TO_USER,
+                    "stored credential is not bound to the requesting user");
+        }
+        if (isExpired(envelope)) {
+            return SourceMetadataVerificationResult.failed(SourceMetadataVerificationOutcome.MISSING_CREDENTIAL,
+                    "stored credential is expired and no refresh flow is available");
+        }
+        if (!hasRequiredScope(envelope)) {
+            return SourceMetadataVerificationResult.failed(SourceMetadataVerificationOutcome.INSUFFICIENT_SCOPE,
+                    "stored credential does not grant the scope required for this read");
+        }
+        GoogleDriveClient.GoogleFile file;
+        try {
+            file = client.getFile(envelope.accessToken(), sourceDocumentId);
+        } catch (GoogleApiException e) {
+            return SourceMetadataVerificationResult.failed(metadataVerificationOutcomeFor(e), safeMetadataReason(e));
+        }
+        Optional<SourceMetadataVerificationOutcome> invalid = validateLiveFile(file, sourceDocumentId);
+        if (invalid.isPresent()) {
+            return SourceMetadataVerificationResult.failed(invalid.get(),
+                    "live metadata response failed verification");
+        }
+        boolean downloadable = file.capabilities() != null && Boolean.TRUE.equals(file.capabilities().canDownload());
+        return SourceMetadataVerificationResult.verified(file.name(), file.mimeType(), file.version(),
+                parseModifiedTimeSafely(file.modifiedTime()), downloadable);
+    }
+
+    /**
+     * M10 후속 교정 - {@code verifyCurrentMetadata}가 {@code VERIFIED}로 승격시키기
+     * 전에 반드시 통과해야 하는 검사. 하나라도 실패하면 안전한 비-VERIFIED 결과로
+     * Fail Closed 한다(Stale Fallback/Null/파싱 예외 없이) - 검사 순서:
+     * <ol>
+     *   <li>반환된 {@code file.id()}가 요청한 {@code sourceDocumentId}와 정확히
+     *       일치하는가(Identity 결합 - 불일치/Malformed 응답을 다른 문서의
+     *       Metadata로 오인하지 않는다) - {@link SourceMetadataVerificationOutcome#FAILED}.</li>
+     *   <li>{@code name}/{@code mimeType}이 비어있지 않은가 - {@link
+     *       SourceMetadataVerificationOutcome#FAILED}({@code name}은 {@link
+     *       GoogleDriveClient}가 이미 보장하지만, 이 경계에서도 한 번 더 방어적으로
+     *       확인한다).</li>
+     *   <li>{@code version}이 비어있지 않은가 - 비어있으면 Version 신선도를 확인할
+     *       수 없다는 뜻이므로 {@link SourceMetadataVerificationOutcome#ACCESS_UNKNOWN}
+     *       ({@link GoogleDriveContentAdapter#verify}의 기존 관례와 동일).</li>
+     *   <li>{@code trashed}가 명시적으로 존재하는가({@code null}이 아닌가) - 없으면
+     *       휴지통 여부를 확인할 수 없다는 뜻이므로 "휴지통이 아니다"로 함부로
+     *       가정하지 않고 {@link SourceMetadataVerificationOutcome#ACCESS_UNKNOWN}.
+     *       {@code true}면 {@link SourceMetadataVerificationOutcome#TRASHED}.</li>
+     *   <li>{@code modifiedTime}이 존재하고 유효한 시각으로 해석되는가 - 없거나
+     *       해석할 수 없으면(호출자가 필수 필드로 요구한다) {@link
+     *       SourceMetadataVerificationOutcome#FAILED}({@link #parseModifiedTimeSafely}가
+     *       {@code null}을 반환하는 모든 경우를 여기서 잡는다 - {@code getMetadata}/
+     *       {@code toSourceDocument}(Catalog Sync 경로)는 보조 진단값으로 계속 관대하게
+     *       처리하지만, 이 경계(File Metadata Discovery의 노출 직전 확인)는 그렇지
+     *       않다).</li>
+     * </ol>
+     * 통과하면 {@link Optional#empty()}.
+     */
+    private static Optional<SourceMetadataVerificationOutcome> validateLiveFile(GoogleDriveClient.GoogleFile file,
+            String expectedFileId) {
+        if (file.id() == null || !file.id().equals(expectedFileId)) {
+            return Optional.of(SourceMetadataVerificationOutcome.FAILED);
+        }
+        if (isBlank(file.name()) || isBlank(file.mimeType())) {
+            return Optional.of(SourceMetadataVerificationOutcome.FAILED);
+        }
+        if (isBlank(file.version())) {
+            return Optional.of(SourceMetadataVerificationOutcome.ACCESS_UNKNOWN);
+        }
+        if (file.trashed() == null) {
+            return Optional.of(SourceMetadataVerificationOutcome.ACCESS_UNKNOWN);
+        }
+        if (file.trashed()) {
+            return Optional.of(SourceMetadataVerificationOutcome.TRASHED);
+        }
+        if (parseModifiedTimeSafely(file.modifiedTime()) == null) {
+            return Optional.of(SourceMetadataVerificationOutcome.FAILED);
+        }
+        return Optional.empty();
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static SourceMetadataVerificationOutcome metadataVerificationOutcomeFor(GoogleApiException e) {
+        return switch (e.getCategory()) {
+            case UNAUTHORIZED -> SourceMetadataVerificationOutcome.MISSING_CREDENTIAL;
+            case PERMISSION_DENIED -> SourceMetadataVerificationOutcome.ACCESS_DENIED;
+            case NOT_FOUND -> SourceMetadataVerificationOutcome.NOT_FOUND;
+            case QUOTA_OR_RATE_LIMIT, RETRYABLE_SERVER_ERROR -> SourceMetadataVerificationOutcome.ACCESS_UNKNOWN;
+            case BAD_REQUEST, UNKNOWN -> SourceMetadataVerificationOutcome.FAILED;
+        };
+    }
+
+    /** Google이 실제로 반환한 원본 오류 본문을 절대 그대로 옮기지 않는다 - 항상 고정된 안전한 문자열만 쓴다. */
+    private static String safeMetadataReason(GoogleApiException e) {
+        return "google drive api call failed: " + e.getCategory();
     }
 
     /**

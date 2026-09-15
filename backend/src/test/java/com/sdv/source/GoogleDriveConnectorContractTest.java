@@ -15,6 +15,8 @@ import com.sdv.source.domain.SourceContentOutcome;
 import com.sdv.source.domain.SourceContentResult;
 import com.sdv.source.domain.SourceDocument;
 import com.sdv.source.domain.SourceMetadataPage;
+import com.sdv.source.domain.SourceMetadataVerificationOutcome;
+import com.sdv.source.domain.SourceMetadataVerificationResult;
 import com.sdv.source.domain.SourcePermissionsResult;
 import com.sdv.source.infrastructure.google.GoogleDriveClient;
 import com.sdv.source.infrastructure.google.GoogleDriveConnector;
@@ -1263,6 +1265,225 @@ class GoogleDriveConnectorContractTest {
                 .satisfies(e -> assertThat(((SourceCredentialException) e).getReason())
                         .isEqualTo(SourceCredentialException.Reason.INSUFFICIENT_SCOPE));
         assertThat(SCRIPT.callCount("GET_FILE")).isZero();
+    }
+
+    // ------------------------------------------------------------------
+    // 16. verifyCurrentMetadata(M10 신규, RAG-011 File Metadata Discovery) -
+    //    Content Byte를 절대 요청하지 않고, Format 화이트리스트와 무관하게
+    //    지금 이 순간의 Metadata만 재확인한다.
+    // ------------------------------------------------------------------
+
+    @Test
+    void verifyCurrentMetadataDeniesARequesterWhoIsNotTheSourceOwner() {
+        long sourceId = createSource("owner-md-a");
+        fakeSourceTokenStore.put(sourceId, "owner-md-a", "owner-md-a-token");
+
+        SourceMetadataVerificationResult result = connector.verifyCurrentMetadata(userContext("attacker-md-b"),
+                sourceId, "file-1");
+
+        assertThat(result.outcome()).isEqualTo(SourceMetadataVerificationOutcome.CREDENTIAL_NOT_BOUND_TO_USER);
+        assertThat(result.name()).isNull();
+        assertThat(SCRIPT.callCount("GET_FILE")).isZero();
+    }
+
+    @Test
+    void verifyCurrentMetadataFailsClosedWhenNoTokenIsStored() {
+        long sourceId = createSource("owner-md-missing-token");
+
+        SourceMetadataVerificationResult result = connector.verifyCurrentMetadata(
+                userContext("owner-md-missing-token"), sourceId, "file-1");
+
+        assertThat(result.outcome()).isEqualTo(SourceMetadataVerificationOutcome.MISSING_CREDENTIAL);
+        assertThat(SCRIPT.callCount("GET_FILE")).isZero();
+    }
+
+    @Test
+    void verifyCurrentMetadataReturnsLiveMetadataWithoutEverDownloadingContent() {
+        long sourceId = createSource("owner-md-verified");
+        fakeSourceTokenStore.put(sourceId, "owner-md-verified", "token");
+        SCRIPT.enqueue("GET_FILE",
+                CannedResponse.json(200, googleFileJson("file-1", "v7", false, true, "application/pdf")));
+
+        SourceMetadataVerificationResult result = connector.verifyCurrentMetadata(userContext("owner-md-verified"),
+                sourceId, "file-1");
+
+        assertThat(result.outcome()).isEqualTo(SourceMetadataVerificationOutcome.VERIFIED);
+        assertThat(result.name()).isEqualTo("Test File file-1");
+        assertThat(result.mimeType()).isEqualTo("application/pdf");
+        assertThat(result.sourceVersion()).isEqualTo("v7");
+        assertThat(result.downloadable()).isTrue();
+        assertThat(SCRIPT.callCount("DOWNLOAD_MEDIA"))
+                .as("metadata verification must never fetch content, even for a Core-supported format").isZero();
+        assertThat(SCRIPT.callCount("EXPORT")).isZero();
+    }
+
+    @Test
+    void verifyCurrentMetadataSucceedsForANonCoreFormatBecauseVisibilityIsFormatAgnostic() {
+        // PNG/ZIP 등은 Content 검색 대상이 아니지만(§2A.7), Metadata 가시성은 형식과 무관하다(§2A.4).
+        long sourceId = createSource("owner-md-png");
+        fakeSourceTokenStore.put(sourceId, "owner-md-png", "token");
+        SCRIPT.enqueue("GET_FILE", CannedResponse.json(200, googleFileJson("file-1", "v1", false, true, "image/png")));
+
+        SourceMetadataVerificationResult result = connector.verifyCurrentMetadata(userContext("owner-md-png"),
+                sourceId, "file-1");
+
+        assertThat(result.outcome()).isEqualTo(SourceMetadataVerificationOutcome.VERIFIED);
+        assertThat(result.mimeType()).isEqualTo("image/png");
+        assertThat(SCRIPT.callCount("DOWNLOAD_MEDIA")).isZero();
+        assertThat(SCRIPT.callCount("EXPORT")).isZero();
+    }
+
+    @Test
+    void verifyCurrentMetadataReportsNotDownloadableWithoutTreatingItAsInvisible() {
+        // capabilities.canDownload=false는 Content 접근 불가일 뿐 - Metadata 자체는 여전히 노출 대상이다.
+        long sourceId = createSource("owner-md-nodownload");
+        fakeSourceTokenStore.put(sourceId, "owner-md-nodownload", "token");
+        SCRIPT.enqueue("GET_FILE",
+                CannedResponse.json(200, googleFileJson("file-1", "v1", false, false, "application/pdf")));
+
+        SourceMetadataVerificationResult result = connector.verifyCurrentMetadata(userContext("owner-md-nodownload"),
+                sourceId, "file-1");
+
+        assertThat(result.outcome()).isEqualTo(SourceMetadataVerificationOutcome.VERIFIED);
+        assertThat(result.downloadable()).isFalse();
+    }
+
+    @Test
+    void verifyCurrentMetadataFailsClosedWhenTrashed() {
+        long sourceId = createSource("owner-md-trashed");
+        fakeSourceTokenStore.put(sourceId, "owner-md-trashed", "token");
+        SCRIPT.enqueue("GET_FILE",
+                CannedResponse.json(200, googleFileJson("file-1", "v1", true, true, "application/pdf")));
+
+        SourceMetadataVerificationResult result = connector.verifyCurrentMetadata(userContext("owner-md-trashed"),
+                sourceId, "file-1");
+
+        assertThat(result.outcome()).isEqualTo(SourceMetadataVerificationOutcome.TRASHED);
+    }
+
+    @Test
+    void verifyCurrentMetadataFailsClosedWhenGoogleReturnsNotFound() {
+        long sourceId = createSource("owner-md-not-found");
+        fakeSourceTokenStore.put(sourceId, "owner-md-not-found", "token");
+        SCRIPT.enqueue("GET_FILE", CannedResponse.json(404, "{\"error\":{\"message\":\"not found\"}}"));
+
+        SourceMetadataVerificationResult result = connector.verifyCurrentMetadata(userContext("owner-md-not-found"),
+                sourceId, "file-1");
+
+        assertThat(result.outcome()).isEqualTo(SourceMetadataVerificationOutcome.NOT_FOUND);
+    }
+
+    @Test
+    void verifyCurrentMetadataFailsClosedWhenGoogleReturnsUnauthorized() {
+        long sourceId = createSource("owner-md-revoked");
+        fakeSourceTokenStore.put(sourceId, "owner-md-revoked", "revoked-access-token");
+        SCRIPT.enqueue("GET_FILE", CannedResponse.json(401, "{\"error\":{\"message\":\"invalid credentials\"}}"));
+
+        SourceMetadataVerificationResult result = connector.verifyCurrentMetadata(userContext("owner-md-revoked"),
+                sourceId, "file-1");
+
+        assertThat(result.outcome()).isEqualTo(SourceMetadataVerificationOutcome.MISSING_CREDENTIAL);
+        assertThat(SCRIPT.callCount("GET_FILE")).as("401 must not be retried").isEqualTo(1);
+    }
+
+    // ------------------------------------------------------------------
+    // 16B. verifyCurrentMetadata 응답 결합/검증(M10 후속 교정) - Google 응답을 요청한
+    //    파일에 결합하고, 필수 필드(Identity/mimeType/version/trashed/modifiedTime)를
+    //    노출 전에 검증한다. 원본 응답 본문은 절대 옮기지 않는다.
+    // ------------------------------------------------------------------
+
+    @Test
+    void verifyCurrentMetadataFailsClosedWhenTheReturnedFileIdDoesNotMatchTheRequestedFile() {
+        long sourceId = createSource("owner-md-wrong-id");
+        fakeSourceTokenStore.put(sourceId, "owner-md-wrong-id", "token");
+        // "file-1"을 요청했지만 Google이 다른 File("file-999")의 Metadata를 반환한다(Malformed/오배선).
+        SCRIPT.enqueue("GET_FILE", CannedResponse.json(200,
+                "{\"id\":\"file-999\",\"name\":\"Test File file-999\",\"mimeType\":\"application/pdf\","
+                        + "\"version\":\"v1\",\"modifiedTime\":\"2026-09-13T00:00:00.000Z\",\"trashed\":false,"
+                        + "\"capabilities\":{\"canDownload\":true}}"));
+
+        SourceMetadataVerificationResult result = connector.verifyCurrentMetadata(userContext("owner-md-wrong-id"),
+                sourceId, "file-1");
+
+        assertThat(result.outcome())
+                .as("a response identifying a different file must never be bound to the requested document")
+                .isEqualTo(SourceMetadataVerificationOutcome.FAILED);
+        assertThat(result.name()).isNull();
+    }
+
+    @Test
+    void verifyCurrentMetadataReturnsAccessUnknownWhenTrashedStateIsMissing() {
+        long sourceId = createSource("owner-md-missing-trashed");
+        fakeSourceTokenStore.put(sourceId, "owner-md-missing-trashed", "token");
+        SCRIPT.enqueue("GET_FILE", CannedResponse.json(200,
+                "{\"id\":\"file-1\",\"name\":\"Test File file-1\",\"mimeType\":\"application/pdf\","
+                        + "\"version\":\"v1\",\"modifiedTime\":\"2026-09-13T00:00:00.000Z\","
+                        + "\"capabilities\":{\"canDownload\":true}}"));
+
+        SourceMetadataVerificationResult result = connector.verifyCurrentMetadata(
+                userContext("owner-md-missing-trashed"), sourceId, "file-1");
+
+        assertThat(result.outcome())
+                .as("an unknown trash state must not be assumed to mean the document is not trashed")
+                .isEqualTo(SourceMetadataVerificationOutcome.ACCESS_UNKNOWN);
+    }
+
+    @Test
+    void verifyCurrentMetadataFailsClosedWhenModifiedTimeIsMissingOrMalformed() {
+        long sourceId = createSource("owner-md-bad-modified-time");
+        fakeSourceTokenStore.put(sourceId, "owner-md-bad-modified-time", "token");
+        SCRIPT.enqueue("GET_FILE", CannedResponse.json(200,
+                "{\"id\":\"file-1\",\"name\":\"Test File file-1\",\"mimeType\":\"application/pdf\","
+                        + "\"version\":\"v1\",\"trashed\":false,\"capabilities\":{\"canDownload\":true}}"));
+
+        SourceMetadataVerificationResult missing = connector.verifyCurrentMetadata(
+                userContext("owner-md-bad-modified-time"), sourceId, "file-1");
+
+        assertThat(missing.outcome()).as("required modification metadata must be present before VERIFIED")
+                .isEqualTo(SourceMetadataVerificationOutcome.FAILED);
+
+        SCRIPT.enqueue("GET_FILE", CannedResponse.json(200,
+                "{\"id\":\"file-1\",\"name\":\"Test File file-1\",\"mimeType\":\"application/pdf\","
+                        + "\"version\":\"v1\",\"modifiedTime\":\"not-a-timestamp\",\"trashed\":false,"
+                        + "\"capabilities\":{\"canDownload\":true}}"));
+
+        SourceMetadataVerificationResult malformed = connector.verifyCurrentMetadata(
+                userContext("owner-md-bad-modified-time"), sourceId, "file-1");
+
+        assertThat(malformed.outcome()).as("an unparsable modification time must not be silently accepted")
+                .isEqualTo(SourceMetadataVerificationOutcome.FAILED);
+    }
+
+    @Test
+    void verifyCurrentMetadataFailsClosedWhenMimeTypeIsMissing() {
+        long sourceId = createSource("owner-md-missing-mime");
+        fakeSourceTokenStore.put(sourceId, "owner-md-missing-mime", "token");
+        SCRIPT.enqueue("GET_FILE", CannedResponse.json(200,
+                "{\"id\":\"file-1\",\"name\":\"Test File file-1\",\"version\":\"v1\","
+                        + "\"modifiedTime\":\"2026-09-13T00:00:00.000Z\",\"trashed\":false,"
+                        + "\"capabilities\":{\"canDownload\":true}}"));
+
+        SourceMetadataVerificationResult result = connector.verifyCurrentMetadata(
+                userContext("owner-md-missing-mime"), sourceId, "file-1");
+
+        assertThat(result.outcome()).isEqualTo(SourceMetadataVerificationOutcome.FAILED);
+    }
+
+    @Test
+    void verifyCurrentMetadataReturnsAccessUnknownWhenVersionIsMissing() {
+        long sourceId = createSource("owner-md-missing-version");
+        fakeSourceTokenStore.put(sourceId, "owner-md-missing-version", "token");
+        SCRIPT.enqueue("GET_FILE", CannedResponse.json(200,
+                "{\"id\":\"file-1\",\"name\":\"Test File file-1\",\"mimeType\":\"application/pdf\","
+                        + "\"modifiedTime\":\"2026-09-13T00:00:00.000Z\",\"trashed\":false,"
+                        + "\"capabilities\":{\"canDownload\":true}}"));
+
+        SourceMetadataVerificationResult result = connector.verifyCurrentMetadata(
+                userContext("owner-md-missing-version"), sourceId, "file-1");
+
+        assertThat(result.outcome())
+                .as("an unknown version must not be assumed to be the expected/current one")
+                .isEqualTo(SourceMetadataVerificationOutcome.ACCESS_UNKNOWN);
     }
 
     // ------------------------------------------------------------------
