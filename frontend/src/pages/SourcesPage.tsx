@@ -3,10 +3,18 @@ import type { FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useApiClient } from '../api/useApiClient'
-import { authorizeGoogleSource, createGoogleDriveSource, disconnectSource, listSources } from '../api/sources'
+import {
+  authorizeGoogleSource,
+  createGoogleDriveSource,
+  disconnectSource,
+  listSources,
+  syncSource,
+} from '../api/sources'
 import type { SourceResponse } from '../api/sources'
 import { ApiError } from '../api/client'
 import { TestbedDiagnosticPanel } from '../components/TestbedDiagnosticPanel'
+import { SourceSyncPanel } from '../features/sources/SourceSyncPanel'
+import type { SyncOutcome } from '../features/sources/SourceSyncPanel'
 
 type ListState =
   | { kind: 'loading' }
@@ -51,6 +59,10 @@ function AdminSourcesPage() {
   const [confirmingId, setConfirmingId] = useState<number | null>(null)
   const [disconnectingId, setDisconnectingId] = useState<number | null>(null)
   const [rowErrors, setRowErrors] = useState<Record<number, string>>({})
+
+  const [syncingId, setSyncingId] = useState<number | null>(null)
+  // Source 목록을 다시 불러와도(refresh) 이 결과 메시지는 별도 State이므로 사라지지 않는다.
+  const [syncOutcomes, setSyncOutcomes] = useState<Record<number, SyncOutcome>>({})
 
   // M16A follow-up 버그 수정 - callbackHint를 매 Render마다 searchParams에서
   // 다시 계산하면, 아래 Effect가 URL에서 googleConnect를 지우자마자 바로 다음
@@ -161,6 +173,30 @@ function AdminSourcesPage() {
     }
   }
 
+  async function handleSync(source: SourceResponse) {
+    // 동기(Synchronous) 중복 제출 방지 - React가 아직 Button을 다시 그리지 않은
+    // 순간의 재클릭도 이 즉시(await 이전) 검사로 막는다(handleConnect/handleDisconnect와 동일 패턴).
+    if (syncingId !== null) {
+      return
+    }
+    setSyncingId(source.id)
+    setSyncOutcomes((prev) => {
+      if (!(source.id in prev)) return prev
+      const next = { ...prev }
+      delete next[source.id] // 새 시도가 시작됐다 - 낡은 결과 배너를 지운다.
+      return next
+    })
+    try {
+      const run = await syncSource(apiClient, source.id)
+      setSyncOutcomes((prev) => ({ ...prev, [source.id]: { kind: 'result', run } }))
+      refresh() // Source 목록(예: lastSyncAt)을 다시 불러온다 - 위 결과 메시지는 별도 State라 사라지지 않는다.
+    } catch (error) {
+      setSyncOutcomes((prev) => ({ ...prev, [source.id]: { kind: 'error', message: describeSyncError(error) } }))
+    } finally {
+      setSyncingId(null)
+    }
+  }
+
   function setRowError(id: number, message: string) {
     setRowErrors((prev) => ({ ...prev, [id]: message }))
   }
@@ -237,11 +273,14 @@ function AdminSourcesPage() {
               connecting={connectingId === source.id}
               disconnecting={disconnectingId === source.id}
               confirming={confirmingId === source.id}
+              syncing={syncingId === source.id}
+              syncOutcome={syncOutcomes[source.id]}
               error={rowErrors[source.id]}
               onConnect={() => handleConnect(source)}
               onAskDisconnect={() => setConfirmingId(source.id)}
               onCancelDisconnect={() => setConfirmingId(null)}
               onConfirmDisconnect={() => handleDisconnect(source)}
+              onSync={() => handleSync(source)}
             />
           ))}
         </ul>
@@ -259,11 +298,14 @@ interface SourceRowProps {
   connecting: boolean
   disconnecting: boolean
   confirming: boolean
+  syncing: boolean
+  syncOutcome?: SyncOutcome
   error?: string
   onConnect: () => void
   onAskDisconnect: () => void
   onCancelDisconnect: () => void
   onConfirmDisconnect: () => void
+  onSync: () => void
 }
 
 function SourceRow({
@@ -271,13 +313,19 @@ function SourceRow({
   connecting,
   disconnecting,
   confirming,
+  syncing,
+  syncOutcome,
   error,
   onConnect,
   onAskDisconnect,
   onCancelDisconnect,
   onConfirmDisconnect,
+  onSync,
 }: SourceRowProps) {
   const isActive = source.status === 'ACTIVE'
+  // 연결/해제 중에는 동기화를, 동기화 중에는 연결/해제를 서로 막는다 - 같은
+  // Source 행에 대한 상충하는 Admin Action이 동시에 나가지 않게 한다.
+  const connectDisconnectBusy = connecting || disconnecting || confirming
 
   return (
     <li className="source-row">
@@ -305,15 +353,26 @@ function SourceRow({
         )}
         {isActive && !confirming && (
           <>
-            <button type="button" className="btn btn--primary" onClick={onConnect} disabled={connecting}>
+            <button type="button" className="btn btn--primary" onClick={onConnect} disabled={connecting || syncing}>
               {connecting ? '연결 중...' : source.credentialPresent ? 'Google 재연결' : 'Google 연결'}
             </button>
-            <button type="button" className="btn btn--danger" onClick={onAskDisconnect} disabled={disconnecting}>
+            <button
+              type="button"
+              className="btn btn--danger"
+              onClick={onAskDisconnect}
+              disabled={disconnecting || syncing}
+            >
               연결 해제
             </button>
           </>
         )}
       </div>
+      {/* 자격증명 존재(credentialPresent)는 저장된 암호화 Token 행이 있다는 뜻일 뿐,
+          지금 이 순간 Google에서 여전히 유효하다는 증명이 아니다 - 실제 유효성은
+          동기화를 눌러봐야(또는 실제 사용 시) 드러난다. */}
+      {isActive && source.credentialPresent && (
+        <SourceSyncPanel syncing={syncing} disabled={connectDisconnectBusy} outcome={syncOutcome} onSync={onSync} />
+      )}
     </li>
   )
 }
@@ -336,6 +395,32 @@ function toCallbackHint(flag: string | null): 'success' | 'failed' | null {
 /** 별도(비-Component) 함수로 뽑아둔다 - Component 함수 안에서 직접 `window.location`을 대입하면 안 된다. */
 function redirectBrowserTo(url: string): void {
   window.location.href = url
+}
+
+function describeSyncError(error: unknown): string {
+  if (error instanceof ApiError) {
+    switch (error.code) {
+      case 'AUTHENTICATION_REQUIRED':
+        return '로그인 인증을 확인하지 못했습니다. 다시 로그인해 주세요.'
+      case 'ACCESS_DENIED':
+        return '이 작업을 수행할 권한이 없습니다.'
+      case 'NOT_FOUND':
+        return '해당 Source를 찾을 수 없습니다.'
+      case 'SYNC_ALREADY_RUNNING':
+        return '이미 이 Source에 대한 동기화가 진행 중입니다. 잠시 후 다시 시도해 주세요.'
+      case 'CREDENTIAL_UNAVAILABLE':
+        return 'Google 계정 연결 정보를 사용할 수 없습니다. Google 연결을 다시 확인해 주세요.'
+      case 'SYNC_FAILED':
+        return '동기화 요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.'
+      case 'VALIDATION_ERROR':
+        return '요청 값을 확인해 주세요.'
+      case 'NETWORK_ERROR':
+        return '서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.'
+      default:
+        return '알 수 없는 오류가 발생했습니다.'
+    }
+  }
+  return '알 수 없는 오류가 발생했습니다.'
 }
 
 function describeError(error: unknown): string {

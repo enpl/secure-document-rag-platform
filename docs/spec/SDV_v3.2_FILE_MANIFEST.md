@@ -22,9 +22,9 @@ The original master remains:
 
 `Secure_Document_Vault_v3.2_Cloud_상세기능_파일통합명세.xlsx`
 
-**v1.4 frozen amendment (current authoritative Excel):** `SDV_v3.2_전체상세명세_MVP동결_v1.4_원본비보관_개정본.xlsx` — Google Drive as sole system of record, no persistent original/plaintext content, Metadata/ACL Catalog + embedding-only index, mandatory live retrieval per request. Full contract detail lives in `docs/spec/SDV_v3.2_CORE_SPEC.md` §2A. This manifest is amended below to align existing IDs with that contract and to add the small number of new files it introduces (§37). All existing IDs are preserved unchanged and the manifest is not renumbered.
+**v1.5 personal-source/selective-sharing revision (current authoritative Excel):** `SDV_v3.2_전체상세명세_v1.5_선택공유_원본비보관.xlsx` — Google Drive as sole system of record, no persistent original/plaintext content, Metadata/ACL Catalog + embedding-only index, mandatory live retrieval per request. Full contract detail lives in `docs/spec/SDV_v3.2_CORE_SPEC.md` §2A. This manifest is amended below to align existing IDs with that contract and to add the small number of new files it introduces (§37). Existing identities are retained; stale M10/frontend paths are corrected to inspected code. F-BE-175 is a retired legacy duplicate, not a second controller. New v1.5 target IDs are listed in §38 and are not implemented by this document.
 
-The v1.4 master inventory contains 117 feature IDs, including 68 rows whose phase is `MVP`, 309 file IDs, 58 validation IDs, and 34 constraints. These are inventory counts, not implementation completion percentages.
+The v1.5 master inventory contains 125 feature IDs, including 74 rows whose phase is `MVP`, 323 file IDs, 67 validation IDs, and 40 constraints. These are inventory counts, not implementation completion percentages.
 
 ---
 
@@ -83,7 +83,7 @@ If a separate persistence Port/Adapter is proposed later, it requires an explici
 | F-BE-005 | `backend/src/main/java/com/sdv/common/config/WebConfig.java` | Config | CORS/time/common web rules | WebMvcConfigurer | INS-001 |
 | F-BE-006 | `backend/src/main/java/com/sdv/common/security/CurrentUserProvider.java` | Component | Trusted UserContext from JWT | `getCurrentUser()` | AUT-002 |
 | F-BE-007 | `backend/src/main/java/com/sdv/common/security/JwtAuthenticationConverter.java` | Component | Keycloak role/group claim conversion | `convert()` | AUT-001, AUT-002 |
-| F-BE-008 | `backend/src/main/java/com/sdv/common/model/UserContext.java` | Record/VO | Immutable current-user data | subject, email, roles, groups | AUT-002, AUT-004 |
+| F-BE-008 | `backend/src/main/java/com/sdv/common/model/UserContext.java` | Record/VO | Immutable requester SDV / publisher Source data | subject, email, roles, groups | AUT-002, AUT-004 |
 | F-BE-009 | `backend/src/main/java/com/sdv/common/model/Role.java` | Enum | Application roles | USER, ADMIN | AUT-003 |
 | F-BE-010 | `backend/src/main/java/com/sdv/common/exception/GlobalExceptionHandler.java` | Advice | Standard API errors | `handle*()` | POL-008, INS-003 |
 | F-BE-011 | `backend/src/main/java/com/sdv/common/dto/ApiErrorResponse.java` | DTO | Standard error response | code, message, traceId | POL-008 |
@@ -148,6 +148,8 @@ Only Google Drive receives a full Core implementation and remains the system of 
 
 ## F-BE-019 — SourceConnection
 
+**v1.5 responsibility:** Target extension: bind connection owner to verified stable provider identity/store and connection generation. Connection pause must preserve DocumentShare intent; same display name/email is not identity proof.
+
 Path:
 
 `backend/src/main/java/com/sdv/source/domain/SourceConnection.java`
@@ -178,6 +180,8 @@ Do not call Google APIs here.
 ---
 
 ## F-BE-020 — SourceDocument
+
+**v1.5 responsibility:** Shared publication lives separately in DocumentShare; source lifecycle ACTIVE/DELETED and DocumentIndexStatus stay distinct. Common retrieval must join authorized active shares, never expose all source metadata.
 
 Path:
 
@@ -338,6 +342,8 @@ SRC-004, SYN-004, RAG-008
 
 ## F-BE-023 — DocumentSourceConnector
 
+**v1.5 responsibility:** v1.5 target: use server-created SourceAccessContext (F-BE-215) to bind requester, publisher, credential owner, provider identity, source/file/share/action and generations. No arbitrary owner-token fallback.
+
 Path:
 
 `backend/src/main/java/com/sdv/source/application/port/DocumentSourceConnector.java`
@@ -403,6 +409,8 @@ Raw token values must not be logged.
 
 ## F-BE-025 — SourceConnectionService
 
+**v1.5 responsibility:** v1.5 target: ordinary USER owns connection; disconnect invalidates credentials/in-flight work but preserves share intent. Restore only same verified provider identity plus per-file revalidation; explicit unshare/admin block never revive. Existing destructive disconnect is a gap, not desired behavior.
+
 Path:
 
 `backend/src/main/java/com/sdv/source/application/SourceConnectionService.java`
@@ -464,6 +472,8 @@ SRC-001, SRC-008, SRC-009
 # 10. Source API
 
 ## F-BE-027 — SourceAdminController
+
+**v1.5 responsibility:** Existing /api/admin/sources is legacy owner-bound compatibility. F-BE-209 serves USER ownership; F-BE-218 administers published shares only. ADMIN is not a private Drive superuser.
 
 Path:
 
@@ -864,7 +874,7 @@ Related:
 
 SRC-004, SRC-005, SRC-006
 
-**v1.4 update (`CORE_SPEC.md` §2A.5, §2A.11):** this is the sole active Core `DocumentSourceConnector` implementation. `fetchContent` must be called only as part of the Mandatory Live Retrieval cycle (bounded stream, pre-fetch and post-fetch access/version verification as the current user) — never to populate a durable content cache.
+**v1.4 update (`CORE_SPEC.md` §2A.5, §2A.11):** this is the sole active Core `DocumentSourceConnector` implementation. `fetchContent` must be called only as part of the Mandatory Live Retrieval cycle (bounded stream, pre-fetch and post-fetch access/version verification as the requester (SDV) and publisher (Source)) — never to populate a durable content cache.
 
 ---
 
@@ -902,6 +912,8 @@ Google SDK/HTTP dependency remains here.
 ---
 
 ## F-BE-042 — GoogleDriveOAuthController
+
+**v1.5 responsibility:** Authorize/callback is OAuth linking, NOT file download. Target authorize allows authenticated ordinary USER who owns source. Callback uses one-time state and browser binding rather than requiring a bearer header; requester and intended source owner must not be swapped.
 
 File:
 
@@ -1045,6 +1057,8 @@ Collaborates with:
 
 ## F-BE-046 — GoogleDriveContentAdapter
 
+**v1.5 responsibility:** Separate download transport from AI parsing eligibility. Authorized PNG/ZIP may download without parser/embedding. Existing byte[] path requires memory/file/concurrency bounds, then final permission/version/generation check before releasing bytes.
+
 File:
 
 `GoogleDriveContentAdapter.java`
@@ -1139,7 +1153,7 @@ AUT-004, SRC-005
 
 Do not generalize this permission to unrelated inheritance hierarchies.
 
-**v1.4 update for F-BE-066 (`CORE_SPEC.md` §2A.11):** `SourceDeletionService.handleDeleted` must also retire the deleted document's `document_embedding_index` rows. It must never depend on a plaintext content row after the `V006` correction (`F-INF-020`) lands, because none may durably exist.
+**v1.4 update for F-BE-066 (`CORE_SPEC.md` §2A.11):** `SourceDeletionService.handleDeleted` must also retire the deleted document's `document_embedding_index` rows. It must never depend on a plaintext content row after the completed M07A/V006 correction (`F-INF-020`), because none may durably exist.
 
 ---
 
@@ -1169,10 +1183,10 @@ No raw token/document/prompt.
 
 | ID | Path | Type | Responsibility | Feature |
 |---|---|---|---|---|
-| F-BE-078 | `backend/src/main/java/com/sdv/policy/domain/SecurityLevel.java` | Enum/VO | PUBLIC→SECRET security ordering | POL-002 |
+| F-BE-078 | `backend/src/main/java/com/sdv/policy/domainSecurityLevel.java` | Java Enum/VO | 보안등급과 미분류 상태 | POL-002 |
 | F-BE-079 | `backend/src/main/java/com/sdv/policy/domain/PolicyDecision.java` | Record/VO | ALLOW/DENY + reason | POL-004,008 |
 | F-BE-080 | `backend/src/main/java/com/sdv/policy/domain/PolicyReasonCode.java` | Enum | machine-readable reason | POL-008 |
-| F-BE-081 | `backend/src/main/java/com/sdv/policy/application/EffectivePermissionService.java` | Service | Source ACL + Overlay + State | POL-004 |
+| F-BE-081 | `backend/src/main/java/com/sdv/policy/applicationEffectivePermissionService.java` | Java Service | 수신자 공유 권한+게시자 위임 Source+Overlay+문서 상태+행위 정책 판정 | POL-004 |
 | F-BE-082 | `backend/src/main/java/com/sdv/policy/application/OverlayPolicyService.java` | Service | additional restriction policy | POL-003 |
 | F-BE-083 | `backend/src/main/java/com/sdv/policy/application/AiUsagePolicyService.java` | Service | AI provider permission | POL-005,AI-003 |
 | F-BE-084 | `backend/src/main/java/com/sdv/policy/application/LabelMappingService.java` | Service | Source label→SecurityLevel | POL-006 |
@@ -1211,6 +1225,12 @@ SECRET
 
 # 20. RAG API
 
+Existing M10 is GET /api/rag/files handled by RagQueryController; structured metadata search only. B-model share authorization is planned, not completed. F-BE-175 old FileSearchController is retired; do not create it.
+
+- F-BE-176 — `backend/src/main/java/com/sdv/rag/application/FileMetadataDiscoveryService.java`: M10 파일 Metadata Discovery; 공유 인가 확장 대상; search().
+- F-BE-177 — `backend/src/main/java/com/sdv/rag/api/dto/RagFileSearchQuery.java`: 파일 검색 요청; q,mimeType,sourceId,modifiedFrom,modifiedTo,sort,page,size.
+- F-BE-178 — `backend/src/main/java/com/sdv/rag/api/dto/RagFileSearchResponse.java`: 파일 검색 결과; items, Boolean hasMore, boolean partial.
+
 | ID | Path | Type | Responsibility |
 |---|---|---|---|
 | F-BE-095 | `backend/src/main/java/com/sdv/rag/api/RagQueryController.java` | Controller | search / ask |
@@ -1228,14 +1248,14 @@ Client filters must never widen authorization scope.
 | ID | Path | Type | Responsibility |
 |---|---|---|---|
 | F-BE-100 | `backend/src/main/java/com/sdv/rag/application/RagRetrievalService.java` | Service | ACL Catalog prefilter + embedding-only candidate shortlist (v1.4 §2A.4 — not a permission decision, not evidence) |
-| F-BE-101 | `backend/src/main/java/com/sdv/rag/application/RagAnswerService.java` | Service | Candidate shortlist → Mandatory Live Retrieval (v1.4 §2A.5: current-user Drive verify → bounded fetch → parse → re-verify → ephemeral evidence) → Policy → LLM → Citation |
+| F-BE-101 | `backend/src/main/java/com/sdv/rag/application/RagAnswerService.java` | Service | Candidate shortlist → Mandatory Live Retrieval (v1.4 §2A.5: requester SDV + publisher-bound Drive verify → bounded fetch → parse → re-verify → ephemeral evidence) → Policy → LLM → Citation |
 | F-BE-102 | `backend/src/main/java/com/sdv/rag/application/CitationAssembler.java` | Service | verified live-retrieval evidence → Citation (v1.4 §2A.5 step 8; core locators `PAGE`/`SECTION`/`LINE_RANGE`, §2A.7) — not from a durable Chunk/text table |
-| F-BE-103 | `backend/src/main/java/com/sdv/rag/application/LiveEvidenceRetrievalService.java` | Service | Every query: current-user Drive permission/version verification + transient evidence fetch; `retrieveLive()`, `retryOnVersionChange()`; depends on `DocumentSourceConnector`, `SourceConsistencyGuard`, `EphemeralEvidenceStore` |
+| F-BE-103 | `backend/src/main/java/com/sdv/rag/application/LiveEvidenceRetrievalService.java` | Service | Every query: requester SDV + publisher-bound Drive permission/version verification + transient evidence fetch; `retrieveLive()`, `retryOnVersionChange()`; depends on `DocumentSourceConnector`, `SourceConsistencyGuard`, `EphemeralEvidenceStore` |
 | F-BE-104 | `backend/src/main/java/com/sdv/rag/application/port/VectorSearchPort.java` | Interface | authorized vector search |
 | F-BE-105 | `backend/src/main/java/com/sdv/rag/infrastructure/PgVectorSearchAdapter.java` | Adapter | pgvector search |
 | F-BE-106 | `backend/src/main/java/com/sdv/rag/infrastructure/persistence/entity/DocumentEmbeddingEntity.java` | JPA Entity | Content-free `document_embedding_index`: `documentId`, `chunkIndex`, `embedding`, `locatorType`, `locatorValue`, `sourceVersion`, `contentHmac`, `modelVersion`; parser/model generation metadata remains required by the data model; no plaintext field |
 | F-BE-107 | `backend/src/main/java/com/sdv/rag/infrastructure/persistence/repository/DocumentEmbeddingJpaRepository.java` | Spring Data Repository | Atomic embedding generation replacement/delete/allowed search: `replaceGeneration()`, `deleteByDocumentId()`, `searchAllowed()`; generation key includes source, parser, and model versions |
-| F-BE-108 | `backend/src/main/java/com/sdv/rag/infrastructure/ai/DocumentParsingClient.java` | Client | FastAPI parse/index — v1.4: parse output is durable only as embedding-index rows (§2A.2); `document_extracted_content.normalized_text` (V005) is known drift requiring `V006` (§2A.3) |
+| F-BE-108 | `backend/src/main/java/com/sdv/rag/infrastructure/ai/DocumentParsingClient.java` | Client | FastAPI parse/index — v1.4: parse output is durable only as embedding-index rows (§2A.2); M06/V005 plaintext drift was corrected by M07A/V006; do not recreate it |
 | F-BE-114 | `backend/src/main/java/com/sdv/rag/infrastructure/event/IndexRequestedConsumer.java` | Kafka Consumer | index request → AI service; builds embedding-only index rows (v1.4 §2A.2), never a durable text store |
 | F-BE-173 | `backend/src/main/java/com/sdv/rag/application/ContentProcessingPolicy.java` | Service/Policy | `classify(metadata)`, `isIndexable(mimeType)` classify Core processing/index status from metadata, MIME, size, and policy; PDF/DOCX/TXT/MD content, XLSX parser retained but default-disabled |
 | F-BE-188 | `backend/src/main/java/com/sdv/rag/application/IndexOrchestrator.java` | Service | `index()`, `replaceGeneration()`, `cleanup()`, `markFailed()`: transient Drive fetch → parse/chunk/embed → atomic content-free generation replacement → cleanup; no content-bearing Kafka/DB retry state |
@@ -1315,13 +1335,15 @@ Authorization remains Backend-owned.
 
 # 26. Frontend Core
 
+Actual M16A/B routes live in App.tsx; OIDC in auth/keycloak.ts + AuthContext.tsx; request infrastructure in api/client.ts + useApiClient.ts. Existing SourcesPage is admin-oriented; MyDrivePage/ShareSettingsDialog below are new USER-sharing targets. FileDiscoveryPage.tsx and SourceSyncPanel.tsx are completed frontend slices under features/rag and features/sources (Mock/Vitest only, not full live acceptance).
+
 | ID | Path | Responsibility |
 |---|---|---|
 | F-FE-001 | `frontend/src/main.tsx` | React entry |
-| F-FE-002 | `frontend/src/app/router.tsx` | USER/ADMIN routes |
-| F-FE-003 | `frontend/src/features/auth/authClient.ts` | OIDC auth/token wrapper |
-| F-FE-004 | `frontend/src/features/sources/SourceListPage.tsx` | Source list/connect/disconnect |
-| F-FE-005 | `frontend/src/features/sources/GoogleDriveConnectPage.tsx` | Google Drive connect |
+| F-FE-002 | `frontend/src/App.tsx` | USER/ADMIN routes |
+| F-FE-003 | `frontend/src/auth/keycloak.ts` | OIDC auth/token wrapper |
+| F-FE-004 | `frontend/src/pages/SourcesPage.tsx` | Source list/connect/disconnect |
+| F-FE-005 | `frontend/src/pages/GoogleDriveConnectPage.tsx` | Google Drive connect |
 | F-FE-006 | `frontend/src/features/sources/SourceSyncPanel.tsx` | Sync status/action |
 | F-FE-007 | `frontend/src/features/rag/RagChatPage.tsx` | question/answer/Citation UI |
 | F-FE-008 | `frontend/src/features/rag/CitationList.tsx` | Citation rendering |
@@ -1329,7 +1351,7 @@ Authorization remains Backend-owned.
 | F-FE-010 | `frontend/src/features/security/SecurityDashboardPage.tsx` | Finding/risk UI |
 | F-FE-011 | `frontend/src/features/audit/AuditLogPage.tsx` | Audit search |
 | F-FE-012 | `frontend/src/features/vault/VaultPage.tsx` | **EXCLUDED / RETIRED at v1.4** (`CORE_SPEC.md` §2A.1, §11) — Vault collection/upload; preserved for historical/traceability reference only, `/api/vault/*` is not an active API |
-| F-FE-013 | `frontend/src/shared/api/httpClient.ts` | common HTTP/401/trace handling |
+| F-FE-013 | `frontend/src/api/client.ts` | common HTTP/401/trace handling |
 | F-FE-014 | `frontend/src/shared/types/api.ts` | shared API Types |
 | F-FE-015 | `frontend/src/*.test.tsx` | core UI tests |
 
@@ -1355,7 +1377,7 @@ Frontend must not reimplement Backend permission logic.
 | F-INF-012 | `scripts/restore.ps1` | PowerShell | restore/verification — same v1.4 scope narrowing as F-INF-011; ephemeral evidence is never restored (it is never backed up) |
 | F-INF-016 | `.github/workflows/ci.yml` | GitHub Actions | Gradle/pytest/npm/secret scan |
 | F-INF-017 | `backend/src/main/resources/db/migration/V003__content_processing_schema.sql` | SQL | Applied immutable ALTER-only migration for source document index status/reason and chunk locator type/value |
-| F-INF-018 | `backend/src/main/resources/db/migration/V004__consumer_idempotency.sql` | SQL | **KNOWN VERSION COLLISION:** the workbook assigns the `processed_events` ledger and unique constraints to this path, but repository V004 is already the applied immutable `V004__source_account_isolation.sql`. Do not create a second V004; during M09 retain the F-INF-018 responsibility and assign a verified unused version, then update this public path transparently. **2026-09-13 update:** the previously-noted "next free version after V006" is no longer V007 — `V007__oauth_token_store.sql` (M08 MVP OAuth, `docs/spec/SDV_M08_TOKEN_CONTRACT.md`) already claimed it. M09 must inspect the actual applied baseline at that time and use the real next-free version (V008 or later, whichever is actually unoccupied) — do not assume V008 without re-verifying, the same way this V007 was only assigned after confirming V001–V006 first. |
+| F-INF-018 | `backend/src/main/resources/db/migration/[next-unused-version]__consumer_idempotency.sql` | SQL (planned placeholder) | Consumer eventId ledger/unique constraints. V001–V009 already exist; assign the actual next unused version at implementation and update this path. Never create another V004 or assume a reserved V010. |
 
 Applied migration files must not be edited.
 
@@ -1382,7 +1404,7 @@ This Agent-readable specification supplements those project-facing documents.
 | ID | Path | Purpose |
 |---|---|---|
 | F-TST-001 | `backend/src/test/java/com/sdv/security/EffectivePermissionServiceTest.java` | Source/Overlay policy matrix |
-| F-TST-002 | `backend/src/test/java/com/sdv/rag/UnauthorizedRetrievalE2ETest.java` | Unauthorized Chunk = 0; v1.4 update: must also prove the current-user Drive access recheck fails closed (DENY/UNKNOWN/deleted/trashed/non-downloadable) before content ever reaches a parser/LLM (§2A.5) |
+| F-TST-002 | `backend/src/test/java/com/sdv/rag/UnauthorizedRetrievalE2ETest.java` | Unauthorized Chunk = 0; v1.4 update: must also prove the requester SDV + publisher-bound Drive access recheck fails closed (DENY/UNKNOWN/deleted/trashed/non-downloadable) before content ever reaches a parser/LLM (§2A.5) |
 | F-TST-003 | `backend/src/test/java/com/sdv/source/GoogleDriveConnectorContractTest.java` | Connector contract; v1.4 update: must also cover the `files.export` 10 MB boundary/`EXPORT_LIMIT_EXCEEDED` and the version-changed-during-fetch retry-once-then-`DOCUMENT_CHANGED` behavior (§2A.5, §2A.7) |
 | F-TST-004 | `backend/src/test/java/com/sdv/sync/PermissionSyncE2ETest.java` | Drive permission removal→RAG exclusion |
 | F-TST-005 | `backend/src/test/java/com/sdv/ai/ExternalLlmPolicyTest.java` | LOCAL_ONLY external call = 0 |
@@ -1418,7 +1440,7 @@ SecurityDashboardController
 
 SharePoint and S3 Core work is contract/skeleton only.
 
-Actual AWS S3 Source implementation belongs to Cloud Portfolio, and even then only as a read-only `DocumentSourceConnector` (v1.4 §2A.10) — never as a writer of SDV-managed content. See §37 for `ObjectStoragePort`/`S3ObjectStorageAdapter` (`F-BE-159`, `F-BE-160`), which are excluded/retired specifically because their writer role conflicts with the v1.4 retention rule.
+Actual AWS S3 Source implementation belongs to Cloud Portfolio, and in the default no-original mode as a read-only DocumentSourceConnector. STO-001 post-MVP storage is a separately designed mode, not a revival of retired writers. See §37 for `ObjectStoragePort`/`S3ObjectStorageAdapter` (`F-BE-159`, `F-BE-160`), which are excluded/retired specifically because their writer role conflicts with the v1.4 retention rule.
 
 ---
 
@@ -1594,7 +1616,7 @@ then propose an intentional specification change if a better design is truly nec
 
 ---
 
-# 37. v1.4 New Files (Excel v1.4 freeze) and Excluded/Retired Writer Files
+# 37. v1.4 New Files (Excel v1.4 approved) and Excluded/Retired Writer Files
 
 ## 37.1 New files added at v1.4
 
@@ -1605,7 +1627,7 @@ Do not create the actual code or migration files for these from this manifest en
 | F-BE-206 | `backend/src/main/java/com/sdv/rag/application/port/out/EphemeralEvidenceStore.java` | Java Interface | Encrypted ephemeral-evidence contract with a hard TTL of at most 300 seconds from original creation; `putEncrypted()`, `getIfAuthorizedAndCurrent()`, `evict()` (`CORE_SPEC.md` §2A.6) |
 | F-BE-207 | `backend/src/main/java/com/sdv/rag/application/SourceConsistencyGuard.java` | Java Service | Drive access/version checks before and after fetch, with one bounded retry on version change (`CORE_SPEC.md` §2A.5) |
 | F-BE-208 | `backend/src/main/java/com/sdv/rag/infrastructure/ephemeral/EncryptedEphemeralEvidenceStore.java` | Java Adapter | `EphemeralEvidenceStore` implementation: encrypted volatile evidence storage with forced eviction and no sliding TTL; `putEncrypted()`, `evictExpired()`, `evictByDocument()` (`CORE_SPEC.md` §2A.6); never backed up, snapshotted, or mounted on a durable volume |
-| F-INF-020 | `backend/src/main/resources/db/migration/V006__zero_original_persistence.sql` | SQL (future) | Corrects the persistence model (removes/relocates durable plaintext such as `document_extracted_content.normalized_text`) without editing `V001`–`V005` (`CORE_SPEC.md` §2A.3) |
+| F-INF-020 | `backend/src/main/resources/db/migration/V006__zero_original_persistence.sql` | SQL (M07A completed history) | Corrects the persistence model (removes/relocates durable plaintext such as `document_extracted_content.normalized_text`) without editing `V001`–`V005` (`CORE_SPEC.md` §2A.3) |
 
 The `F-BE-206`–`F-BE-208` package paths above are explicit values from the v1.4 Excel master, not inferred placements.
 
@@ -1613,8 +1635,37 @@ The `F-BE-206`–`F-BE-208` package paths above are explicit values from the v1.
 
 | ID | Canonical Path | Type | Responsibility | Status |
 |---|---|---|---|---|
-| F-BE-159 | `backend/src/main/java/com/sdv/storage/application/port/ObjectStoragePort.java` | Java Interface | Generic object storage write/read contract | **EXCLUDED / RETIRED at v1.4** — writer behavior conflicts with the global no-original-retention rule (`CORE_SPEC.md` §2A.10) |
-| F-BE-160 | `backend/src/main/java/com/sdv/storage/infrastructure/aws/S3ObjectStorageAdapter.java` | Java Adapter | `ObjectStoragePort` AWS S3 implementation | **EXCLUDED / RETIRED at v1.4** — same reason as `F-BE-159`; S3 must never be described as an SDV original-file, export, extracted-text, or evidence store. A future S3 integration may exist only as a read-only `DocumentSourceConnector` for customer-owned source data (§2A.10). |
+| F-BE-159 | `backend/src/main/java/com/sdv/storage/application/port/ObjectStoragePort.java` | Java Interface | Generic object storage write/read contract | **EXCLUDED / RETIRED at v1.4** — writer behavior conflicts with the default-mode no-original-retention rule (`CORE_SPEC.md` §2A.10) |
+| F-BE-160 | `backend/src/main/java/com/sdv/storage/infrastructure/aws/S3ObjectStorageAdapter.java` | Java Adapter | `ObjectStoragePort` AWS S3 implementation | **EXCLUDED / RETIRED at v1.4** — same reason as `F-BE-159`; In the default MVP no-original mode, S3 is not an SDV content store; a provider connector is read-only. Separate post-MVP STO-001 requires a new retention design/IDs and does not reactivate this writer (§2A.10). |
 
 The `F-BE-159` and `F-BE-160` paths above are explicit v1.4 Excel identities retained only for traceability. Their writer responsibilities remain excluded/retired.
 
+
+# 38. v1.5 Approved Target Files — NOT Implemented by this Revision
+
+These 14 additions are explicit design decisions for SHR-001–006, not inferred claims that code exists. Methods below are target contracts; implementation prompts must inspect existing signatures first. Preserve package-by-feature and avoid extra speculative layers.
+
+| ID | Canonical path | Responsibility | Target methods/fields | Feature IDs |
+|---|---|---|---|---|
+| F-BE-209 | `backend/src/main/java/com/sdv/source/api/SourceUserController.java` | 본인 Source 등록·목록·중단·재연결 진입점 | list(),create(),disconnect() | SHR-001,SHR-005 |
+| F-BE-210 | `backend/src/main/java/com/sdv/source/application/SourceSharingService.java` | 파일 단위 공유 의도·수신자·등급·철회 관리 | publish(),update(),unshare(),resolveAccess() | SHR-002,SHR-003,SHR-006 |
+| F-BE-211 | `backend/src/main/java/com/sdv/source/domain/DocumentShare.java` | 연결 건강과 분리된 영속 공유 모델 | publisher,source,file,recipients,securityLevel,actions,generation,published,adminBlocked | SHR-002,SHR-005 |
+| F-BE-212 | `backend/src/main/java/com/sdv/source/infrastructure/persistence/entity/DocumentShareEntity.java` | 공유와 지정 수신자 영속 매핑 | document_shares; recipients collection | SHR-002,SHR-005 |
+| F-BE-213 | `backend/src/main/java/com/sdv/source/infrastructure/persistence/repository/DocumentShareJpaRepository.java` | 공유 소유권·수신자 필터 및 버전 조건부 갱신 | findByPublisher(),findAuthorizedShares(),conditional update | SHR-002,SHR-003 |
+| F-BE-214 | `backend/src/main/java/com/sdv/source/api/SourceShareController.java` | 소유자 전용 비공개 파일 선택·명시적 공유 API | browseFiles(),publish(),update(),unshare() | SHR-002 |
+| F-BE-215 | `backend/src/main/java/com/sdv/source/domain/SourceAccessContext.java` | 서버가 결합한 요청자·게시자·연결·공유·파일·세대 문맥 | requester,publisher,providerIdentity,source,file,share,generation,action | SHR-003,SHR-004 |
+| F-BE-216 | `backend/src/main/java/com/sdv/source/application/SharedFileDownloadService.java` | SDV 인가·게시자 원본 검증·상한 있는 다운로드 전달 | download(),verifyBefore(),verifyAfter() | SHR-004 |
+| F-BE-217 | `backend/src/main/java/com/sdv/source/api/SharedFileDownloadController.java` | OIDC 보호 파일 다운로드 API | download() | SHR-004 |
+| F-BE-218 | `backend/src/main/java/com/sdv/source/api/SharedFileAdminController.java` | 공유된 파일 관리만 제공; 개인 저장소 열람 금지 | listPublished(),block(),updatePolicy() | SHR-006 |
+| F-FE-019 | `frontend/src/features/sources/MyDrivePage.tsx` | 내 저장소·비공개 파일 선택·공유 및 복구 상태 | MyDrivePage | SHR-001,SHR-002,SHR-005 |
+| F-FE-020 | `frontend/src/features/sources/ShareSettingsDialog.tsx` | 선택 파일·수신자·보안등급·행위 확인 및 명시적 공유 | ShareSettingsDialog | SHR-002,SHR-006 |
+| F-TST-009 | `backend/src/test/java/com/sdv/source/SelectiveSharingE2ETest.java` | A 게시/B 허용/C 거부·비공개 숨김·재연결 경계 | multiUserSharing(),sameIdentityReconnect(),differentIdentityRejected() | SHR-001,SHR-002,SHR-003,SHR-005,SHR-006 |
+| F-TST-010 | `backend/src/test/java/com/sdv/source/SharedDownloadE2ETest.java` | 다운로드 위임·철회 경합·내용 비보관 검증 | downloadWithoutNativePermission(),revokeDuringFetch(),binaryWithoutParser() | SHR-004 |
+
+SourceShareController also lists owner shares; SourceUserController supports owner list/create/disconnect, with reconnect through existing OAuth flow. Admin policy may restrict but not expand the publisher's audience/action consent. SourceAccessContext is trusted internal context, never a user-issued capability.
+
+Existing EffectivePermissionService (F-BE-081) must evolve to requester SDV share permission AND publisher Source permission. Reuse SourceConsistencyGuard (F-BE-207) for live checks; bind evidence/index work to share/connection generations. Exact update wiring is M10B/M10C/M11/M12 work, not a completed claim.
+
+F-INF-018's [next-unused-version] placeholder records a version collision without inventing a new migration. New sharing schema also uses an actual unused version when implemented; never edit applied V001–V009.
+
+STO-001 post-MVP original storage requires separate design/IDs, opt-in and retention/offline authorization decisions; keep retired writers retired. MVP-28 CSS is the first post-MVP task.

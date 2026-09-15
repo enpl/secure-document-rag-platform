@@ -4,6 +4,7 @@ import { AppShell } from './components/AppShell'
 import { CenteredMessage } from './components/CenteredMessage'
 import { HomePage } from './pages/HomePage'
 import { SourcesPage } from './pages/SourcesPage'
+import { FileDiscoveryPage } from './features/rag/FileDiscoveryPage'
 
 /**
  * OIDC Authorization Code + PKCE is redirect-based - there is no custom
@@ -12,7 +13,7 @@ import { SourcesPage } from './pages/SourcesPage'
  * back (AuthContext).
  */
 function App() {
-  const { status, login } = useAuth()
+  const { status, login, subject } = useAuth()
 
   if (status === 'initializing') {
     return <CenteredMessage>로그인 상태를 확인하는 중입니다...</CenteredMessage>
@@ -45,6 +46,19 @@ function App() {
         element={
           <AppShell title="새 질문">
             <HomePage />
+          </AppShell>
+        }
+      />
+      <Route
+        path="/files"
+        element={
+          <AppShell title="문서 찾기">
+            {/* key={subject}: 계정이 바뀌면(재로그인 등) 컴포넌트를 강제로
+                재마운트해 이전 계정의 검색 결과/state가 새 계정 화면에 남지
+                않도록 한다 - 로그아웃 시 이미 status 분기로 전체 트리가
+                unmount되므로, 이 key는 "로그아웃 없이 계정만 바뀌는" 잔여
+                경우에 대한 방어적 조치다. */}
+            <FileDiscoveryPage key={subject} />
           </AppShell>
         }
       />

@@ -4,7 +4,7 @@
 
 ## 문서 위치와 관리
 
-현재 이 파일은 Codex 관제의 원본이다. 다음 Claude 작업에서 동일 내용을 `C:/workspace/secure-document-rag-platform/docs/plan/SDV_MVP_DEFERRED.md`로 저장한다. 저장소 파일이 생성된 뒤에는 저장소 파일을 최신 원본으로 읽고 갱신하며, 이 outputs 파일은 초기 스냅샷으로 취급한다. 이전 기록을 지우지 말고 상태와 근거를 갱신한다.
+사용자 수동 적용 후 저장소 docs/plan/SDV_MVP_DEFERRED.md가 살아있는 원본이다. 이번 outputs 파일은 적용 대기 개정본이며 원본을 자동 갱신하지 않았다. 기존 검증 이력을 보존하고 새 제품 계약과 구분한다.
 
 Codex와 Claude는 매 작업 시작에 최신 보완 목록, 현재 Git 상태, latest.md를 먼저 읽는다. Claude는 여전히 `docs/workmd/**`에 접근하지 않는다.
 
@@ -20,17 +20,32 @@ Codex와 Claude는 매 작업 시작에 최신 보완 목록, 현재 Git 상태,
 - 단계별 합격은 범위 한정이다. UI나 Mock 테스트가 끝나도 전체 RAG/실제 Drive 완료라고 표시하지 않는다.
 - 한 번에 실행 프롬프트 하나. Git 변경은 사용자만 수행하고 실행 전에 필요한 브랜치 작업을 안내한다. 매 작업 종료에 latest.md를 누적 갱신하고 다시 연다.
 
-## 승인된 진행 순서
+## 승인된 진행 순서 (v1.5, 2026-09-15)
 
-1. 현재 M08 브랜치에서 최소 OAuth 연결 + PostgreSQL 암호문 Token 저장 + 갱신/해제를 구현한다.
-2. **M16의 프론트엔드 기반 부분을 앞당긴다.** 로그인, Source 목록/Google 연결/해제, 준비 상태부터 구현한다. M09~M15 전체 완료를 기다리지 않는다.
-3. M09/M10의 동기화·메타데이터 검색이 준비될 때 문서 목록/검색 화면을 실제 API에 연결한다.
-4. M11~M14의 색인·현재 권한 재확인·답변·출처 흐름을 화면에 순차 연결한다. M13의 요청 범위/Prompt 보안은 실제 질문 기능 공개 전에 적용한다.
-5. 필요한 감사(M15), 실제 계정/화면 검증(M17), MVP 최종 판정(M18)을 완료한다. 고급 관리 화면은 먼저 만들 필요가 없다.
+1. 현재 M16B uncommitted 작업을 사용자가 검토·통합한다. 문서 복사 전에 진행 중인 다른 편집을 마친다.
+2. M10B: 일반 USER 연결·파일 단위 명시 공유·게시자 위임·동일 계정 재연결 복구.
+3. M10C: SDV 인가 다운로드. M16C: 내 Drive 선택기·수신자/등급/행위 확인·공유 UI.
+4. M09 잔여 consumer/멱등성/retry/DLQ 및 활성화 gate와 M11 색인, M12 live retrieval을 연결한다.
+5. M13/14 자연어 파일 찾기와 내용 질문·답변·인용, M15/16 필요한 감사/UI를 완성한다.
+6. M17/18 일반 USER 실제 OIDC·A 게시/B 허용/C 거부·다운로드·철회/복구까지 통과한다.
+7. MVP 직후 최우선은 MVP-28 CSS 고급화. 원본 저장(STO-001)은 이후 별도 설계/우선순위로 진행한다.
 
-이 순서는 UI 개발 시점을 앞당긴 것이며 전체 기능 의존성이나 v1.4의 보안 계약을 삭제하지 않는다. 기존 문서의 M19/M20 검증 표기는 최신 M17/M18 체계보다 오래된 기록이다.
+연결은 기본 비공개이다. 공통 검색/AI/다운로드에는 명시적 공유만 포함한다. 수신자 B의 SDV 인가와 게시자 A의 파일-bound Source 인가를 분리한다. B의 native Google 권한/DWD는 필요하지 않다. 관리자도 비공개 저장소나 콘텐츠에 자동 접근하지 않는다. 이전 기록의 owner-only 모델은 현재 목표로 사용하지 않는다.
 
 ## 항목별 기록
+
+v1.5 신규/상향 항목(아래 과거 CLOSED는 당시 slice의 검증 이력일 뿐 새 B안 전체 완료가 아님):
+
+| ID | 상태 | 항목 | 재검토/완료 기준 | 영향 |
+|---|---|---|---|---|
+| MVP-32 | NEXT | SHR-001/002/003/006 일반 USER 연결·공유·게시자 위임·공유자료 관리자 | M10B; 4개 canonical 보안등급, 지정 SDV 수신자/행위; ADMIN 자동 콘텐츠 허용 금지 | MVP 필수 |
+| MVP-33 | BEFORE_MVP | SHR-005 공유 의도 보존 및 동일 계정 재연결 | M10B; stable provider identity/owner/file 재검증, 잘못된 계정·철회·차단 복원 거부, 세대 fencing | 설정 보존은 즉시 AI 재색인 완료와 다름 |
+| MVP-34 | BEFORE_MVP | SHR-004 SDV 인가 다운로드 | M10C/M16C; pre/post 인가·버전·세대, 메모리/동시성 상한, PNG/ZIP Parser 0, no-store | Google 링크만으로 B 다운로드 불가 |
+| MVP-35 | BEFORE_MVP | 일반 USER 자연어 찾기/내용 질문→AI 답변·인용·다운로드 실검증 | M13/14/M17/18; Home/OIDC/A/B/C/비공개/철회/재연결 실제 흐름 | M16B 구조화 검색·Mock 통과만으로 완료 금지 |
+| MVP-36 | LATER (승인된 확장) | STO-001 원본 저장 선택 모드 | MVP 이후 별도 동의·암호화·보존/삭제/백업·버전·오프라인 인가·쿼터/비용 설계; retired ID 재사용 금지 | 현재 MVP 비보관 유지; MVP 직후 첫 작업은 CSS(MVP-28) |
+| MVP-37 | NEXT (M10B 범위 제안) | 공개 M08 Token 계약/runbook의 owner-only 설명과 v1.5 결합 규칙 정합화 | 구현 프롬프트 승인 범위에 해당 공개 문서 포함; 비밀 env 접근 금지; 암호문 저장 계약 유지 | 이 개정 패키지의 승인 파일 외 문서는 수정하지 않음 |
+
+기존 누적 항목:
 
 | ID | 상태 | 항목 / 현재 증거 | 재검토 시점과 완료 기준 | 지금 미루는 영향 |
 |---|---|---|---|---|
@@ -38,9 +53,9 @@ Codex와 Claude는 매 작업 시작에 최신 보완 목록, 현재 Git 상태,
 | MVP-02 | CLOSED (M16A 범위) | **M16A(2026-09-14)에서 구현 완료.** React/Vite + `keycloak-js`(Authorization Code + PKCE) 로그인/로그아웃, ADMIN 전용 Connection management(Source 등록/Google 연결/연결 해제 확인/empty·loading·error 상태/중복 제출 방지), 정직한 Home 준비 상태(가짜 Composer/답변 없음), 모바일 Off-canvas Sidebar. 신규 파일: `frontend/src/auth/*`, `frontend/src/api/*`, `frontend/src/components/*`, `frontend/src/pages/*`. Vitest+Testing Library 13개 통과, `tsc -b`/`eslint .`/`vite build` 모두 통과 | 실제 Keycloak Realm에 `sdv-frontend` Client 수동 반영 + 실제 브라우저 로그인/Google 동의 화면 왕복은 **UNVERIFIED**(아래 "현재 검증 스냅샷" 참고) - 사용자 로컬 검증 필요 | M16 전체(문서 목록/검색/답변/출처 등 M09~M15 연동)는 여전히 미완성 - 이 항목은 그 중 "프론트엔드 기반 부분"만을 가리킨다(Canonical Development Order 18 "Frontend / Guided Assistant" 전체 완료를 의미하지 않는다) |
 | MVP-03 | BEFORE_MVP | 실제 Google OAuth/읽기/해제 Smoke Test 미실행. **2026-09-14 갱신(사용자 직접 확인, Agent 검증 아님)**: 사용자가 실제 Keycloak 로그인 후 실제 Google 동의 화면까지 진행했고, 등록된 Source가 "Google 계정 연결됨" 상태로 표시된 화면을 스크린샷으로 확인했다 - 로그인+최초 OAuth 연결 자체는 최소 1회 성공했다는 사용자 관찰 증거다. **여전히 미제공/PENDING**: 진단 패널을 통한 실제 파일 읽기 성공, 연결 해제/실제 Google Revoke, 재로그인 후 상태 유지, ADMIN B 교차 소유권 거부 결과 - 이 스크린샷 하나로 이들을 통과로 간주하지 않는다(`docs/runbooks/M16A_LOCAL_TESTBED.md` LIVE GOOGLE 체크리스트 5~9단계 참고) | 연결 UI와 로컬 설정 준비 시 사용자 계정으로 최소 문서 1개 검증. 실제 자격증명은 사용자 관리 | MVP-01의 코드/Mock 검증은 끝났다 - 최초 연결 성공은 사용자가 직접 관찰했다. 나머지 단계(읽기/해제/재로그인 유지/교차 소유권)의 Live 완료 주장은 여전히 불가 |
 | MVP-04 | BEFORE_MVP | 전체 질문→현재 사용자 권한 확인→답변·출처 및 임시 근거 만료 미구현 | M11~M14/M17에서 실제 한 경로 완주, 권한 회수·버전 변경·근거 없음·취소 검증 | 화면 틀은 가능, 실제 답변 기능 완료는 불가 |
-| MVP-05 | BEFORE_MVP | 현재 Source 소유자 전용 자격증명 결합. 다른 사용자 계정 매핑/DWD 없음 | 인증 UI 통합 전에 제품의 사용자/Source 권한 흐름 확인. 다른 사용자는 자기 자격증명 또는 명시적 미지원. 공동 Source 다사용자 시나리오 필요 시 별도 구현 | 현재 소유자 흐름 개발은 가능. 다른 사용자에 대한 owner-token 대리 사용 금지 |
+| MVP-05 | NEXT (M10B) | v1.5 B안 확정: 일반 USER 개인 연결 + 선택 공유 + 요청자 SDV 인가/게시자 파일-bound 위임. 예전 각 수신자 Google 권한 요구는 대체됨 | A 게시, native Google 권한 없는 B 허용, C 및 비공개 접근 거부; 임의 owner-token 사용 불가 | 새 MVP 필수. DWD/Google ACL 변경은 필요 없음 |
 | MVP-06 | CLOSED | Refresh/재연결과 disconnect 경합의 삭제 후 Token 재생성 방지(M08 자체 Writer 범위) | **M08 Writer(Refresh/최초인증/Disconnect)끼리의 경합은 실제로 동시성 테스트로 검증 완료.** `GoogleTokenService.store/revoke/publishRefreshIfStillCurrent`가 항상 부모 `source_connections`를 먼저 잠그고(`findByIdForUpdate`/`lockAndReadCurrentOwnershipState`), Refresh 발행은 `source_oauth_tokens.row_version`으로 세대(Generation)까지 확인한다. `SourceTokenConcurrencyTest`(신규, 실제 Proxied Service + 독립 Commit Transaction + Latch, Sleep 없음) 2개 - (1) Refresh가 Google 응답을 기다리는 동안 실제 `disconnect()`가 별도 Transaction으로 완전히 Commit되는 경우, (2) 최초 인증(Callback)이 응답을 기다리는 동안 Token이 전혀 없던 Source가 실제로 `disconnect()`되는 경우 - 둘 다 수정 전 코드에서 실제로 실패함을 확인한 뒤 수정 후 통과를 확인했다(Revert-Rerun-Restore로 직접 검증, 추측이 아니다) | M08 범위 안에서는 재실행 불필요(반복 요청 금지). **M11의 색인(Embedding) Writer와 disconnect의 교차 검증은 이것과 다른, 아직 열려있는 별도 항목이다 - 아래 MVP-18 참고, 여기 CLOSED에 포함되지 않는다.** |
-| MVP-18 | LATER | M11 색인(Embedding) Writer와 disconnect의 교차 경합 검증 미실시 - M11 자체가 아직 존재하지 않는다 | M11 RAG Ingestion Orchestration이 실제로 `DocumentEmbeddingJpaRepository.replaceGeneration` 등을 호출하는 Writer를 만들 때, 그 Writer와 `SourceConnectionService.disconnect`의 동시 실행을 `SourceTokenConcurrencyTest`와 같은 방식(실제 Proxied Service + Latch)으로 검증한다 | MVP-06(M08 Writer끼리의 경합)과 혼동하지 않는다 - MVP-06은 이미 CLOSED, 이 항목은 M11이 생기기 전까지는 테스트 대상 자체가 없다 |
+| MVP-18 | BEFORE_MVP | M11 색인(Embedding) Writer와 disconnect의 교차 경합 검증 미실시 - M11 자체가 아직 존재하지 않는다 | M11 RAG Ingestion Orchestration이 실제로 `DocumentEmbeddingJpaRepository.replaceGeneration` 등을 호출하는 Writer를 만들 때, 그 Writer와 `SourceConnectionService.disconnect`의 동시 실행을 `SourceTokenConcurrencyTest`와 같은 방식(실제 Proxied Service + Latch)으로 검증한다 | MVP-06(M08 Writer끼리의 경합)과 혼동하지 않는다 - MVP-06은 이미 CLOSED, 이 항목은 M11이 생기기 전까지는 테스트 대상 자체가 없다 |
 | MVP-07 | LATER | 권한 페이지 10,000 상한 직접 경계 테스트 미실행. 반복/순환은 통과 | 페이지 로직을 다음 수정할 때 작은 주입 상한으로 테스트 가능한지 제안. 현재 MVP 진행의 별도 차단 사유 아님 | 정상/순환 경로는 검증됨. 상한에서의 실패 동작 확인은 남음 |
 | MVP-08 | CLOSED (Change Feed 인식 범위) | **M09A(2026-09-14)에서 구현 완료.** 공식 `changes.list` 문서 재확인 결과 `changeType`이 `file`/`drive` 두 값을 가지며, `drive`일 때는 `fileId`/`file`이 채워지지 않는 것이 정상임을 확인했다 - 교정 전에는 `GoogleDriveClient.requireValidChange`가 `changeType`을 전혀 읽지 않아 `fileId`가 빈 정상적인 Drive-Level 이벤트를 Malformed로 거부하거나(먼저 걸림), `GoogleDriveConnector.toChangeRecord`가 `file()==null`만 보고 파일 삭제(REMOVED_OR_ACCESS_LOST)로 잘못 승격시킬 수 있었다. 이제 `changeType="drive"`는 형태 검증은 통과하되 Connector 단계에서 명시적으로 `SourceSyncException(FAILED, "unsupported drive-level change encountered...")`로 안전하게 실패한다 - 공유 드라이브 자체를 파일 삭제로 지어내지 않는다. Mock HTTP Server 기반 신규 Test 1개(`GoogleDriveConnectorContractTest.findChangesFailsSafelyOnADriveLevelChangeInsteadOfMisreadingItAsAFileDeletion`)로 직접 검증 | 공유 드라이브 제품 지원 자체(목록 조회/파일 탐색/전용 권한 모델)는 여전히 Core MVP 범위 밖이다 - 이 항목은 "공유 드라이브 이벤트를 파일 삭제로 오인하지 않는다"는 안전성만 해결한다. 실제 공유 드라이브가 있는 계정으로의 Live 검증은 미실행(MVP-03과 동일하게 사용자 진행 대기) | 이전에는 이런 이벤트가 조용히 잘못된 삭제를 유발할 위험이 있었다 - 이제는 명시적 안전 실패로 바뀌었다 |
 | MVP-09 | BEFORE_DEPLOYMENT | V006 이후 과거 평문 데이터의 WAL/백업/디스크 물리적 폐기 실환경 증거 없음 | 실제 데이터 사용/배포 전 기존 V006 runbook 수행. 적용 이력·잔여 백업 범위를 증거로 남김 | 합성 개발 데이터로 UI/기능 개발 가능. 이미 민감 데이터가 있다면 즉시 상향 |
@@ -92,9 +107,20 @@ Codex와 Claude는 매 작업 시작에 최신 보완 목록, 현재 Git 상태,
 - **결과**: `FileMetadataDiscoveryServiceTest` 26개(순증 1, 결함을 정상으로 단정하던 Test 2개 삭제 + 신규 4개 추가 + 기존 일부 재명명/재검증). 전체 Backend 회귀 **66개 Class, 483/483 통과**(직전 482 → 483), 실패/오류/Skip 0.
 - **손대지 않음**: B(Live Metadata 결합/검증, `GoogleDriveConnector`/`SourceMetadataVerificationResult`/`SourceMetadataVerificationOutcome`)는 이번 라운드에서 전혀 수정하지 않았다 - 재구현 요청이 없었고 실제로 결함이 없었다. `RagQueryController`(입력 검증)/`SourceDocumentJpaRepository.searchDiscoverable`(기존 파라미터 바인딩 교정)도 이번에는 변경하지 않았다(임의의 `Pageable`을 이미 지원해 재사용 가능했다).
 
+**MVP-30 후속 - 사용자 승인 후순위(2026-09-15, M16B 세션에서 기록).** 아래 항목들은 이번 M16B 작업 지시 자체에 "이번 Slice에서는 다루지 않고 MVP 이후로 미룬다"고 명시된, 사용자 승인 후순위다 - 새로 발견한 결함이 아니라 이미 승인된 범위 밖 개선 후보를 여기 공식 기록하는 것뿐이며, 재논의 대상이 아니다.
+
+- M10 Deep-Page(뒤쪽 Page) 재-Scan 최적화 - 현재 `FileMetadataDiscoveryService.search`는 매 요청마다 정렬 순서 0번부터 Bounded Scan을 다시 시작한다(위 MVP-30 잔여 Paging 교정 참고). 뒤쪽 Page로 갈수록 반복 작업이 늘어나지만, 정확성 자체는 이미 검증됐다(483/483) - 성능 최적화는 실사용 측정 후 별도 검토.
+- Scan/Time-Budget 튜닝(`RagDiscoveryProperties.maxCandidateScan`/`liveCheckBudgetMs`) - 현재 기본값(200/10s)은 실제 Google 계정 규모로 아직 측정되지 않았다. Live 검증(MVP-03/MVP-30 미검증 항목) 이후 실측 기반으로 재조정.
+- Frontend 고급 재시도 UX(자동 Backoff 재시도, 부분 실패 후 이어서 채우기 등) - 이번 M16B는 "같은 조건으로 다시 시도" 버튼 하나만 제공한다(명시적 사용자 트리거, 자동 반복 없음) - 이것으로 지금 필요한 정직한 불완전 결과 처리는 충분하다.
+- 전반적 문서 정리(Javadoc/명세 정합화 일반) - MVP-15와 동일 범주, 직접 수정 구간의 치명적 모순만 즉시 처리하고 전체 정렬은 안정화 시점으로 미룬다.
+
+이 네 가지 모두 지금 당장 필요한 기본 불완전 결과 처리(`hasMore=null`+`partial=true` 화면 표시, 명시적 재시도 버튼)는 이미 M16B 자체에 구현되어 있다 - 미루는 것은 그 이상의 고급 최적화/UX뿐이다.
+
+| MVP-31 | CLOSED (Frontend UI Mock/Vitest 검증 범위) | **2026-09-15 Claude Code 구현(M16B).** "Manual Catalog Sync and Secure File Discovery UI" - 기존 M09A(`POST /api/admin/sources/{id}/sync`)/M10(`GET /api/rag/files`) Backend API에 Frontend를 처음으로 연결했다(Backend 변경 없음). **(1) 관리자 수동 동기화**: `frontend/src/features/sources/SourceSyncPanel.tsx`(신규, F-FE-006 경로) + `frontend/src/pages/SourcesPage.tsx` 확장 - 동기 호출 1회당 부정형(Indeterminate) 진행 표시 하나만 보여주고 가짜 %/자체 Job Polling/자동 재시도를 만들지 않았다. 동기 중복 제출은 즉시(await 이전) 검사로 막고, 같은 Row의 연결/연결 해제 Action과 서로 배타적으로 비활성화된다. HTTP 200이어도 실제 `status`(COMPLETED/PARTIAL_FAILURE/FAILED/ABANDONED/RUNNING)를 직접 보고, 401/403/404/`SYNC_ALREADY_RUNNING`/`CREDENTIAL_UNAVAILABLE`/네트워크 오류를 각각 정직한 한국어 메시지로 구분한다. 동기화 뒤 `refresh()`로 Source 목록을 다시 불러오되, 결과 메시지는 별도 State(`syncOutcomes`)라 사라지지 않는다. **(2) 파일 검색**: `frontend/src/features/rag/FileDiscoveryPage.tsx` + `frontend/src/api/fileDiscovery.ts`(신규) - 기존 비활성 Sidebar "문서 찾기" 항목을 활성화(`frontend/src/components/Sidebar.tsx`)하고 `/files` Route를 추가했다(`frontend/src/App.tsx`, `key={subject}`로 계정 전환 시 강제 재마운트). 파일명/정확 일치 MIME/수정일 범위(`YYYY-MM-DD` 로컬 자정~로컬 하루의 끝을 UTC Instant로 변환)/정렬/이전-다음 Paging을 구현했고, 관리자만 자신의 Source 목록으로 필터링할 수 있으며 비관리자는 그 목록 API를 아예 호출하지 않는다. M10의 Tri-state `hasMore`(`true`/`false`/`null`) 계약을 그대로 보존 - `null`+`partial=true`는 "더 없음"이 아니라 "확인 불완전"으로 표시하고 다음 Page를 비활성화하며 총 개수/숨은 개수를 절대 지어내지 않는다. 검색 조건이 바뀌면 Page를 0으로 되돌리고, 오래된 응답이 최신 응답을 덮어쓰지 않도록 `cancelled` Closure Flag로 막는다. 파일 이름은 JSX 자동 이스케이프로만 렌더링하고(원본 HTML 렌더링 없음), "원본 열기" 링크는 Client에서 `new URL(...)`로 `https:`+`drive.google.com`을 재검증한 뒤에만 그린다 - "Ask AI" Action이나 `downloadable=true`로부터의 Content 지원 암시는 전혀 없다. 검색 조건/결과는 이 컴포넌트의 휘발성 State에만 존재한다(URL Query String/`localStorage`/`IndexedDB`/Service Worker/영구 Store 없음). **실전 결함 1개 발견·수정(추측 아님, Vitest로 직접 재현)**: 사용자가 조건을 전혀 바꾸지 않고 같은 검색을 재시도하면(정확히 "같은 조건으로 다시 시도" 버튼의 목적 시나리오), `submitted`/`page` State가 참조까지 동일해 React가 재-Render를 건너뛰어 검색 Effect가 다시 실행되지 않고 "검색 중입니다..." 표시가 영구히 멈춰있는 결함을 실제 Test 실패로 발견 - `searchAttempt` 명시적 Trigger Counter를 Effect 의존성에 추가해 교정, 이후 같은 Test 통과 확인. 신규/확장 Vitest 포함 전체 53개(세부 합산 재검증 아님)(`SourcesPage.test.tsx` +14, `FileDiscoveryPage.test.tsx` 신규 15, `Sidebar.test.tsx` 재작성 2) 포함 Frontend 전체 **53/53 통과**, `npx eslint .`(0 오류/0 경고)/`tsc -b`/`vite build` 모두 통과 | 실제 Google 계정으로 이 두 화면을 통해 성공적으로 동기화/검색을 1회 이상 수행하는 것은 미검증(MVP-03/MVP-30과 동일하게 사용자 진행 대기) - Mock/합성 Test만으로 실제 Live 성공을 주장하지 않는다. 브라우저 시각적 확인도 미실행(UNVERIFIED, 아래 M16B 세션 스냅샷 참고) | MVP-30(Backend)의 미검증 상태는 이 항목으로 해소되지 않는다 - Frontend UI가 그 API를 정확히 계약대로 호출한다는 것만 이 항목이 보증한다. 위 4개 사용자 승인 후순위(Deep-Page 재-Scan/Scan-Time-Budget 튜닝/고급 재시도 UX/문서 정리) 외에는 이번 Slice가 의도적으로 미룬 항목이 없다 - 영구 대화 기록/업로드-Vault/교차 사용자 위임/고급 관리자 대시보드는 원래부터 이번 Slice 범위 밖(작업 지시 자체가 제외) |
+
 새 항목을 추가할 때는 발견 근거, 실제 사용자 영향, 다음 판단 시점, 완료 증거, 최근 판단/보류 이유를 함께 적는다. 번호를 과거 기능 ID로 오인하지 않는다. 이 ID들은 작업 추적용이며 공식 File/Feature ID가 아니다.
 
-## 현재 검증 스냅샷
+## 누적 검증 스냅샷 (각 기록 당시 범위)
 
 - 브랜치 `feat/m08-google-drive-connector`, HEAD `59151c3`(변경 없음 - 모든 변경은 여전히 미커밋 Working Tree), 미커밋 61개 파일(수정 22 + 신규 39). 다음 실행에서 재확인한다.
 - Backend 저장 결과 51개 클래스/370개 테스트 통과(50/365 → 51/370): 신규 `SourceTokenConcurrencyTest`(2개, 새 파일) + `SourceConnectionServiceAuditTransactionTest`에 1개 + `GoogleDriveOAuthServiceTest`에 2개 = 순증 5개. `SourceConnectionServiceTokenRemovalTest`의 기존 테스트 1개는 새로 정정된 disconnect() 동작에 맞게 이름/내용을 재작성했다(개수는 그대로). 실제 Google 검증은 여전히 미실행(MVP-03 그대로 유지).
@@ -134,6 +160,30 @@ Codex와 Claude는 매 작업 시작에 최신 보완 목록, 현재 Git 상태,
 - 남은 작업: Frontend에서 이 API를 실제 파일 목록/검색 화면에 연결하는 것은 별도 승인 후 진행(사용자에게 보고 후 시작 - 이번 작업 지시가 자동 연동을 금지). Multi-user Delegation/DWD(Owner 아닌 사용자의 Discovery)는 MVP-05와 동일하게 여전히 범위 밖. Content/RAG 검색("ask")은 M12 이후 별도 작업.
 - 확인: `google-oauth.local.env`/`infra/testbed/secrets/**`/`docs/workmd/**` 접근 없음. Git은 읽기 전용 조회만 사용(Branch/HEAD/status/diff/show) - Stage/Commit/Push 등 어떤 변경도 수행하지 않았다. 실제 계정/Live Drive 호출/Docker 기동 없음(Docker는 사용자가 직접 기동).
 
+### M16B 세션 스냅샷(2026-09-15, Claude Code)
+
+- 브랜치 `feat/m16b-file-discovery-ui`, HEAD `7b0deba`(M10 최종 교정 merge, PR #34) - 세션 시작/종료 모두 이 HEAD, 변경 없음. Git은 읽기 전용 조회만 사용(Branch/HEAD/status/diff/show) - Stage/Commit/Push 등 어떤 변경도 수행하지 않았다.
+- 범위: Frontend Only(Backend `backend/**`/Migration/Kafka 무변경) - 기존 M09A/M10 API에 Frontend를 처음 연결. 신규 파일 4개: `frontend/src/api/fileDiscovery.ts`, `frontend/src/features/sources/SourceSyncPanel.tsx`, `frontend/src/features/rag/FileDiscoveryPage.tsx`, `frontend/src/features/rag/FileDiscoveryPage.test.tsx`. 수정 파일 7개: `frontend/src/App.tsx`(`/files` Route + `key={subject}`), `frontend/src/api/sources.ts`(`syncSource`/`SyncRunResponse` 추가), `frontend/src/components/Sidebar.tsx`(문서 찾기 활성화), `frontend/src/components/Sidebar.test.tsx`, `frontend/src/index.css`(`.sync-panel`/`.file-list`/`.file-row*` 규칙 추가 - 기존 연한 파란색 Sidebar/흰색 Main 배경 Token은 무변경), `frontend/src/pages/SourcesPage.tsx`(동기화 State/Handler/Row 확장), `frontend/src/pages/SourcesPage.test.tsx`(동기화 Test 14개 추가).
+- 실제로 마주치고 고친 실전 결함(추측이 아니다, Vitest로 직접 재현·확인): `FileDiscoveryPage`에서 "같은 조건으로 다시 시도" - 정확히 이번 작업이 요구한 재시도 시나리오 - 를 그대로 재현하는 Test(`replaces stale results with an honest error banner on an auth/permission failure`, 이후 `submitted`/`page` 참조 불변 상황)가 실패해, `submitted`/`page` State가 이전 값과 참조까지 같으면 React가 재-Render를 건너뛰어 검색 Effect가 재실행되지 않는(즉 "검색 중입니다..." 표시가 영구 정지) 결함을 발견했다. `searchAttempt` 명시적 Trigger Counter(제출/이전/다음 Page Handler에서 증가)를 검색 Effect 의존성에 추가해 교정 - 이 값 자체는 검색 조건에 포함되지 않는다. 교정 후 같은 Test 포함 전체 통과 재확인.
+- ESLint 정리: `react-hooks/set-state-in-effect`(Effect Body에서의 동기 `setState`) 위반 2건을 발견 - `FileDiscoveryPage`의 (당시 존재했던) 계정 전환 초기화 Effect와 검색 Effect가 각각 원인이었다. 계정 전환 초기화는 `App.tsx`의 `<FileDiscoveryPage key={subject} />`(React 표준 Remount 패턴)로 대체하고, 검색 Effect의 `loading` State 설정은 그것을 유발한 사용자 Event Handler(제출/이전/다음)로 옮겨 `SourcesPage.tsx`(`refresh()`)와 동일한 기존 관례를 그대로 따랐다.
+- 실제로 실행한 명령/결과(모두 `frontend/` 기준, Backend 재실행 없음 - 이번 작업은 Frontend Only이므로 지시에 따라 기존 483/483 Backend 결과를 그대로 과거 증거로만 인용한다):
+  - `npx eslint .` - 최초 2 오류(`react-hooks/set-state-in-effect`) + 2 경고(사용되지 않는 eslint-disable) 발견 → 교정 후 **0 오류/0 경고**.
+  - `npx vitest run src/pages/SourcesPage.test.tsx` - 23/23 통과(기존 9 + 신규 동기화 Test 14).
+  - `npx vitest run src/features/rag/FileDiscoveryPage.test.tsx` - 신규 15/15 통과(위 재시도 결함을 실제로 잡아낸 첫 실행은 15개 중 2개 실패 → 교정 후 재실행 15/15).
+  - `npm test`(전체 Vitest) - **5개 Test 파일, 53/53 통과**, 실패/오류 0.
+  - `npm run lint` - 통과(0 오류/0 경고).
+  - `npm run build`(`tsc -b && vite build`) - Type 오류 없이 통과, 산출물 `dist/` 정상 생성(gzip 약 91KB).
+  - `git status --porcelain`/`git diff --stat`/`git diff --check` - 위에 적은 11개 파일로 정확히 Scope가 한정됨을 확인, Whitespace 문제 없음.
+- 보안/DB/회귀 영향: Backend/Migration/Kafka/`EffectivePermissionService`/`FileMetadataDiscoveryService`/`GoogleDriveConnector` 등 어떤 기존 서버 코드도 수정하지 않았다 - Frontend는 서버가 이미 강제하는 ADMIN-Only/Owner-Only 권한을 "그대로 반영해 숨기기만" 할 뿐, 새 인가 결정을 내리지 않는다(예: 비관리자는 관리자 전용 목록 API를 애초에 호출하지 않지만, 이는 Client 편의이지 서버 인가를 대체하지 않는다 - 서버가 여전히 매 요청을 독립적으로 검증한다). M10의 Tri-state `hasMore` 계약(`true`/`false`/`null`+`partial`)을 한 글자도 바꾸지 않고 그대로 소비했다.
+- 가정/미검증(UNVERIFIED, 사용자 진행 대기 - MVP-03/MVP-30과 동일한 이유): 실제 브라우저로 이 두 화면(동기화 버튼 클릭, 파일 검색/Paging/원본 열기 Link 클릭)을 열어 확인하는 것, 실제 Google 계정으로 동기화·검색이 성공하는 것, 실제 Keycloak 세션에서의 계정 전환(`key={subject}` Remount)이 브라우저에서 기대대로 동작하는 것 - 이 세션에는 브라우저 자동화 도구가 연결돼 있지 않았다. 이 셋 모두 이 세션이 "성공했다"고 주장하지 않는다.
+- 남은 작업(승인된 후순위, 위 "MVP-30 후속" 문단 참고): M10 Deep-Page 재-Scan 최적화, Scan/Time-Budget 실측 재조정, Frontend 고급 재시도 UX, 전반적 문서 정리 - 넷 다 지금 필요한 기본 기능이 아니라 MVP 이후 개선 후보로 명시적으로 미뤄졌다. 그 밖에 이번 Slice가 발견했지만 구현하지 않은 새 결함/우려는 없다.
+- 확인: `google-oauth.local.env`/`infra/testbed/secrets/**`/`docs/workmd/**` 접근 없음. 실제 계정/Live Drive 호출/Docker/Keycloak 기동 없음. Git은 읽기 전용 조회만 사용, 어떤 Git 변경도 수행하지 않았다.
+
 ## 공부용 메모
 
 Token은 Google API용 출입증이고 Master Key는 저장된 출입증을 잠그고 여는 열쇠다. DB에는 잠긴 출입증만 두고 열쇠는 실행 환경에서 별도로 제공한다. Frontend에는 Google Token을 전달하지 않고 연결 성공 여부만 보여준다.
+
+
+## v1.5 관제 검토 스냅샷
+
+2026-09-15: M16B latest는 frontend 53 tests/5 files, lint/build 통과를 보고했다. 본 문서 개정에서 제품 테스트를 재실행하지 않았다. M16B 실제 브라우저/Google 검증은 미검증이다. M10 backend 483 tests/66 classes는 이전 보고 기록이다. M09 전체 consumer/실제 색인 연동은 미완료이며 publisher는 활성화 gate 통과 전 켜지 않는다. 새로운 공유·다운로드·재연결 목표는 미구현이다.

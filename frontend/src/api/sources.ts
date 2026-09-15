@@ -47,3 +47,34 @@ export function disconnectSource(client: ApiClient, id: number): Promise<void> {
 export function authorizeGoogleSource(client: ApiClient, sourceId: number): Promise<GoogleAuthorizeResponse> {
   return client.get<GoogleAuthorizeResponse>(`/admin/sources/google/authorize?sourceId=${sourceId}`)
 }
+
+/**
+ * Mirrors backend {@code SyncRunResponse}(F-BE-062, `POST
+ * /api/admin/sources/{id}/sync`) - a Metadata/ACL Catalog Sync run, not
+ * Content indexing. `total`/`success`/`failed` are sync *processing* counts
+ * (a document seen more than once across pages could count more than once) -
+ * not necessarily unique files, and not "documents made AI-answerable".
+ */
+export interface SyncRunResponse {
+  runId: number
+  sourceId: number
+  mode: string
+  /** One of the backend's own {@code SyncRunEntity.STATUS_*} strings (e.g. COMPLETED/PARTIAL_FAILURE/FAILED/ABANDONED/RUNNING) - kept as its string contract. */
+  status: string
+  total: number
+  success: number
+  failed: number
+  startedAt: string
+  endedAt: string | null
+}
+
+/**
+ * Triggers one manual Metadata/ACL Catalog sync for a Source this admin owns.
+ * The call is synchronous - it does not return until the backend has finished
+ * (or failed) the run. There is no job/progress API to poll, so callers must
+ * show a single indeterminate waiting state and must never invent a
+ * percentage or auto-retry on their own.
+ */
+export function syncSource(client: ApiClient, sourceId: number): Promise<SyncRunResponse> {
+  return client.post<SyncRunResponse>(`/admin/sources/${sourceId}/sync`, undefined)
+}

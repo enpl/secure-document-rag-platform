@@ -5,8 +5,14 @@ import { MemoryRouter } from 'react-router-dom'
 import { SourcesPage } from './SourcesPage'
 import { useAuth } from '../auth/AuthContext'
 import type { AuthState } from '../auth/AuthContext'
-import { authorizeGoogleSource, createGoogleDriveSource, disconnectSource, listSources } from '../api/sources'
-import type { SourceResponse } from '../api/sources'
+import {
+  authorizeGoogleSource,
+  createGoogleDriveSource,
+  disconnectSource,
+  listSources,
+  syncSource,
+} from '../api/sources'
+import type { SourceResponse, SyncRunResponse } from '../api/sources'
 import { ApiError } from '../api/client'
 
 vi.mock('../auth/AuthContext')
@@ -25,6 +31,7 @@ vi.mock('../api/sources', async () => {
     createGoogleDriveSource: vi.fn(),
     disconnectSource: vi.fn(),
     authorizeGoogleSource: vi.fn(),
+    syncSource: vi.fn(),
   }
 })
 
@@ -33,6 +40,7 @@ const mockedListSources = vi.mocked(listSources)
 const mockedCreate = vi.mocked(createGoogleDriveSource)
 const mockedDisconnect = vi.mocked(disconnectSource)
 const mockedAuthorize = vi.mocked(authorizeGoogleSource)
+const mockedSync = vi.mocked(syncSource)
 
 function asAuth(partial: Partial<AuthState>): AuthState {
   return partial as unknown as AuthState
@@ -56,6 +64,25 @@ function renderPageWithCallback(flag: 'success' | 'failed') {
 
 function activeUnconnectedSource(id: number, name: string): SourceResponse {
   return { id, type: 'GOOGLE_DRIVE', name, status: 'ACTIVE', lastSyncAt: null, credentialPresent: false }
+}
+
+function activeConnectedSource(id: number, name: string): SourceResponse {
+  return { id, type: 'GOOGLE_DRIVE', name, status: 'ACTIVE', lastSyncAt: null, credentialPresent: true }
+}
+
+function syncRun(overrides: Partial<SyncRunResponse> = {}): SyncRunResponse {
+  return {
+    runId: 1,
+    sourceId: 1,
+    mode: 'FULL',
+    status: 'COMPLETED',
+    total: 10,
+    success: 10,
+    failed: 0,
+    startedAt: '2026-09-15T00:00:00Z',
+    endedAt: '2026-09-15T00:00:05Z',
+    ...overrides,
+  }
 }
 
 beforeEach(() => {
@@ -247,5 +274,147 @@ describe('SourcesPage Google callback return banner (M16A follow-up)', () => {
     resolveFirst([])
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(screen.getByText('두 번째 응답이 최신')).toBeInTheDocument()
+  })
+})
+
+describe('SourcesPage manual sync (M16B)', () => {
+  beforeEach(() => {
+    mockedUseAuth.mockReturnValue(asAuth({ isAdmin: true }))
+  })
+
+  it('offers no sync action for a source without a stored credential', async () => {
+    mockedListSources.mockResolvedValue([activeUnconnectedSource(1, '팀 드라이브')])
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('팀 드라이브')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /메타데이터 동기화/ })).not.toBeInTheDocument()
+  })
+
+  it('runs a sync, shows a single indeterminate waiting state, then a completed result', async () => {
+    mockedListSources.mockResolvedValue([activeConnectedSource(1, '팀 드라이브')])
+    let resolveSync: (value: SyncRunResponse) => void = () => {}
+    mockedSync.mockImplementation(
+      () =>
+        new Promise<SyncRunResponse>((resolve) => {
+          resolveSync = resolve
+        }),
+    )
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('팀 드라이브')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: '메타데이터 동기화' }))
+
+    const busyButton = screen.getByRole('button', { name: '동기화 중...' })
+    expect(busyButton).toBeDisabled()
+    expect(busyButton).toHaveAttribute('aria-busy', 'true')
+    // 가짜 진행률 표시(%)를 절대 만들지 않는다 - 부정형 상태 문구 하나만 있어야 한다.
+    expect(screen.queryByText(/%/)).not.toBeInTheDocument()
+
+    mockedListSources.mockResolvedValueOnce([activeConnectedSource(1, '팀 드라이브')])
+    resolveSync(syncRun({ status: 'COMPLETED', total: 12, success: 12, failed: 0 }))
+
+    await waitFor(() => expect(screen.getByText(/동기화가 완료됐습니다/)).toBeInTheDocument())
+    expect(screen.getByText(/처리 12건 중 성공 12건 \/ 실패 0건/)).toBeInTheDocument()
+    // Source 목록을 새로고침한다(lastSyncAt 등 반영) - Mount 1회 + Sync 이후 1회.
+    await waitFor(() => expect(mockedListSources).toHaveBeenCalledTimes(2))
+  })
+
+  it('prevents a duplicate sync submit while one is already in flight', async () => {
+    mockedListSources.mockResolvedValue([activeConnectedSource(1, '팀 드라이브')])
+    mockedSync.mockImplementation(() => new Promise<SyncRunResponse>(() => {}))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('팀 드라이브')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: '메타데이터 동기화' }))
+    const busyButton = screen.getByRole('button', { name: '동기화 중...' })
+    await user.click(busyButton) // Disabled 버튼 클릭 - 아무 효과가 없어야 한다.
+
+    expect(mockedSync).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables connect/disconnect for the row while its sync is pending', async () => {
+    mockedListSources.mockResolvedValue([activeConnectedSource(1, '팀 드라이브')])
+    mockedSync.mockImplementation(() => new Promise<SyncRunResponse>(() => {}))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('팀 드라이브')).toBeInTheDocument())
+
+    await userEvent.setup().click(screen.getByRole('button', { name: '메타데이터 동기화' }))
+
+    expect(screen.getByRole('button', { name: 'Google 재연결' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '연결 해제' })).toBeDisabled()
+  })
+
+  it('shows a real error for a partial/failed run even though the HTTP call itself succeeded', async () => {
+    mockedListSources.mockResolvedValue([activeConnectedSource(1, '팀 드라이브')])
+    mockedSync.mockResolvedValue(syncRun({ status: 'PARTIAL_FAILURE', total: 10, success: 7, failed: 3 }))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('팀 드라이브')).toBeInTheDocument())
+    await userEvent.setup().click(screen.getByRole('button', { name: '메타데이터 동기화' }))
+
+    await waitFor(() => expect(screen.getByText(/완전히 끝나지 않았습니다.*일부 실패/)).toBeInTheDocument())
+    expect(screen.getByText(/처리 10건 중 성공 7건 \/ 실패 3건/)).toBeInTheDocument()
+  })
+
+  it.each([
+    ['SYNC_ALREADY_RUNNING' as const, /이미 이 Source에 대한 동기화가 진행 중입니다/],
+    ['CREDENTIAL_UNAVAILABLE' as const, /Google 계정 연결 정보를 사용할 수 없습니다/],
+    ['AUTHENTICATION_REQUIRED' as const, /로그인 인증을 확인하지 못했습니다/],
+    ['NOT_FOUND' as const, /해당 Source를 찾을 수 없습니다/],
+    ['NETWORK_ERROR' as const, /서버에 연결할 수 없습니다/],
+  ])('reports %s honestly instead of a generic message', async (code, expectedText) => {
+    mockedListSources.mockResolvedValue([activeConnectedSource(1, '팀 드라이브')])
+    mockedSync.mockRejectedValue(new ApiError(409, { code, message: 'x', traceId: null }))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('팀 드라이브')).toBeInTheDocument())
+    await userEvent.setup().click(screen.getByRole('button', { name: '메타데이터 동기화' }))
+
+    await waitFor(() => expect(screen.getByText(expectedText)).toBeInTheDocument())
+  })
+
+  it('keeps the last sync result message visible across the list refresh it triggers', async () => {
+    mockedListSources.mockResolvedValue([activeConnectedSource(1, '팀 드라이브')])
+    mockedSync.mockResolvedValue(syncRun({ status: 'COMPLETED' }))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('팀 드라이브')).toBeInTheDocument())
+    await userEvent.setup().click(screen.getByRole('button', { name: '메타데이터 동기화' }))
+
+    await waitFor(() => expect(screen.getByText(/동기화가 완료됐습니다/)).toBeInTheDocument())
+    // refresh()가 목록을 다시 불러온 뒤에도(별도 State이므로) 결과 메시지가 남아 있어야 한다.
+    await waitFor(() => expect(mockedListSources).toHaveBeenCalledTimes(2))
+    expect(screen.getByText(/동기화가 완료됐습니다/)).toBeInTheDocument()
+  })
+
+  it('clears the previous outcome banner once a new sync attempt starts', async () => {
+    mockedListSources.mockResolvedValue([activeConnectedSource(1, '팀 드라이브')])
+    mockedSync.mockResolvedValueOnce(syncRun({ status: 'FAILED' }))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('팀 드라이브')).toBeInTheDocument())
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: '메타데이터 동기화' }))
+    await waitFor(() => expect(screen.getByText(/완전히 끝나지 않았습니다.*실패\)/)).toBeInTheDocument())
+
+    let resolveSecond: (value: SyncRunResponse) => void = () => {}
+    mockedSync.mockImplementationOnce(
+      () =>
+        new Promise<SyncRunResponse>((resolve) => {
+          resolveSecond = resolve
+        }),
+    )
+    await user.click(screen.getByRole('button', { name: '메타데이터 동기화' }))
+
+    expect(screen.queryByText(/완전히 끝나지 않았습니다/)).not.toBeInTheDocument()
+
+    resolveSecond(syncRun({ status: 'COMPLETED' }))
+    await waitFor(() => expect(screen.getByText(/동기화가 완료됐습니다/)).toBeInTheDocument())
   })
 })

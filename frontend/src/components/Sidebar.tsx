@@ -11,9 +11,10 @@ interface SidebarProps {
 }
 
 /**
- * Approved sidebar layout: branding, "새 질문", "문서 찾기"(준비 중),
- * ADMIN 전용 "연결 관리", 계정/로그아웃. 영구 대화 기록, 업로드/Vault, 임의
- * Provider 선택기, Admin 대시보드는 의도적으로 없다(CLAUDE.md 범위 제한).
+ * Approved sidebar layout: branding, "새 질문", "문서 찾기"(M16B - Metadata
+ * Discovery, `GET /api/rag/files`), ADMIN 전용 "연결 관리", 계정/로그아웃.
+ * 영구 대화 기록, 업로드/Vault, 임의 Provider 선택기, Admin 대시보드는
+ * 의도적으로 없다(CLAUDE.md 범위 제한).
  */
 export function Sidebar({ open, onNavigate, onClose }: SidebarProps) {
   const { isAdmin, email, subject, logout } = useAuth()
@@ -32,10 +33,9 @@ export function Sidebar({ open, onNavigate, onClose }: SidebarProps) {
           새 질문
         </NavLink>
 
-        <button type="button" className="sidebar__link" aria-disabled="true" disabled>
+        <NavLink to="/files" className="sidebar__link" onClick={onNavigate}>
           문서 찾기
-          <span className="sidebar__badge">준비 중</span>
-        </button>
+        </NavLink>
 
         {isAdmin && (
           <NavLink to="/admin/sources" className="sidebar__link" onClick={onNavigate}>
