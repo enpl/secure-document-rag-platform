@@ -4,7 +4,9 @@ import { AppShell } from './components/AppShell'
 import { CenteredMessage } from './components/CenteredMessage'
 import { HomePage } from './pages/HomePage'
 import { SourcesPage } from './pages/SourcesPage'
+import { SharedMaterialsAdminPage } from './pages/SharedMaterialsAdminPage'
 import { FileDiscoveryPage } from './features/rag/FileDiscoveryPage'
+import { MyDrivePage } from './features/sources/MyDrivePage'
 
 /**
  * OIDC Authorization Code + PKCE is redirect-based - there is no custom
@@ -63,10 +65,29 @@ function App() {
         }
       />
       <Route
+        path="/my-drive"
+        element={
+          <AppShell title="내 Drive">
+            {/* key={subject}: SourcesPage/FileDiscoveryPage와 같은 이유 - 계정이
+                바뀌면 이전 계정의 연결/선택/공유 목록 State가 새 계정 화면에
+                남지 않도록 강제로 재마운트한다. */}
+            <MyDrivePage key={subject} />
+          </AppShell>
+        }
+      />
+      <Route
         path="/admin/sources"
         element={
           <AppShell title="연결 관리">
             <SourcesPage />
+          </AppShell>
+        }
+      />
+      <Route
+        path="/admin/shares"
+        element={
+          <AppShell title="공유 자료 관리">
+            <SharedMaterialsAdminPage />
           </AppShell>
         }
       />

@@ -12,7 +12,8 @@ interface SidebarProps {
 
 /**
  * Approved sidebar layout: branding, "새 질문", "문서 찾기"(M16B - Metadata
- * Discovery, `GET /api/rag/files`), ADMIN 전용 "연결 관리", 계정/로그아웃.
+ * Discovery, `GET /api/rag/files`), "내 Drive"(M16C - 소유자 전용 개인 연결/
+ * 선택 공유, 누구나), ADMIN 전용 "연결 관리"/"공유 자료 관리", 계정/로그아웃.
  * 영구 대화 기록, 업로드/Vault, 임의 Provider 선택기, Admin 대시보드는
  * 의도적으로 없다(CLAUDE.md 범위 제한).
  */
@@ -37,9 +38,19 @@ export function Sidebar({ open, onNavigate, onClose }: SidebarProps) {
           문서 찾기
         </NavLink>
 
+        <NavLink to="/my-drive" className="sidebar__link" onClick={onNavigate}>
+          내 Drive
+        </NavLink>
+
         {isAdmin && (
           <NavLink to="/admin/sources" className="sidebar__link" onClick={onNavigate}>
             연결 관리
+          </NavLink>
+        )}
+
+        {isAdmin && (
+          <NavLink to="/admin/shares" className="sidebar__link" onClick={onNavigate}>
+            공유 자료 관리
           </NavLink>
         )}
       </nav>

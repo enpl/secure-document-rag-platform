@@ -78,3 +78,62 @@ export interface SyncRunResponse {
 export function syncSource(client: ApiClient, sourceId: number): Promise<SyncRunResponse> {
   return client.post<SyncRunResponse>(`/admin/sources/${sourceId}/sync`, undefined)
 }
+
+// ------------------------------------------------------------------
+// M16C - owner-scoped "내 Drive" API (`SourceUserController`, `/api/sources`).
+// Any authenticated USER or ADMIN acting as an owner uses these - they are a
+// separate endpoint family from the ADMIN-only `/api/admin/sources/**` above,
+// even though both ultimately call the same `SourceConnectionService`/
+// `SourceSyncService` (owner-scoped either way). Never mix the two base paths.
+// ------------------------------------------------------------------
+
+/** Mirrors backend {@code SourceFileResponse} (`GET /api/sources/{id}/files`) - a private-picker row, not a shared/discoverable one. */
+export interface SourceFileResponse {
+  documentId: number
+  name: string
+  mimeType: string
+  modifiedAt: string | null
+  indexStatus: string
+}
+
+/** Mirrors backend {@code SourceFilesPageResponse} - a plain boolean `hasMore` (unlike RAG discovery's tri-state), no raw total/cursor. */
+export interface SourceFilesPageResponse {
+  items: SourceFileResponse[]
+  hasMore: boolean
+}
+
+export function listMyDriveSources(client: ApiClient): Promise<SourceResponse[]> {
+  return client.get<SourceResponse[]>('/sources')
+}
+
+export function createMyGoogleDriveSource(client: ApiClient, name: string): Promise<SourceResponse> {
+  return client.post<SourceResponse>('/sources', {
+    type: 'GOOGLE_DRIVE' satisfies SourceType,
+    name,
+    syncMode: GOOGLE_DRIVE_SYNC_MODE,
+  })
+}
+
+export function disconnectMyDriveSource(client: ApiClient, id: number): Promise<void> {
+  return client.del(`/sources/${id}`)
+}
+
+export function syncMyDriveSource(client: ApiClient, sourceId: number): Promise<SyncRunResponse> {
+  return client.post<SyncRunResponse>(`/sources/${sourceId}/sync`, undefined)
+}
+
+/**
+ * Honest bounded pagination over the owner's own private catalog - there is
+ * no folder hierarchy in this response (flat list only); a full Drive
+ * crawler/synthetic folder tree is explicitly out of this slice's scope.
+ * Never call this for a Source the current user does not own - the backend
+ * independently re-checks ownership regardless.
+ */
+export function listMyDriveFiles(
+  client: ApiClient,
+  sourceId: number,
+  page: number,
+  size: number,
+): Promise<SourceFilesPageResponse> {
+  return client.get<SourceFilesPageResponse>(`/sources/${sourceId}/files?page=${page}&size=${size}`)
+}

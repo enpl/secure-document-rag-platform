@@ -117,7 +117,7 @@ class FileMetadataDiscoveryServiceTest {
         String recipient = recipient();
         Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Diagram.png", "image/png", "v1",
                 "SKIPPED_UNSUPPORTED");
-        shareWith(fixture, publisher, recipient);
+        DocumentShareEntity share = shareWith(fixture, publisher, recipient);
         fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(),
                 SourceMetadataVerificationResult.verified("Diagram.png", "image/png", "v1", clock.instant(), true));
 
@@ -130,6 +130,71 @@ class FileMetadataDiscoveryServiceTest {
         assertThat(item.indexStatus()).isEqualTo("SKIPPED_UNSUPPORTED");
         assertThat(item.viewUrl()).isEqualTo("https://drive.google.com/file/d/" + fixture.sourceDocumentId()
                 + "/view");
+        // M16C - documentId와 shareId를 절대 혼동하지 않는다(둘 다 우연히 다른 값이어야
+        // 이 Assertion이 실제로 shareId를 검증한다는 뜻이 된다).
+        assertThat(item.shareId()).isEqualTo(share.getId());
+        assertThat(item.shareId()).isNotEqualTo(item.documentId());
+        assertThat(item.allowedActions()).containsExactly("VIEW");
+    }
+
+    /**
+     * M16C 신규 - 응답의 {@code shareId}/{@code allowedActions}가 정확히 "이 항목을
+     * 노출시킨 그 공유"에 결합돼 있는지 확인한다(다른 공유/다른 수신자의 값이
+     * 섞이지 않는다). DOWNLOAD Action이 부여된 공유는 그 값을 그대로 노출하고,
+     * VIEW만 부여된 공유는 DOWNLOAD를 포함하지 않는다.
+     */
+    @Test
+    void shareIdAndAllowedActionsAreBoundToTheExactSurvivingShareNotAnotherOne() {
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture viewOnly = createDocument(publisher, "ACTIVE", "ACTIVE", "ViewOnly.pdf", "application/pdf", "v1",
+                "PENDING");
+        Fixture downloadable = createDocument(publisher, "ACTIVE", "ACTIVE", "Downloadable.pdf", "application/pdf",
+                "v1", "PENDING");
+        DocumentShareEntity viewOnlyShare = shareWith(viewOnly, publisher, recipient);
+        DocumentShareEntity downloadableShare = shareWithActions(downloadable, publisher, recipient,
+                "VIEW,DOWNLOAD");
+        fakeConnector.stub(viewOnly.sourceId(), viewOnly.sourceDocumentId(),
+                SourceMetadataVerificationResult.verified("ViewOnly.pdf", "application/pdf", "v1", clock.instant(),
+                        true));
+        fakeConnector.stub(downloadable.sourceId(), downloadable.sourceDocumentId(),
+                SourceMetadataVerificationResult.verified("Downloadable.pdf", "application/pdf", "v1",
+                        clock.instant(), true));
+
+        RagFileSearchResponse response = search(recipient, emptyQuery());
+
+        assertThat(response.items()).hasSize(2);
+        RagFileItem viewOnlyItem = response.items().stream()
+                .filter(item -> item.documentId().equals(viewOnly.documentId())).findFirst().orElseThrow();
+        RagFileItem downloadableItem = response.items().stream()
+                .filter(item -> item.documentId().equals(downloadable.documentId())).findFirst().orElseThrow();
+        assertThat(viewOnlyItem.shareId()).isEqualTo(viewOnlyShare.getId());
+        assertThat(viewOnlyItem.allowedActions()).containsExactly("VIEW");
+        assertThat(downloadableItem.shareId()).isEqualTo(downloadableShare.getId());
+        assertThat(downloadableItem.allowedActions()).containsExactlyInAnyOrder("VIEW", "DOWNLOAD");
+    }
+
+    /**
+     * M16C 신규 - C(공유받지 않은 제3자)에게는 애초에 이 문서 자체가 노출되지
+     * 않는다(shareId를 확인할 응답 항목 자체가 없다) - 그룹 기반 회귀와 별개로,
+     * 이번에 추가한 shareId/allowedActions 노출 자체가 새로운 유출 경로를 열지
+     * 않았음을 직접 확인한다.
+     */
+    @Test
+    void shareIdIsNeverExposedToAThirdPartyWhoWasNotAnAuthorizedRecipient() {
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        String outsider = "outsider-" + unique();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "Secret.pdf", "application/pdf", "v1",
+                "PENDING");
+        shareWith(fixture, publisher, recipient);
+        fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(),
+                SourceMetadataVerificationResult.verified("Secret.pdf", "application/pdf", "v1", clock.instant(),
+                        true));
+
+        RagFileSearchResponse outsiderResponse = search(outsider, emptyQuery());
+
+        assertThat(outsiderResponse.items()).isEmpty();
     }
 
     /**
@@ -922,8 +987,14 @@ class FileMetadataDiscoveryServiceTest {
 
     /** M10B - ACL grant 대신 명시적 공유(VIEW, INTERNAL 등급)를 지정 수신자에게 게시한다. */
     private DocumentShareEntity shareWith(Fixture fixture, String publisherSubject, String recipientSubject) {
+        return shareWithActions(fixture, publisherSubject, recipientSubject, "VIEW");
+    }
+
+    /** M16C - Action Set을 직접 지정한다(예: {@code "VIEW,DOWNLOAD"}) - shareId/allowedActions 노출 검증용. */
+    private DocumentShareEntity shareWithActions(Fixture fixture, String publisherSubject, String recipientSubject,
+            String actionsCsv) {
         DocumentShareEntity share = new DocumentShareEntity(publisherSubject, fixture.sourceId(),
-                fixture.documentId(), "INTERNAL", "VIEW", clock.instant());
+                fixture.documentId(), "INTERNAL", actionsCsv, clock.instant());
         documentShareJpaRepository.saveAndFlush(share);
         documentShareRecipientJpaRepository
                 .saveAndFlush(new DocumentShareRecipientEntity(share.getId(), recipientSubject));
