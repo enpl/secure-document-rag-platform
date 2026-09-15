@@ -497,9 +497,27 @@ public class GoogleDriveClient {
      * {@code removed=true}가 "삭제됐다"인지 "이 Credential이 접근권한을
      * 잃었다"인지의 실제 모호함은 여기서 손대지 않는다 - 그 판단은 여전히
      * M09 몫이다.
+     *
+     * <p><b>M09A 교정 - {@code changeType="drive"}(공유 드라이브 자체에 대한
+     * 변경) 인식.</b> 공식 {@code changes.list} 문서(Class Javadoc 참고,
+     * 2026-09-14 재확인)는 {@code changeType}이 {@code file} 또는 {@code drive}
+     * 일 수 있고, {@code drive} 일 때는 이 응답이 파일이 아니라 공유 드라이브
+     * 자체를 가리키므로 {@code fileId}/{@code file}이 채워지지 않는다고
+     * 명시한다. 교정 전에는 이 메서드가 {@code changeType}을 전혀 보지 않고
+     * {@code fileId}가 비어있다는 이유만으로 무조건 Malformed로 거부했다 -
+     * 정상적인 Drive-Level 이벤트를 실제 검증 실패와 구분하지 못하는 결함
+     * 이었다(MVP-08). 이제 {@code changeType="drive"}는 형태만 통과시킨다 -
+     * 이를 파일 삭제로 취급할지/명시적으로 미지원 처리할지는 여전히 Connector
+     * (M09, {@code GoogleDriveConnector.toChangeRecord})가 결정한다.</p>
      */
     private static GoogleChange requireValidChange(GoogleChange change) {
-        if (change == null || isBlank(change.fileId())) {
+        if (change == null) {
+            throw new GoogleApiException(GoogleApiException.Category.UNKNOWN, "malformed change response from google");
+        }
+        if ("drive".equals(change.changeType())) {
+            return change;
+        }
+        if (isBlank(change.fileId())) {
             throw new GoogleApiException(GoogleApiException.Category.UNKNOWN, "malformed change response from google");
         }
         if (Boolean.TRUE.equals(change.removed())) {

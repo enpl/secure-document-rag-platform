@@ -213,7 +213,17 @@ public class EffectivePermissionService {
             return PolicyDecision.deny(PolicyReasonCode.SOURCE_INACTIVE);
         }
 
-        // 4. ACL Freshness
+        // 4. ACL Freshness (+ M09A 교정: 명시적으로 알려진 Untrusted 상태)
+        //
+        // document.getPermissionsUntrustedSince() != null이면, 이 문서의 ACL을 마지막으로
+        // 다시 확인하려던 시도가 실패/불확실(UNKNOWN/FAILED)했다는 뜻이다 - Sync가 그 사실을
+        // 알면서도 기존 source_permissions 행을 증거로 남겨뒀을 뿐이다(V009). 그 행이 우연히
+        // Freshness Window 안에 있다는 이유만으로 계속 ALLOW를 내리지 않는다 - TTL과 무관하게
+        // 즉시 거부한다. 다음 성공적인 재조회만 이 표시를 원자적으로 지운다(SourceSyncPageWriter/
+        // PermissionSyncWriter의 markPermissionsTrusted).
+        if (document.getPermissionsUntrustedSince() != null) {
+            return PolicyDecision.deny(PolicyReasonCode.PERMISSION_DATA_UNTRUSTED);
+        }
         List<SourcePermissionEntity> allRows = sourcePermissionJpaRepository.findByDocumentId(documentId);
         if (allRows.isEmpty()) {
             return PolicyDecision.deny(PolicyReasonCode.PERMISSION_DATA_UNTRUSTED);

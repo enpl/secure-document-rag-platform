@@ -286,7 +286,25 @@ public class GoogleDriveConnector implements DocumentSourceConnector {
         }
     }
 
+    /**
+     * M09A 교정(MVP-08) - {@code changeType}을 먼저 확인한다. 이전에는 이
+     * 메서드가 {@code changeType}을 전혀 읽지 않아, {@code changeType="drive"}
+     * (공유 드라이브 자체에 대한 변경 - {@code fileId}/{@code file}이 채워지지
+     * 않는다, {@link GoogleDriveClient} Class Javadoc 참고)가 {@code
+     * change.file() == null}이라는 이유만으로 파일 삭제(REMOVED_OR_ACCESS_LOST)
+     * 로 잘못 승격될 수 있었다 - 실제로는 파일이 지워진 것이 전혀 아니다.
+     * 이제 {@code changeType="drive"}는 파일 삭제로 지어내지 않고 명시적으로
+     * 안전한 실패({@link SourceSyncException.Reason#FAILED})로 처리한다 - Core
+     * MVP는 공유 드라이브 자체를 지원하지 않으므로({@code CLAUDE.md} 범위),
+     * 이 Change Feed 전체를 "부분 실패"로 표시하고 멈춘다(호출자인 {@code
+     * com.sdv.sync.*}가 이를 삭제/카탈로그 갱신으로 오인하지 않는다).
+     */
     private SourceChangeRecord toChangeRecord(Long sourceId, GoogleDriveClient.GoogleChange change) {
+        if ("drive".equals(change.changeType())) {
+            throw new SourceSyncException(SourceSyncException.Reason.FAILED,
+                    "unsupported drive-level change encountered - shared drive change events are not "
+                            + "supported in Core MVP");
+        }
         if (Boolean.TRUE.equals(change.removed()) || change.file() == null) {
             return new SourceChangeRecord(change.fileId(), SourceChangeType.REMOVED_OR_ACCESS_LOST, null);
         }

@@ -12,12 +12,19 @@ import com.sdv.policy.infrastructure.persistence.entity.OverlayPolicyEntity;
 import com.sdv.policy.infrastructure.persistence.repository.AiUsagePolicyJpaRepository;
 import com.sdv.policy.infrastructure.persistence.repository.OverlayPolicyJpaRepository;
 import com.sdv.policy.infrastructure.persistence.repository.SecurityLabelJpaRepository;
+import com.sdv.source.domain.SourcePermission;
+import com.sdv.source.domain.SourcePermissionsResult;
+import com.sdv.source.domain.SourcePrincipal;
 import com.sdv.source.infrastructure.persistence.entity.SourceConnectionEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourceDocumentEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourcePermissionEntity;
 import com.sdv.source.infrastructure.persistence.repository.SourceConnectionJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.SourcePermissionJpaRepository;
+import com.sdv.sync.application.PermissionSyncWriter;
+import com.sdv.sync.application.PermissionSyncWriter.PermissionApplyResult;
+import com.sdv.sync.application.SyncRunLifecycle;
+import com.sdv.sync.infrastructure.persistence.entity.SyncRunEntity;
 import com.sdv.testsupport.TestcontainersConfiguration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,6 +34,7 @@ import org.springframework.test.context.TestPropertySource;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -62,6 +70,10 @@ class EffectivePermissionServiceDecisionTest {
     private AiUsagePolicyJpaRepository aiUsagePolicyJpaRepository;
     @Autowired
     private SecurityLabelJpaRepository securityLabelJpaRepository;
+    @Autowired
+    private PermissionSyncWriter permissionSyncWriter;
+    @Autowired
+    private SyncRunLifecycle syncRunLifecycle;
 
     @Test
     void explicitMatchingSourcePermissionProceedsToAllow() {
@@ -109,6 +121,71 @@ class EffectivePermissionServiceDecisionTest {
 
         assertThat(decision.isDenied()).isTrue();
         assertThat(decision.reasonCode()).isEqualTo(PolicyReasonCode.PERMISSION_DATA_UNTRUSTED);
+    }
+
+    /**
+     * M09A 교정 핵심 시나리오(Section 3 인수 기준) - 정말로 Fresh하고 일치하는
+     * ACL이 있어 ALLOW되던 문서가, ACL 재조회 실패(UNKNOWN)를 겪은 뒤에는
+     * TTL이 전혀 만료되지 않았는데도(여전히 같은 Fresh Window 안) 즉시 DENY로
+     * 바뀌어야 한다 - {@link com.sdv.sync.application.SourceSyncPageWriter}/
+     * {@link PermissionSyncWriter}가 실패를 알면서도 기존 행을 남겨두는 것만으로는
+     * (교정 전) 그 Freshness Window 안에서 계속 ALLOW로 남는 결함이 있었다.
+     * 이후 성공적인 재조회만 신뢰를 회복시킨다.
+     */
+    @Test
+    void aFailedAclRefreshDeniesAPreviouslyAllowedDocumentDespiteFreshnessTtlNotExpiring() {
+        String owner = "owner-untrusted-refresh-" + unique();
+        long documentId = createDocument(owner, "ACTIVE", "ACTIVE");
+        long sourceId = sourceDocumentJpaRepository.findById(documentId).orElseThrow().getSourceId();
+        grantFreshRead(documentId, "user", owner);
+
+        PolicyDecision beforeFailure = effectivePermissionService.evaluate(userContext(owner), documentId, ACTION,
+                null);
+        assertThat(beforeFailure.isAllowed()).as("genuinely fresh matching evidence allows access first").isTrue();
+
+        // ACL 재조회 실패(UNKNOWN) - 실제 PermissionSyncWriter 경로를 그대로 사용한다.
+        boolean applied = applyPermissions(sourceId, owner, documentId, SourcePermissionsResult.unknown());
+        assertThat(applied).isFalse();
+
+        PolicyDecision afterFailure = effectivePermissionService.evaluate(userContext(owner), documentId, ACTION,
+                null);
+        assertThat(afterFailure.isDenied())
+                .as("a failed refresh must deny immediately, regardless of the still-valid freshness TTL")
+                .isTrue();
+        assertThat(afterFailure.reasonCode()).isEqualTo(PolicyReasonCode.PERMISSION_DATA_UNTRUSTED);
+        // 기존 ACL 행 자체는 증거로 그대로 남아있다 - 지워지지 않았다.
+        assertThat(sourcePermissionJpaRepository.findByDocumentId(documentId)).hasSize(1);
+
+        // 성공적인 재조회만 신뢰를 회복시킨다.
+        boolean restored = applyPermissions(sourceId, owner, documentId,
+                SourcePermissionsResult.ok(List.of(new SourcePermission(new SourcePrincipal("user", owner), "READ"))));
+        assertThat(restored).isTrue();
+
+        PolicyDecision afterRestore = effectivePermissionService.evaluate(userContext(owner), documentId, ACTION,
+                null);
+        assertThat(afterRestore.isAllowed()).as("a successful retry restores trust").isTrue();
+    }
+
+    /**
+     * M09A 교정 - 신뢰할 수 있게 조회했지만 실제로 권한이 0개(Authoritative
+     * OK-Empty)인 경우는 "조회 자체가 실패/불확실"과 다르다 - Writer는 이를
+     * 신뢰 회복(Untrusted 표시 해제)으로 취급해야 한다. Policy 계층에서의
+     * 최종 결과(행이 0개이므로 여전히 PERMISSION_DATA_UNTRUSTED로 거부)는
+     * 이 교정의 범위가 아니다 - 이 Test는 Writer가 "실패"와 "확인된 0개"를
+     * 절대 같은 것으로 취급하지 않는다는 것만 증명한다.
+     */
+    @Test
+    void authoritativeOkEmptyRestoresTrustEvenThoughNoRowsExist() {
+        String owner = "owner-ok-empty-" + unique();
+        long documentId = createDocument(owner, "ACTIVE", "ACTIVE");
+        long sourceId = sourceDocumentJpaRepository.findById(documentId).orElseThrow().getSourceId();
+
+        boolean applied = applyPermissions(sourceId, owner, documentId, SourcePermissionsResult.ok(List.of()));
+
+        assertThat(applied).as("an authoritative OK-empty result is a success, not a failure").isTrue();
+        assertThat(sourceDocumentJpaRepository.findById(documentId).orElseThrow().getPermissionsUntrustedSince())
+                .as("OK-empty must not be recorded as an untrusted/failed refresh")
+                .isNull();
     }
 
     @Test
@@ -475,6 +552,16 @@ class EffectivePermissionServiceDecisionTest {
     private void grantFreshRead(long documentId, String principalType, String principalValue) {
         sourcePermissionJpaRepository.saveAndFlush(
                 new SourcePermissionEntity(documentId, principalType, principalValue, "READ", Instant.now()));
+    }
+
+    private boolean applyPermissions(long sourceId, String owner, long documentId, SourcePermissionsResult result) {
+        SyncRunEntity run = syncRunLifecycle.beginRun(sourceId, owner, "PERMISSION");
+        SourceDocumentEntity document = sourceDocumentJpaRepository.findById(documentId).orElseThrow();
+        PermissionApplyResult applied = permissionSyncWriter.applyOneDocument(sourceId, run.getId(), owner, documentId,
+                document.getSourceDocumentId(), result);
+        syncRunLifecycle.finishPermissionRun(sourceId, run.getId(), owner, 1, applied.applied() ? 1 : 0,
+                applied.applied() ? 0 : 1);
+        return applied.applied();
     }
 
     private void label(long documentId, SecurityLevel level) {
