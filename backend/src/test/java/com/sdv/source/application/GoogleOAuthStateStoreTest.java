@@ -24,7 +24,7 @@ class GoogleOAuthStateStoreTest {
     @Test
     void consumeReturnsTheOriginalAttemptWhenEverythingMatches() {
         GoogleOAuthStateStore store = new GoogleOAuthStateStore(fixedClock(FIXED_NOW));
-        String state = store.create("subject-a", 42L, "browser-binding-a", "verifier-a");
+        String state = store.create("subject-a", 42L, "browser-binding-a", "verifier-a", 7L);
 
         Optional<GoogleOAuthStateStore.Attempt> result = store.consume(state, "browser-binding-a");
 
@@ -32,6 +32,9 @@ class GoogleOAuthStateStoreTest {
         assertThat(result.get().subject()).isEqualTo("subject-a");
         assertThat(result.get().sourceId()).isEqualTo(42L);
         assertThat(result.get().codeVerifier()).isEqualTo("verifier-a");
+        // M10B 보안 교정(V011) - 이 시도가 시작될 때 읽은 연결 인가 세대가 그대로 보존된다 -
+        // GoogleDriveOAuthService.commitCredential이 나중에 이 값을 현재 값과 비교한다.
+        assertThat(result.get().connectionEpoch()).isEqualTo(7L);
     }
 
     @Test
@@ -44,7 +47,7 @@ class GoogleOAuthStateStoreTest {
     @Test
     void consumeIsOneUse_aSecondConsumeOfTheSameStateFails() {
         GoogleOAuthStateStore store = new GoogleOAuthStateStore(fixedClock(FIXED_NOW));
-        String state = store.create("subject-a", 42L, "browser-binding-a", "verifier-a");
+        String state = store.create("subject-a", 42L, "browser-binding-a", "verifier-a", 7L);
 
         assertThat(store.consume(state, "browser-binding-a")).isPresent();
         assertThat(store.consume(state, "browser-binding-a"))
@@ -55,7 +58,7 @@ class GoogleOAuthStateStoreTest {
     @Test
     void consumeFailsWhenTheBrowserBindingDoesNotMatch() {
         GoogleOAuthStateStore store = new GoogleOAuthStateStore(fixedClock(FIXED_NOW));
-        String state = store.create("subject-a", 42L, "browser-binding-a", "verifier-a");
+        String state = store.create("subject-a", 42L, "browser-binding-a", "verifier-a", 7L);
 
         assertThat(store.consume(state, "wrong-binding")).isEmpty();
     }
@@ -63,7 +66,7 @@ class GoogleOAuthStateStoreTest {
     @Test
     void consumeFailsWhenTheBrowserBindingIsMissing() {
         GoogleOAuthStateStore store = new GoogleOAuthStateStore(fixedClock(FIXED_NOW));
-        String state = store.create("subject-a", 42L, "browser-binding-a", "verifier-a");
+        String state = store.create("subject-a", 42L, "browser-binding-a", "verifier-a", 7L);
 
         assertThat(store.consume(state, null)).isEmpty();
     }
@@ -88,7 +91,7 @@ class GoogleOAuthStateStoreTest {
             }
         };
         GoogleOAuthStateStore store = new GoogleOAuthStateStore(movableClock);
-        String state = store.create("subject-a", 42L, "browser-binding-a", "verifier-a");
+        String state = store.create("subject-a", 42L, "browser-binding-a", "verifier-a", 7L);
 
         now.set(FIXED_NOW.plus(Duration.ofMinutes(10)).plusSeconds(1));
 
@@ -101,8 +104,8 @@ class GoogleOAuthStateStoreTest {
     void twoAttemptsGetDifferentUnpredictableStateValues() {
         GoogleOAuthStateStore store = new GoogleOAuthStateStore(fixedClock(FIXED_NOW));
 
-        String first = store.create("subject-a", 1L, "binding-1", "verifier-1");
-        String second = store.create("subject-a", 2L, "binding-2", "verifier-2");
+        String first = store.create("subject-a", 1L, "binding-1", "verifier-1", 5L);
+        String second = store.create("subject-a", 2L, "binding-2", "verifier-2", 5L);
 
         assertThat(first).isNotEqualTo(second);
         assertThat(first.length()).isGreaterThanOrEqualTo(32);

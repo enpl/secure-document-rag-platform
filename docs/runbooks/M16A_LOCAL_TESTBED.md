@@ -5,6 +5,21 @@
 설명한다. 추가 비용은 전혀 발생하지 않는다 - 모든 것이 로컬 Docker/기존
 Gradle·npm 도구로만 동작한다.
 
+> **M10B 정합화 노트(2026-09-15, Backend Only)** - 아래 ADMIN A/B 절차는 여전히
+> 정확하다(기존 ADMIN 전용 "연결 관리" Frontend 화면과 `/api/admin/sources/**`
+> 목록/생성/삭제 API는 이번 작업에서 전혀 바꾸지 않았다). 다만 백엔드 인가
+> 표면 자체는 넓어졌다 - `GET /api/admin/sources/google/authorize`(재인증
+> 시작)는 이제 ADMIN Role 없이도 일반 인증된 USER가 자신이 소유한 Source에 대해
+> 호출할 수 있고(`SecurityConfig`의 정확히 이 경로/Method 하나에 대한 예외),
+> 같은 소유자·검증된 동일 Google 계정이면 이미 Disconnect된(DISABLED) Source도
+> 이 같은 Endpoint로 재연결할 수 있다(`docs/spec/SDV_M08_TOKEN_CONTRACT.md`
+> M10B 교정 참고). 일반 USER 본인이 파일을 선택 공유하는 화면(M16C)은 이번
+> 작업에서 아직 만들지 않았다 - 그런 화면이 이미 존재한다고 가정하지 않는다.
+> 아래 ADMIN A/B 수동 절차는 여전히 Frontend가 실제로 제공하는 유일한 UI
+> 경로만 사용한다.
+
+
+
 ## 0. 이 테스트베드가 하지 않는 것
 
 - 기존 `infra/docker-compose.dev.yml`(포트 5432/8080/8180/5173) 컨테이너/볼륨을

@@ -78,6 +78,13 @@ public class SecurityConfig {
                         // (GoogleDriveOAuthController가 State/HttpOnly Cookie/PKCE로 이 Callback을
                         // 별도로 인증한다).
                         .requestMatchers(HttpMethod.GET, "/api/admin/sources/google/callback").permitAll()
+                        // M10B(CORE_SPEC §2A.1) - 이제 일반 USER도 자신이 소유한 Source를 이 기존
+                        // Endpoint로 인증한다(Source 소유자는 더 이상 ADMIN으로 한정되지 않는다).
+                        // 정확히 이 하나의 경로/Method만 예외로 열고, /api/admin/** 나머지는
+                        // 여전히 ADMIN 전용으로 남긴다 - GoogleDriveOAuthService.startAuthorization이
+                        // 이미 Owner-Scoped 조회로 다른 사용자의 Source를 거부한다.
+                        .requestMatchers(HttpMethod.GET, "/api/admin/sources/google/authorize")
+                        .hasAnyRole("USER", "ADMIN")
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/**").hasAnyRole("USER", "ADMIN")
                         .anyRequest().denyAll())

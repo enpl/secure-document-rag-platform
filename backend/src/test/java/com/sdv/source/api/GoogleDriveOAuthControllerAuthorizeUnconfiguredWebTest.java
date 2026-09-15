@@ -52,14 +52,33 @@ class GoogleDriveOAuthControllerAuthorizeUnconfiguredWebTest {
                 .andExpect(header().doesNotExist("Set-Cookie"));
     }
 
+    /**
+     * M10B 교정(CORE_SPEC §2A.1) - 이전에는 이 경로 전체가 ADMIN 전용이라 USER Role은
+     * Security Filter 단계에서 곧바로 403이었다. 이제 일반 USER도 자신이 소유한 Source를
+     * 재인증할 수 있어야 하므로, 이 정확한 경로/Method만 예외로 USER Role을 통과시킨다
+     * (SecurityConfig). 여전히 남아있는 안전장치는 그 다음 계층인 {@code
+     * GoogleDriveOAuthService.startAuthorization}의 Owner-Scoped 조회다 - 존재하지 않거나
+     * 소유하지 않은 sourceId는 여기서 404로 거부된다(403이 아니다 - Cross-Account 존재
+     * 노출을 피하는 M04 관례 그대로).
+     */
     @Test
-    void authorizeWithOnlyUserRoleIsForbidden() throws Exception {
+    void authorizeWithOnlyUserRoleReachesTheServiceLayerAndIsRejectedThereForAnUnownedSource() throws Exception {
         mockMvc.perform(get("/api/admin/sources/google/authorize").param("sourceId", "1")
                         .with(jwt().jwt(builder -> builder.subject("user-not-admin"))
                                 .authorities(new SimpleGrantedAuthority("ROLE_USER"))))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("ACCESS_DENIED"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"))
                 .andExpect(header().doesNotExist("Set-Cookie"));
+    }
+
+    /** 반대로, 이 정확한 경로 밖의 다른 {@code /api/admin/**} 경로는 여전히 USER Role을 거부한다(범위를 넓히지 않았다는 것을 직접 증명). */
+    @Test
+    void anAdjacentAdminSourcesPathStillRejectsAUserRole() throws Exception {
+        mockMvc.perform(get("/api/admin/sources")
+                        .with(jwt().jwt(builder -> builder.subject("user-not-admin"))
+                                .authorities(new SimpleGrantedAuthority("ROLE_USER"))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
     }
 
     @Test

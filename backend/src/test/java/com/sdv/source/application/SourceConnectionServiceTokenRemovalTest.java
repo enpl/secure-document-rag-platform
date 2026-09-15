@@ -88,8 +88,16 @@ class SourceConnectionServiceTokenRemovalTest {
         assertThat(sourceDocumentJpaRepository.findBySourceIdAndStateNot(sourceId, "DELETED")).hasSize(1);
     }
 
+    /**
+     * M10B 교정(CORE_SPEC §2A.14) - Disconnect는 더 이상 이 Source의 문서를
+     * DELETED로 전이시키지 않는다("does not silently erase share settings" -
+     * 문서가 사라지면 그 위에 걸린 document_shares(V010)도 사실상 쓸모없어진다).
+     * 접근 차단은 Status=DISABLED 하나로 충분하다 - 문서 자체는 재연결 후 다시
+     * 보일 수 있도록 그대로 남는다(이전 이름 "...CascadesStatusAndDocuments"는
+     * 이 교정 전 결함 있는 동작을 가리켰다 - 이제는 Status만 전이한다).
+     */
     @Test
-    void successfulTokenDeletionClearsReferenceAndCascadesStatusAndDocuments() {
+    void successfulTokenDeletionClearsReferenceAndPausesStatusWithoutErasingDocuments() {
         String ownerSubject = "owner-token-delete-success";
         long sourceId = createWithTokenRefAndDocument(ownerSubject, "token-ref-success-case");
 
@@ -98,7 +106,9 @@ class SourceConnectionServiceTokenRemovalTest {
         SourceConnectionEntity afterDisconnect = sourceConnectionJpaRepository.findById(sourceId).orElseThrow();
         assertThat(afterDisconnect.getStatus()).isEqualTo("DISABLED");
         assertThat(afterDisconnect.getTokenRef()).isNull();
-        assertThat(sourceDocumentJpaRepository.findBySourceIdAndStateNot(sourceId, "DELETED")).isEmpty();
+        assertThat(sourceDocumentJpaRepository.findBySourceIdAndStateNot(sourceId, "DELETED"))
+                .as("disconnect must not conflate connection loss with actual provider-file deletion")
+                .hasSize(1);
         assertThat(recording().deletedSourceIds()).containsExactly(sourceId);
     }
 

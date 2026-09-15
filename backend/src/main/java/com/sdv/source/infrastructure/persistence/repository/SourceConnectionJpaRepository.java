@@ -4,6 +4,7 @@ import com.sdv.source.infrastructure.persistence.entity.SourceConnectionEntity;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -71,4 +72,36 @@ public interface SourceConnectionJpaRepository extends JpaRepository<SourceConne
 
         String getTokenRef();
     }
+
+    /**
+     * M10B 후속 교정 - "make connection-epoch invalidation safe under concurrent
+     * disconnect requests." {@code SourceConnectionService.disconnect()}가 이전에는
+     * 이 Method 호출 전 이미 읽어 둔(Unlocked) {@code SourceConnectionEntity}의 Java
+     * 필드 값에 {@code +1}만 했다 - 두 Disconnect가 겹치면 둘 다 같은 낡은 시작 값을
+     * 기준으로 계산해, 한쪽의 증가가 실제로는 DB에 전혀 반영되지 않을 수 있었다(Lost
+     * Increment). 이 Method는 {@code connection_epoch = connection_epoch + 1}을 DB
+     * Column 자신을 기준으로 원자적으로 계산한다 - Java 쪽에 어떤 값이 캐시돼 있는지와
+     * 무관하게 항상 "지금 실제 저장된 값 + 1"이 된다. 일반 {@code UPDATE} 문 자체가
+     * 그 행에 대한 배타적 Write를 요구하므로(PostgreSQL), 겹치는 두 번째 호출은 첫
+     * 번째 호출의 Transaction이 Commit할 때까지 자연히 기다렸다가 그 Commit된 값
+     * 위에서 다시 +1 한다 - 별도의 명시적 Lock 획득 문이 필요 없다({@code
+     * SourceConnectionService.disconnect()}가 이미 같은 Transaction 안에서 {@code
+     * GoogleTokenService.revoke}를 통해 이 행을 {@code SELECT ... FOR UPDATE}로 먼저
+     * 잠가 두므로, 이 Method가 실행되는 시점에는 이미 그 Lock을 보유한 상태다).
+     */
+    @Modifying
+    @Query(value = "UPDATE source_connections SET connection_epoch = connection_epoch + 1 WHERE id = :id",
+            nativeQuery = true)
+    void incrementConnectionEpoch(@Param("id") Long id);
+
+    /**
+     * M10B 후속 교정 - {@link #incrementConnectionEpoch}가 방금 원자적으로 반영한
+     * "지금 실제 값"을 1차 캐시를 우회해 다시 읽는다. {@code
+     * SourceConnectionService.disconnect()}가 이 값을 자신이 들고 있는 Managed
+     * Entity에 동기화해({@code SourceConnectionEntity.syncConnectionEpoch}), 이후
+     * 이 Transaction이 {@code status}/{@code tokenRef} 변경을 Flush할 때 낡은 Java
+     * 값으로 이 원자적 증가분을 덮어쓰지 않게 한다.
+     */
+    @Query(value = "SELECT connection_epoch FROM source_connections WHERE id = :id", nativeQuery = true)
+    Long findCurrentConnectionEpoch(@Param("id") Long id);
 }
