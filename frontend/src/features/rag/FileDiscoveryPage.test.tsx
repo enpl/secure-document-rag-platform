@@ -1,10 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { FileDiscoveryPage } from './FileDiscoveryPage'
 import { useAuth } from '../../auth/AuthContext'
 import type { AuthState } from '../../auth/AuthContext'
-import { searchFiles } from '../../api/fileDiscovery'
+import { downloadSharedFile, searchFiles } from '../../api/fileDiscovery'
 import type { RagFileItem, RagFileSearchResponse } from '../../api/fileDiscovery'
 import { listSources } from '../../api/sources'
 import type { SourceResponse } from '../../api/sources'
@@ -19,7 +19,7 @@ vi.mock('../../api/useApiClient', () => {
 })
 vi.mock('../../api/fileDiscovery', async () => {
   const actual = await vi.importActual<typeof import('../../api/fileDiscovery')>('../../api/fileDiscovery')
-  return { ...actual, searchFiles: vi.fn() }
+  return { ...actual, searchFiles: vi.fn(), downloadSharedFile: vi.fn() }
 })
 vi.mock('../../api/sources', async () => {
   const actual = await vi.importActual<typeof import('../../api/sources')>('../../api/sources')
@@ -29,6 +29,7 @@ vi.mock('../../api/sources', async () => {
 const mockedUseAuth = vi.mocked(useAuth)
 const mockedSearchFiles = vi.mocked(searchFiles)
 const mockedListSources = vi.mocked(listSources)
+const mockedDownloadSharedFile = vi.mocked(downloadSharedFile)
 
 function asAuth(partial: Partial<AuthState>): AuthState {
   return partial as unknown as AuthState
@@ -46,6 +47,8 @@ function fileItem(overrides: Partial<RagFileItem> = {}): RagFileItem {
     sourceVersionCurrent: true,
     downloadable: true,
     viewUrl: 'https://drive.google.com/file/d/abc/view',
+    shareId: 101,
+    allowedActions: ['VIEW'],
     ...overrides,
   }
 }
@@ -263,8 +266,8 @@ describe('FileDiscoveryPage safe rendering', () => {
     mockedSearchFiles.mockResolvedValue(response({ items: [fileItem()] }))
     renderPage()
 
-    await waitFor(() => expect(screen.getByRole('link', { name: '원본 열기' })).toBeInTheDocument())
-    const link = screen.getByRole('link', { name: '원본 열기' })
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Google에서 원본 열기' })).toBeInTheDocument())
+    const link = screen.getByRole('link', { name: 'Google에서 원본 열기' })
     expect(link).toHaveAttribute('href', 'https://drive.google.com/file/d/abc/view')
     expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'))
     expect(link).toHaveAttribute('target', '_blank')
@@ -277,7 +280,7 @@ describe('FileDiscoveryPage safe rendering', () => {
     renderPage()
 
     await waitFor(() => expect(screen.getByText('분기 보고서.pdf')).toBeInTheDocument())
-    expect(screen.queryByRole('link', { name: '원본 열기' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Google에서 원본 열기' })).not.toBeInTheDocument()
   })
 
   it('never shows an "Ask AI" action and explains an outdated indexed version honestly', async () => {
@@ -289,5 +292,114 @@ describe('FileDiscoveryPage safe rendering', () => {
     await waitFor(() => expect(screen.getByText(/오래된 버전일 수 있음/)).toBeInTheDocument())
     expect(screen.queryByRole('button', { name: /AI/ })).not.toBeInTheDocument()
     expect(screen.queryByText('AI에게 물어보기')).not.toBeInTheDocument()
+  })
+})
+
+describe('FileDiscoveryPage SDV download (M16C)', () => {
+  const originalCreateObjectURL = URL.createObjectURL
+  const originalRevokeObjectURL = URL.revokeObjectURL
+
+  beforeEach(() => {
+    mockedUseAuth.mockReturnValue(asAuth({ isAdmin: false }))
+    // jsdom은 이 두 API를 구현하지 않는다 - 실제 다운로드 결과를 검증하기 위해
+    // 최소한만 흉내낸다(백엔드 통합/실제 파일 저장을 재현하지 않는다).
+    URL.createObjectURL = vi.fn(() => 'blob:mock-url')
+    URL.revokeObjectURL = vi.fn()
+  })
+
+  afterEach(() => {
+    URL.createObjectURL = originalCreateObjectURL
+    URL.revokeObjectURL = originalRevokeObjectURL
+  })
+
+  it('offers the SDV download action only when this item\'s share actually granted DOWNLOAD', async () => {
+    mockedSearchFiles.mockResolvedValue(
+      response({ items: [fileItem({ documentId: 1, allowedActions: ['VIEW'] })] }),
+    )
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('분기 보고서.pdf')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'SDV 다운로드' })).not.toBeInTheDocument()
+  })
+
+  it('downloads exactly this item\'s shareId and triggers a save to the user\'s computer with the server filename', async () => {
+    mockedSearchFiles.mockResolvedValue(
+      response({ items: [fileItem({ shareId: 42, allowedActions: ['VIEW', 'DOWNLOAD'] })] }),
+    )
+    const blob = new Blob(['bytes'], { type: 'application/pdf' })
+    mockedDownloadSharedFile.mockResolvedValue({ blob, filename: '분기 보고서 (최종).pdf' })
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('분기 보고서.pdf')).toBeInTheDocument())
+    await userEvent.setup().click(screen.getByRole('button', { name: 'SDV 다운로드' }))
+
+    await waitFor(() => expect(mockedDownloadSharedFile).toHaveBeenCalledTimes(1))
+    expect(mockedDownloadSharedFile).toHaveBeenCalledWith(expect.anything(), 42, expect.any(AbortSignal))
+    await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledWith(blob))
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+    // 버튼이 "다운로드 중..."에서 원래 라벨로 돌아왔다 - 완료됐다는 뜻이다.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'SDV 다운로드' })).toBeInTheDocument())
+
+    clickSpy.mockRestore()
+  })
+
+  it('prevents a duplicate download submit for the same shareId while one is already in flight', async () => {
+    mockedSearchFiles.mockResolvedValue(
+      response({ items: [fileItem({ shareId: 7, allowedActions: ['DOWNLOAD'] })] }),
+    )
+    mockedDownloadSharedFile.mockImplementation(() => new Promise(() => {}))
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('분기 보고서.pdf')).toBeInTheDocument())
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'SDV 다운로드' }))
+    const busyButton = screen.getByRole('button', { name: '다운로드 중...' })
+    expect(busyButton).toBeDisabled()
+    await user.click(busyButton)
+
+    expect(mockedDownloadSharedFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a distinct honest message per failure reason and never converts the JSON error into a downloaded file', async () => {
+    mockedSearchFiles.mockResolvedValue(
+      response({ items: [fileItem({ shareId: 9, allowedActions: ['DOWNLOAD'] })] }),
+    )
+    mockedDownloadSharedFile.mockRejectedValue(
+      new ApiError(409, { code: 'SHARED_DOWNLOAD_DOCUMENT_CHANGED', message: 'x', traceId: null }),
+    )
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('분기 보고서.pdf')).toBeInTheDocument())
+    await userEvent.setup().click(screen.getByRole('button', { name: 'SDV 다운로드' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('원본 문서가 변경되어 다시 확인이 필요합니다. 다시 시도해 주세요.')).toBeInTheDocument(),
+    )
+    expect(URL.createObjectURL).not.toHaveBeenCalled()
+  })
+
+  it('aborts an in-flight download when the page unmounts and never applies its late result', async () => {
+    mockedSearchFiles.mockResolvedValue(
+      response({ items: [fileItem({ shareId: 5, allowedActions: ['DOWNLOAD'] })] }),
+    )
+    let capturedSignal: AbortSignal | undefined
+    mockedDownloadSharedFile.mockImplementation(
+      (_client, _shareId, signal) =>
+        new Promise((_resolve, reject) => {
+          capturedSignal = signal
+          signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+        }),
+    )
+
+    const view = renderPage()
+    await waitFor(() => expect(screen.getByText('분기 보고서.pdf')).toBeInTheDocument())
+    await userEvent.setup().click(screen.getByRole('button', { name: 'SDV 다운로드' }))
+    await waitFor(() => expect(mockedDownloadSharedFile).toHaveBeenCalledTimes(1))
+
+    view.unmount()
+
+    expect(capturedSignal?.aborted).toBe(true)
   })
 })

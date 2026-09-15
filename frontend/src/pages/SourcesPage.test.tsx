@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { SourcesPage } from './SourcesPage'
 import { useAuth } from '../auth/AuthContext'
 import type { AuthState } from '../auth/AuthContext'
@@ -62,6 +62,29 @@ function renderPageWithCallback(flag: 'success' | 'failed') {
   )
 }
 
+/** 실제로 Redirect된 정확한 Query String을 검증하기 위한 Sentinel - 위조된 임의 Parameter가 그대로 옮겨지지 않았는지 직접 확인한다. */
+function MyDriveArrivalSentinel() {
+  const location = useLocation()
+  return (
+    <div>
+      내 Drive 도착
+      <span data-testid="my-drive-query">{location.search}</span>
+    </div>
+  )
+}
+
+/** M16C 후속 교정 - 비관리자를 위한 `/my-drive` Redirect를 실제로 관찰하려면 그 목적지 Route가 있어야 한다. */
+function renderPageWithMyDriveRoute(initialEntry: string) {
+  return render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/admin/sources" element={<SourcesPage />} />
+        <Route path="/my-drive" element={<MyDriveArrivalSentinel />} />
+      </Routes>
+    </MemoryRouter>,
+  )
+}
+
 function activeUnconnectedSource(id: number, name: string): SourceResponse {
   return { id, type: 'GOOGLE_DRIVE', name, status: 'ACTIVE', lastSyncAt: null, credentialPresent: false }
 }
@@ -89,14 +112,62 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('SourcesPage role gating', () => {
-  it('shows an honest limited message for a non-admin and never calls the admin-only list API', () => {
+describe('SourcesPage role gating (M16C 후속 교정 - legacy Google 복귀 경로 호환)', () => {
+  it('redirects a non-admin to My Drive instead of an administrator-only message, and never calls the admin-only list API', () => {
     mockedUseAuth.mockReturnValue(asAuth({ isAdmin: false }))
 
-    renderPage()
+    renderPageWithMyDriveRoute('/admin/sources')
 
-    expect(screen.getByText(/관리자만 사용할 수 있습니다/)).toBeInTheDocument()
+    expect(screen.getByText('내 Drive 도착')).toBeInTheDocument()
+    expect(screen.queryByText(/관리자만 사용할 수 있습니다/)).not.toBeInTheDocument()
     expect(mockedListSources).not.toHaveBeenCalled()
+  })
+
+  it('forwards only the recognized googleConnect flag to My Drive, not arbitrary query parameters', () => {
+    mockedUseAuth.mockReturnValue(asAuth({ isAdmin: false }))
+
+    renderPageWithMyDriveRoute('/admin/sources?googleConnect=success&redirect=https://evil.example')
+
+    expect(screen.getByText('내 Drive 도착')).toBeInTheDocument()
+    expect(screen.getByTestId('my-drive-query')).toHaveTextContent('?googleConnect=success')
+  })
+
+  it('forwards a failed googleConnect result the same way as success', () => {
+    mockedUseAuth.mockReturnValue(asAuth({ isAdmin: false }))
+
+    renderPageWithMyDriveRoute('/admin/sources?googleConnect=failed')
+
+    expect(screen.getByText('내 Drive 도착')).toBeInTheDocument()
+    expect(screen.getByTestId('my-drive-query')).toHaveTextContent('?googleConnect=failed')
+  })
+
+  it('redirects with no query string at all when the legacy route was visited without a googleConnect flag', () => {
+    mockedUseAuth.mockReturnValue(asAuth({ isAdmin: false }))
+
+    renderPageWithMyDriveRoute('/admin/sources')
+
+    expect(screen.getByText('내 Drive 도착')).toBeInTheDocument()
+    expect(screen.getByTestId('my-drive-query')).toHaveTextContent('')
+  })
+
+  it('drops an unrecognized googleConnect value instead of forwarding it verbatim', () => {
+    mockedUseAuth.mockReturnValue(asAuth({ isAdmin: false }))
+
+    renderPageWithMyDriveRoute('/admin/sources?googleConnect=%3Cscript%3Ealert(1)%3C/script%3E')
+
+    expect(screen.getByText('내 Drive 도착')).toBeInTheDocument()
+    expect(screen.getByTestId('my-drive-query')).toHaveTextContent('')
+  })
+
+  it('still shows the full admin connection-management page for an ADMIN at the same legacy route', async () => {
+    mockedUseAuth.mockReturnValue(asAuth({ isAdmin: true }))
+    mockedListSources.mockResolvedValue([])
+
+    renderPageWithMyDriveRoute('/admin/sources')
+
+    await waitFor(() => expect(screen.getByText('연결 관리')).toBeInTheDocument())
+    expect(screen.queryByText('내 Drive 도착')).not.toBeInTheDocument()
+    expect(mockedListSources).toHaveBeenCalledTimes(1)
   })
 })
 

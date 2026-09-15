@@ -1,12 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useAuth } from '../../auth/AuthContext'
 import { useApiClient } from '../../api/useApiClient'
-import { searchFiles } from '../../api/fileDiscovery'
+import { describeDownloadError, downloadSharedFile, searchFiles } from '../../api/fileDiscovery'
 import type { RagFileItem, RagFileSearchParams, RagFileSearchResponse, RagSortKey } from '../../api/fileDiscovery'
 import { listSources } from '../../api/sources'
 import type { SourceResponse } from '../../api/sources'
 import { ApiError } from '../../api/client'
+import type { BlobResult } from '../../api/client'
 
 /** Server default page size(`RagDiscoveryProperties.defaultPageSize`) - no page-size tuning UI (this slice's scope). */
 const PAGE_SIZE = 20
@@ -72,6 +73,8 @@ type ResultState =
 
 type SourceOptionsState = { kind: 'idle' } | { kind: 'loaded'; sources: SourceResponse[] } | { kind: 'error' }
 
+type DownloadState = { kind: 'downloading' } | { kind: 'error'; message: string }
+
 /**
  * M16B - authenticated File Discovery over already-synced, Live-reverified
  * Metadata (`GET /api/rag/files`, M10 RAG-011). This is metadata search, not
@@ -101,6 +104,50 @@ export function FileDiscoveryPage() {
   // 사용자 Action(제출, 이전/다음)마다 이 값을 증가시켜 Effect가 항상 다시
   // 실행되도록 만든다 - 이 값 자체는 검색 조건에 포함되지 않는다.
   const [searchAttempt, setSearchAttempt] = useState(0)
+
+  // M16C - shareId를 Key로 하는 다운로드 진행 상태. 같은 shareId로의 중복 제출을
+  // 막고(동기 검사), 이 State를 통해 Row별 오류 메시지를 독립적으로 보여준다.
+  const [downloads, setDownloads] = useState<Record<number, DownloadState>>({})
+  // 진행 중인 요청을 Unmount/계정 전환 시 실제로 Abort하기 위한 Controller 보관소 -
+  // React State가 아니다(Abort 자체는 화면을 다시 그릴 필요가 없는 부수 효과다).
+  const downloadControllersRef = useRef(new Map<number, AbortController>())
+
+  useEffect(() => {
+    const controllers = downloadControllersRef.current
+    return () => {
+      // Unmount(로그아웃으로 전체 트리가 사라지거나, key={subject}로 계정이
+      // 바뀌어 이 컴포넌트 자체가 다시 마운트되는 경우 포함) - 그 시점까지
+      // 끝나지 않은 다운로드 요청을 모두 취소해, 이미 사라진 화면에 뒤늦게
+      // Blob을 내려받아 저장 대화상자를 띄우는 일이 없게 한다.
+      controllers.forEach((controller) => controller.abort())
+      controllers.clear()
+    }
+  }, [])
+
+  async function handleDownload(item: RagFileItem) {
+    if (downloads[item.shareId]?.kind === 'downloading') {
+      return
+    }
+    const controller = new AbortController()
+    downloadControllersRef.current.set(item.shareId, controller)
+    setDownloads((prev) => ({ ...prev, [item.shareId]: { kind: 'downloading' } }))
+    try {
+      const result = await downloadSharedFile(apiClient, item.shareId, controller.signal)
+      triggerBrowserDownload(result, item.name)
+      setDownloads((prev) => {
+        const next = { ...prev }
+        delete next[item.shareId]
+        return next
+      })
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return // 의도적으로 취소됨(Unmount 등) - 이미 사라진 화면에 오류를 표시하지 않는다.
+      }
+      setDownloads((prev) => ({ ...prev, [item.shareId]: { kind: 'error', message: describeDownloadError(error) } }))
+    } finally {
+      downloadControllersRef.current.delete(item.shareId)
+    }
+  }
 
   // ADMIN만 자신이 소유한 Source 목록으로 필터링할 수 있다 - 비Admin은 이
   // 목록 API 자체를 호출하지 않는다(서버가 허용하는 범위를 그대로 검색할 뿐,
@@ -291,7 +338,14 @@ export function FileDiscoveryPage() {
         </div>
       </form>
 
-      <FileResultsPanel result={result} page={page} onPrevious={goToPreviousPage} onNext={goToNextPage} />
+      <FileResultsPanel
+        result={result}
+        page={page}
+        onPrevious={goToPreviousPage}
+        onNext={goToNextPage}
+        downloads={downloads}
+        onDownload={handleDownload}
+      />
     </>
   )
 }
@@ -301,11 +355,15 @@ function FileResultsPanel({
   page,
   onPrevious,
   onNext,
+  downloads,
+  onDownload,
 }: {
   result: ResultState
   page: number
   onPrevious: () => void
   onNext: () => void
+  downloads: Record<number, DownloadState>
+  onDownload: (item: RagFileItem) => void
 }) {
   if (result.kind === 'loading') {
     return <div className="status-banner">검색 중입니다...</div>
@@ -330,7 +388,12 @@ function FileResultsPanel({
       {items.length > 0 && (
         <ul className="file-list">
           {items.map((item) => (
-            <FileRow key={item.documentId} item={item} />
+            <FileRow
+              key={item.documentId}
+              item={item}
+              downloadState={downloads[item.shareId]}
+              onDownload={() => onDownload(item)}
+            />
           ))}
         </ul>
       )}
@@ -359,8 +422,19 @@ function FileResultsPanel({
   )
 }
 
-function FileRow({ item }: { item: RagFileItem }) {
+function FileRow({
+  item,
+  downloadState,
+  onDownload,
+}: {
+  item: RagFileItem
+  downloadState?: DownloadState
+  onDownload: () => void
+}) {
   const link = safeDriveViewUrl(item.viewUrl)
+  // 이 값은 힌트일 뿐이다 - 실제 인가 여부는 다운로드 Endpoint 자신이 매번 다시 결정한다.
+  const canDownload = item.allowedActions.includes('DOWNLOAD')
+  const downloading = downloadState?.kind === 'downloading'
   return (
     <li className="file-row">
       <div className="file-row__meta">
@@ -369,14 +443,55 @@ function FileRow({ item }: { item: RagFileItem }) {
           {item.mimeType} · {formatModifiedAt(item.modifiedAt)}
         </span>
         <span className="text-secondary">{describeIndexStatus(item)}</span>
+        {downloadState?.kind === 'error' && (
+          <span className="status-banner status-banner--error">{downloadState.message}</span>
+        )}
       </div>
-      {link && (
-        <a className="btn" href={link} target="_blank" rel="noopener noreferrer">
-          원본 열기
-        </a>
-      )}
+      <div className="file-row__actions">
+        {canDownload && (
+          <button type="button" className="btn btn--primary" onClick={onDownload} disabled={downloading}>
+            {downloading ? '다운로드 중...' : 'SDV 다운로드'}
+          </button>
+        )}
+        {/* Google 원본 링크는 SDV 다운로드와 완전히 별개다 - 이 앱을 거치지 않고
+            Google 자신의 권한 확인을 그대로 따른다(SDV 공유 인가와 무관). */}
+        {link && (
+          <a className="btn" href={link} target="_blank" rel="noopener noreferrer">
+            Google에서 원본 열기
+          </a>
+        )}
+      </div>
     </li>
   )
+}
+
+/**
+ * M16C - Blob을 절대 HTML로 미리보기하거나 `localStorage`/`IndexedDB`/Service
+ * Worker Cache에 남기지 않는다. 짧게 사는 Object URL 하나를 만들어 숨겨진
+ * `<a download>`를 프로그램적으로 클릭시켜 사용자 컴퓨터로 내려받게 한 뒤,
+ * 곧바로(다음 정리 시점에) 그 URL을 해제한다 - 이미 전달된 바이트 자체를
+ * 되돌릴 방법은 없다(단지 이 탭이 그 URL을 더 오래 붙잡지 않을 뿐이다).
+ */
+function triggerBrowserDownload(result: BlobResult, fallbackName: string): void {
+  const filename = safeDownloadFilename(result.filename) ?? safeDownloadFilename(fallbackName) ?? 'download'
+  const url = URL.createObjectURL(result.blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.rel = 'noopener'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
+/** 방어적 재검증 - 서버가 이미 위험 문자를 걸러내지만, 이 값을 파일시스템 이름으로 직접 쓰기 전에 한 번 더 다듬는다. */
+function safeDownloadFilename(candidate: string | null): string | null {
+  if (!candidate) {
+    return null
+  }
+  const cleaned = candidate.replace(/[\\/:*?"<>|\r\n]/g, '').trim()
+  return cleaned.length > 0 ? cleaned : null
 }
 
 /**

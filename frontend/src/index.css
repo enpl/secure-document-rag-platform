@@ -441,6 +441,13 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.file-row__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
 .form-row {
   display: flex;
   gap: 8px;
@@ -461,6 +468,31 @@ h3 {
 
 .overlay {
   display: none;
+}
+
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(15, 24, 38, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 16px;
+  overflow-y: auto;
+}
+
+.dialog {
+  width: 100%;
+  max-width: 520px;
+  max-height: calc(100svh - 80px);
+  overflow-y: auto;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* ---------------------------------------------------------------- */

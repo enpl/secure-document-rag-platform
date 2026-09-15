@@ -1,6 +1,7 @@
 package com.sdv.rag.api.dto;
 
 import java.time.Instant;
+import java.util.Set;
 
 /**
  * M10 신규(RAG-011) - {@code GET /api/rag/files} 응답 항목. JPA Entity를 직접
@@ -21,8 +22,20 @@ import java.time.Instant;
  *       - 이 API는 Content Fetch/Parse/LLM 호출을 절대 수행하지 않는다.</li>
  *   <li>{@code viewUrl} - 검증된 File ID로만 만든 고정 스킴/호스트({@code
  *       drive.google.com}) URL. Export Link/Google이 반환한 임의 URL이 아니다.</li>
+ *   <li>{@code shareId} - M16C 신규. 지금 이 항목을 노출시킨(방금 {@code
+ *       EffectivePermissionService.evaluateSharedAccess}를 통과한) 바로 그 공유의
+ *       ID다 - {@code documentId}와 절대 혼동하지 않는다. Client가 이 값으로
+ *       {@code GET /api/shares/{shareId}/download}를 호출할 수 있다. 위조/추측된
+ *       shareId는 그 Endpoint 자신의 서버 측 재검증이 별도로 거부한다 - 이 필드는
+ *       그 재검증을 대신하지 않는다.</li>
+ *   <li>{@code allowedActions} - 같은 공유가 이 수신자에게 부여한 행위 이름
+ *       집합(예: {@code VIEW}/{@code DOWNLOAD}). Client UI는 이 값을 "다운로드
+ *       버튼을 보여줄지"에 대한 힌트로만 쓴다 - 실제 인가 결정은 여전히 다운로드
+ *       Endpoint 자신이 매 요청마다 다시 내린다(이 값이 낡았거나 틀려도 접근을
+ *       넓히지 않는다).</li>
  * </ul>
  */
 public record RagFileItem(Long documentId, Long sourceId, String name, String mimeType, String sourceVersion,
-        Instant modifiedAt, String indexStatus, boolean sourceVersionCurrent, boolean downloadable, String viewUrl) {
+        Instant modifiedAt, String indexStatus, boolean sourceVersionCurrent, boolean downloadable, String viewUrl,
+        Long shareId, Set<String> allowedActions) {
 }

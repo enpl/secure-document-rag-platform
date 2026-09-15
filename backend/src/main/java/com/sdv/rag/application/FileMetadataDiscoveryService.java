@@ -13,6 +13,7 @@ import com.sdv.source.domain.SourceAccessContext;
 import com.sdv.source.domain.SourceMetadataVerificationOutcome;
 import com.sdv.source.domain.SourceMetadataVerificationResult;
 import com.sdv.source.domain.SourceType;
+import com.sdv.source.infrastructure.persistence.entity.DocumentShareEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourceDocumentEntity;
 import com.sdv.source.infrastructure.persistence.repository.DocumentShareJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.DocumentShareJpaRepository.SharedDiscoveryCandidate;
@@ -28,6 +29,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -240,7 +242,7 @@ public class FileMetadataDiscoveryService {
 
                 if (visible) {
                     if (visiblePosition >= start && visiblePosition < end) {
-                        items.add(toItem(document, liveResult));
+                        items.add(toItem(document, liveResult, candidate.share()));
                     } else if (visiblePosition == end) {
                         // 요청한 Page 바로 다음 위치에서 실제로 보이는 후보를 확인했다 - 더 볼 필요 없다.
                         stop = StopReason.FOUND_BEYOND;
@@ -336,11 +338,22 @@ public class FileMetadataDiscoveryService {
         return true;
     }
 
-    private static RagFileItem toItem(SourceDocumentEntity candidate, SourceMetadataVerificationResult live) {
+    private static RagFileItem toItem(SourceDocumentEntity candidate, SourceMetadataVerificationResult live,
+            DocumentShareEntity share) {
         boolean sourceVersionCurrent = live.sourceVersion().equals(candidate.getSourceVersion());
         return new RagFileItem(candidate.getId(), candidate.getSourceId(), live.name(), live.mimeType(),
                 live.sourceVersion(), live.modifiedAt(), candidate.getIndexStatus(), sourceVersionCurrent,
-                Boolean.TRUE.equals(live.downloadable()), buildViewUrl(candidate.getSourceDocumentId()));
+                Boolean.TRUE.equals(live.downloadable()), buildViewUrl(candidate.getSourceDocumentId()),
+                share.getId(), parseAllowedActions(share.getAllowedActions()));
+    }
+
+    /** {@code DocumentShareEntity.getAllowedActions()}의 CSV(예: {@code "VIEW,DOWNLOAD"})를 Set으로 나눈다. */
+    private static Set<String> parseAllowedActions(String csv) {
+        Set<String> actions = new LinkedHashSet<>();
+        for (String value : csv.split(",")) {
+            actions.add(value);
+        }
+        return Set.copyOf(actions);
     }
 
     /** 검증된 File ID로만 만든 고정 스킴/호스트 URL - Export Link 등 임의 URL을 쓰지 않는다. */

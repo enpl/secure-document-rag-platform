@@ -47,6 +47,20 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: '연결 관리' })).toBeInTheDocument()
   })
 
+  it('offers My Drive to an ordinary USER, but hides Shared-material management (M16C)', () => {
+    renderSidebar({ isAdmin: false, email: 'user@example.com', subject: 'user-1', logout: vi.fn() })
+
+    expect(screen.getByRole('link', { name: '내 Drive' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: '공유 자료 관리' })).not.toBeInTheDocument()
+  })
+
+  it('offers My Drive and Shared-material management to an ADMIN (M16C)', () => {
+    renderSidebar({ isAdmin: true, email: 'admin@example.com', subject: 'admin-1', logout: vi.fn() })
+
+    expect(screen.getByRole('link', { name: '내 Drive' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '공유 자료 관리' })).toBeInTheDocument()
+  })
+
   it('calls logout when the logout button is clicked', async () => {
     const logout = vi.fn()
     renderSidebar({ isAdmin: false, email: 'user@example.com', subject: 'user-1', logout })

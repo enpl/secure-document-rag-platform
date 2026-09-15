@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Navigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useApiClient } from '../api/useApiClient'
 import {
@@ -24,23 +24,29 @@ type ListState =
 /**
  * ADMIN-only Connection management (owner-scoped Google Drive Sources only -
  * Local Vault is retired/v1.4-excluded, SharePoint/S3 are contract-only server
- * side). A non-ADMIN who reaches this route (e.g. by typing the URL) sees an
- * honest limited state, never the admin content - the sidebar link is already
- * hidden for them, and the server independently still enforces ADMIN-only on
- * every request regardless of what this page renders.
+ * side). The server independently still enforces ADMIN-only on every request
+ * regardless of what this page renders.
+ *
+ * <h2>M16C 후속 교정 - 일반 USER를 위한 옛(Legacy) Google 복귀 경로 호환</h2>
+ * <p>`.env.example`의 `GOOGLE_OAUTH_FRONTEND_RETURN_URL`(기존 문서화된 값)은
+ * 여전히 이 경로(`/admin/sources`)를 가리킨다 - OAuth Callback 설정 자체는
+ * 이번 교정 범위 밖이라 바꾸지 않는다. 대신 이 Route에 도착한 인증된 비관리자를
+ * 즉시 {@link MyDrivePage}(자신의 개인 연결 화면)로 Redirect한다 - "관리자만
+ * 사용할 수 있습니다"라는 잘못된 안내로 막지 않는다. `googleConnect` 값 중
+ * 인식된(`success`/`failed`) 것만 그대로 옮기고, 그 밖의 임의 Query
+ * Parameter나 Redirect 대상은 옮기지 않는다(위조된 Query로 다른 곳으로
+ * 보내지지 않는다). 이 값은 알림일 뿐이다 - 실제 연결 상태는 {@link
+ * MyDrivePage}가 항상 서버 목록을 다시 조회해서 보여준다(이미 그 화면의
+ * 기존 `callbackHint` Effect가 이를 수행한다).</p>
  */
 export function SourcesPage() {
   const { isAdmin } = useAuth()
+  const [searchParams] = useSearchParams()
 
   if (!isAdmin) {
-    return (
-      <>
-        <h1>연결 관리</h1>
-        <div className="status-banner">
-          연결 관리는 관리자만 사용할 수 있습니다. 필요하면 관리자에게 Google Drive 연결을 요청해 주세요.
-        </div>
-      </>
-    )
+    const recognizedFlag = toCallbackHint(searchParams.get('googleConnect'))
+    const target = recognizedFlag ? `/my-drive?googleConnect=${recognizedFlag}` : '/my-drive'
+    return <Navigate to={target} replace />
   }
 
   return <AdminSourcesPage />
