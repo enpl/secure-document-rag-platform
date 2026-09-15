@@ -121,8 +121,8 @@ class SpringFlywayCallbackStartupFailureTest {
                 assertThat(rs.getBoolean("success")).isTrue();
                 versions.add(rs.getString("version"));
             }
-            // M08 MVP OAuth가 V007을 추가했다.
-            assertThat(versions).containsExactly("001", "002", "003", "004", "005", "006", "007");
+            // M09A 교정이 V009를 추가했다.
+            assertThat(versions).containsExactly("001", "002", "003", "004", "005", "006", "007", "008", "009");
         }
 
         // Control: sdv 역할을 준비(수동 Reconciliation)한 뒤, 완전히 동일한 구성으로

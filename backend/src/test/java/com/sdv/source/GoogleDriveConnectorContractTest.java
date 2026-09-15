@@ -686,6 +686,24 @@ class GoogleDriveConnectorContractTest {
     }
 
     @Test
+    void findChangesFailsSafelyOnADriveLevelChangeInsteadOfMisreadingItAsAFileDeletion() {
+        // M09A(MVP-08) 교정 검증 - changeType="drive"는 fileId/file이 없는 것이 정상이다(공식
+        // 문서). 교정 전에는 이 조합이 requireValidChange에서 changeType을 전혀 보지 않아
+        // "removed가 아닌데 file도 없다"는 이유로 malformed 처리되거나(fileId도 비어있으면
+        // 그보다 먼저), 혹은 toChangeRecord가 file()==null만 보고 REMOVED_OR_ACCESS_LOST(파일
+        // 삭제)로 잘못 승격시킬 수 있었다 - 둘 다 부정확하다. 지금은 명시적으로 안전한
+        // SourceSyncException으로 Fail Closed 해야 한다(근거 없는 파일 삭제 판단 금지).
+        long sourceId = createSource("owner-drive-level-change");
+        fakeSourceTokenStore.put(sourceId, "owner-drive-level-change", "token");
+        SCRIPT.enqueue("LIST_CHANGES", CannedResponse.json(200,
+                "{\"newStartPageToken\":\"s1\",\"changes\":[{\"changeType\":\"drive\",\"removed\":false}]}"));
+
+        assertThatThrownBy(() -> connector.findChanges(sourceId, "c1"))
+                .as("a shared-drive-level change must fail safely and must never be treated as a file deletion")
+                .isInstanceOf(SourceSyncException.class);
+    }
+
+    @Test
     void findChangesFailsSafelyWhenTheLastPageIsMissingNewStartPageToken() {
         long sourceId = createSource("owner-malformed-changes");
         fakeSourceTokenStore.put(sourceId, "owner-malformed-changes", "token");

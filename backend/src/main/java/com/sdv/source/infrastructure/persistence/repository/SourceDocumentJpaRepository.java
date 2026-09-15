@@ -128,4 +128,17 @@ public interface SourceDocumentJpaRepository extends JpaRepository<SourceDocumen
             + "WHERE document_id IN (SELECT id FROM source_documents WHERE source_id = :sourceId)",
             nativeQuery = true)
     int deleteEmbeddingIndexForSource(@Param("sourceId") Long sourceId);
+
+    /**
+     * M09A 신규 - {@link #deleteEmbeddingIndexForSource}와 정확히 같은 기법(테이블
+     * 이름만으로 참조하는 Native Query, {@code com.sdv.rag.*} Java Import 없음)을
+     * 문서 하나 단위로 좁힌 버전이다. Catalog Sync가 한 문서의 실제 Version
+     * 변경(재색인 필요) 또는 삭제/접근상실/휴지통 전이를 감지했을 때, 그 문서에
+     * 속한 낡은 Embedding Index 행만 제거한다 - Source 전체를 지우는
+     * {@code deleteEmbeddingIndexForSource}(Disconnect 전용)와 달리 진행 중인
+     * Sync가 다른 문서의 Embedding까지 건드리지 않는다.
+     */
+    @Modifying
+    @Query(value = "DELETE FROM document_embedding_index WHERE document_id = :documentId", nativeQuery = true)
+    int deleteEmbeddingIndexForDocument(@Param("documentId") Long documentId);
 }

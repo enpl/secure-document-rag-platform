@@ -74,8 +74,8 @@ class RuntimeRoleGrantCallbackTest {
                 .locations("classpath:db/migration")
                 .load();
         MigrateResult firstResult = migrationOnly.migrate();
-        // M08 MVP OAuth가 V007을 추가했다 - V001~V007 = 7개.
-        assertThat(firstResult.migrationsExecuted).isEqualTo(7);
+        // M09A 교정이 V009를 추가했다 - V001~V009 = 9개.
+        assertThat(firstResult.migrationsExecuted).isEqualTo(9);
 
         // 2. sdv 역할 생성 (기존 DB에 대한 수동 Reconciliation 단계).
         try (Connection root = rootConnection(); Statement st = root.createStatement()) {

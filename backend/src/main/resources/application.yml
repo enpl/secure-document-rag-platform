@@ -5,6 +5,14 @@ spring:
     hibernate:
       ddl-auto: none
     open-in-view: false
+  # M09A (F-BE-074) - OutboxEventPublisher는 Payload를 이미 위생 처리된 JSON
+  # 문자열로 직렬화해 보낸다(원본 Object 직렬화 아님) - Key/Value 모두 String이면
+  # 충분하다. bootstrap-servers는 Profile별 값(application-local/-compose/
+  # -testbed.yml)을 그대로 쓴다 - 여기서 재정의하지 않는다.
+  kafka:
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
 server:
   port: 8080
@@ -20,3 +28,34 @@ management:
   endpoint:
     health:
       show-details: never
+  # M09A - spring-kafka(build.gradle)를 추가하면서 함께 딸려오는 Actuator Kafka
+  # Health Indicator를 명시적으로 끈다. Kafka Auto-configuration 자체는 시작 시
+  # Broker에 연결하지 않지만(F-BE-074 Javadoc 참고), Health Indicator를 켜두면
+  # /actuator/health가 매 호출마다 Broker 연결을 시도해 Broker가 없는 모든 기본
+  # 실행(로컬/Compose/테스트베드 - Outbox Publisher는 기본 비활성화)에서 이유 없이
+  # DOWN을 보고하게 된다 - "Default 실행이 Broker 연결을 요구하지 않는다"는 이
+  # Slice의 요구사항과 직접 충돌하므로 꺼둔다.
+  health:
+    kafka:
+      enabled: false
+
+# M09A (F-BE-074) - Outbox -> Kafka Publisher. enabled는 모든 Profile에서
+# 기본 false로 고정된다(OutboxPublisherProperties 생성자가 한 번 더 강제) -
+# 이 Slice는 실제 Google Drive/개인 계정에 대해 자동 발행을 시작하지 않는다.
+# 격리된 Test Kafka Broker를 쓰는 테스트만 이 값을 명시적으로 true로 Override한다.
+sdv:
+  sync:
+    outbox-publisher:
+      enabled: ${SDV_OUTBOX_PUBLISHER_ENABLED:false}
+      batch-size: ${SDV_OUTBOX_PUBLISHER_BATCH_SIZE:50}
+      max-attempts: ${SDV_OUTBOX_PUBLISHER_MAX_ATTEMPTS:8}
+      poll-interval-ms: ${SDV_OUTBOX_PUBLISHER_POLL_INTERVAL_MS:5000}
+      send-timeout-ms: ${SDV_OUTBOX_PUBLISHER_SEND_TIMEOUT_MS:10000}
+      stale-claim-seconds: ${SDV_OUTBOX_PUBLISHER_STALE_CLAIM_SECONDS:600}
+      topic: ${SDV_OUTBOX_PUBLISHER_TOPIC:sdv.source.events}
+    # M09A 교정(방치된 Run 복구) - 한 Sync Run에 허용되는 최대 실행 시간(Lease/Deadline)과
+    # Page 수 상한. Lease가 지난 RUNNING 행은 다음 인가된 수동 Sync 요청이 회수한다(상시
+    # Scheduler 없음) - SyncRunLifecycle/GoogleDriveSyncJob 참고.
+    run:
+      max-duration-ms: ${SDV_SYNC_RUN_MAX_DURATION_MS:1800000}
+      max-pages-per-run: ${SDV_SYNC_RUN_MAX_PAGES_PER_RUN:2000}

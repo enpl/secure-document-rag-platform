@@ -39,12 +39,29 @@ dependencies {
     implementation 'org.springframework.security:spring-security-oauth2-client'
     implementation 'org.flywaydb:flyway-database-postgresql'
     runtimeOnly 'org.postgresql:postgresql'
+    // M09A (docs/spec/SDV_v3.2_FILE_MANIFEST.md F-BE-074): Transactional Outbox -> Kafka
+    // publisher. spring-boot-starter-kafka (not the bare spring-kafka client library) is
+    // required in this Boot version - Boot 4.1 moved Kafka autoconfiguration out of
+    // spring-boot-autoconfigure into this separate starter (verified: spring-boot-autoconfigure
+    // 4.1.1's AutoConfiguration.imports has no Kafka entry at all; the bare client alone leaves
+    // no KafkaTemplate bean registered). No @KafkaListener/consumer is added in this slice (no
+    // indexing consumer exists yet, see docs/plan/SDV_MVP_DEFERRED.md). Autoconfiguration does
+    // not require a reachable broker at application startup (management.health.kafka.enabled is
+    // explicitly disabled in application.yml so /actuator/health never depends on Kafka being
+    // reachable), and the publisher's own scheduled task stays off by default
+    // (sdv.sync.outbox-publisher.enabled, matchIfMissing=false) in every profile.
+    implementation 'org.springframework.boot:spring-boot-starter-kafka'
     testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
     testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.springframework.security:spring-security-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-kafka-test'
     testImplementation 'org.testcontainers:testcontainers-postgresql'
+    // M09A - isolated test Kafka broker for Outbox publication tests (Section 7 카테고리 7).
+    // Never pointed at the canonical/testbed broker - always a disposable per-test container.
+    // Testcontainers 2.x renamed this module from "kafka" to "testcontainers-kafka" (BOM-verified).
+    testImplementation 'org.testcontainers:testcontainers-kafka'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 

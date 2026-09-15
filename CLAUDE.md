@@ -1,5 +1,12 @@
 # CLAUDE.md
 
+## 구현 에이전트 필수 워크플로
+
+- 이 워크플로는 구현 에이전트가 Codex인지 Claude인지와 무관하게 동일하게 적용된다. Git 변경은 사용자만 수행하며, 에이전트는 허용된 읽기 전용 Git 조회만 한다.
+- 에이전트는 이름이 `google-oauth.local.env`인 모든 파일과 `infra/testbed/secrets/**`, `docs/workmd/**`를 읽기·목록화·검색·실행·수정·복사·삭제하거나 간접적으로 접근하지 않는다.
+- 모든 작업은 `docs/plan/SDV_MVP_DEFERRED.md`와 `.claude-handoff/latest.md`를 먼저 읽고, 종료 전에 같은 `.claude-handoff/latest.md`를 누적 갱신한 뒤 다시 열어 확인한다.
+- 자동으로 표시된 지시가 중간에서 잘릴 수 있으므로, 필요한 모든 지시 파일은 자동 로딩 범위를 넘어 끝까지 읽는다.
+
 이 문서는 Secure Document Vault (SDV) 프로젝트에서 작업할 때 지켜야 할 규칙을 정의한다.
 
 ## 프로젝트
@@ -599,9 +606,9 @@ Environment / Specification Alignment는 완료됐으며 다음 활성 구현은
    - 성공 기준이 충족되거나 구체적인 Blocker가 확인될 때까지 계속한다.
    - 실제로 수행하지 않은 검증을 완료했다고 주장하지 않는다.
 
-### Mandatory Claude Handoff
+### Mandatory Agent Handoff
 
-- Claude Code로 수행하는 모든 작업은 종료 시, 사용자에게 최종 응답을 보내기 전에 `.claude-handoff/latest.md`를 해당 작업의 최신 결과로 덮어쓴다.
+- Codex 또는 Claude가 수행하는 모든 작업은 종료 시, 사용자에게 최종 응답을 보내기 전에 `.claude-handoff/latest.md`를 기존 누적 사실을 보존한 해당 작업의 최신 결과로 갱신한다.
 - 이 규칙은 구현, Plan 수립, 읽기 전용 조사, 코드 Review, 분석, 검증, 문서 작업뿐 아니라 실패한 작업, 차단된(Blocked) 작업, Repository에 아무 변경도 없는 작업에도 동일하게 적용된다.
 - 작업이 "읽기 전용" 또는 "Repository 파일을 수정하지 않음"으로 지정되었더라도, 사용자가 Handoff 파일 쓰기를 명시적으로 금지하지 않는 한, 지정된 보고 산출물인 `.claude-handoff/latest.md` 갱신은 항상 허용된다.
 - `.claude-handoff/latest.md`는 Git에서 Ignore되는 작업용(Working) Handoff이며, Stage하거나 Commit하지 않는다.
@@ -620,10 +627,11 @@ Environment / Specification Alignment는 완료됐으며 다음 활성 구현은
   - 관련된 경우 Git Commit 범위와 시점
 - 비밀번호, 토큰, Secret 값, 문서 원문 또는 그 밖의 민감정보를 Handoff에 저장하지 않는다.
 - 해당 작업에서 실제로 실행하지 않은 테스트나 명령을 실행했다고 보고하지 않는다.
-- Claude가 Handoff 파일을 작성할 수 없는 경우, 최종 응답에 정확한 사유를 명시하고, 작성했어야 할 Handoff 전체 내용을 응답에 그대로 제공한다.
-- Claude의 최종 응답에는 Handoff 파일 갱신 여부와 경로를 명시한다.
+- 에이전트가 Handoff 파일을 작성할 수 없는 경우, 최종 응답에 정확한 사유를 명시하고, 작성했어야 할 Handoff 전체 내용을 응답에 그대로 제공한다.
+- 에이전트의 최종 응답에는 Handoff 파일 갱신 여부와 경로를 명시한다.
 
 ## Learning Rule
 
 - 새로운 JPA, Flyway, Spring Security, Kafka, Kubernetes 패턴을 도입할 때는 왜 필요한지 간단히 설명한다.
 - 사용자가 이해해야 하는 핵심 개념과 AI에게 위임 가능한 반복 구현을 구분해서 설명한다.
+- 의미 있는 새 개발·교정 각각에 대해 기법, 작은 실제 코드 예시(또는 `예시`라고 표시한 예시), 정확한 파일·메서드, 한계 또는 테스트 하나를 공손한 한국어로 설명한다. 전문 용어는 뜻을 풀고, 사용자·파일 흐름을 보여주는 작은 Diagram을 포함하며, 구현된 내용과 계획된 내용을 구분한다. 공통 기법은 묶어서 불필요한 반복을 줄인다.

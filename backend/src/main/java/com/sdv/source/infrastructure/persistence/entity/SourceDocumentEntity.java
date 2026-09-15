@@ -54,6 +54,11 @@ public class SourceDocumentEntity {
     @Column(name = "index_reason")
     private String indexReason;
 
+    // V009 - ACL 재조회가 실패/불확실(UNKNOWN/FAILED)했던 가장 최근 시각. null이면 현재
+    // source_permissions 행을 신뢰할 수 있는 증거로 취급한다(EffectivePermissionService 참고).
+    @Column(name = "permissions_untrusted_since")
+    private Instant permissionsUntrustedSince;
+
     protected SourceDocumentEntity() {
         // JPA
     }
@@ -111,8 +116,42 @@ public class SourceDocumentEntity {
         return indexReason;
     }
 
+    public Instant getPermissionsUntrustedSince() {
+        return permissionsUntrustedSince;
+    }
+
     /** Source Disconnect 등으로 이 문서를 논리적으로 삭제 상태로 전이한다(행은 유지). */
     public void markDeleted() {
         this.state = "DELETED";
+    }
+
+    /** V009 - ACL 재조회 실패/불확실 - 기존 source_permissions 행은 건드리지 않고 이 시각만 남긴다. */
+    public void markPermissionsUntrusted(Instant since) {
+        this.permissionsUntrustedSince = since;
+    }
+
+    /** V009 - ACL 재조회 성공(OK) - 신뢰를 원자적으로 회복한다(같은 Transaction 안에서 ACL 교체와 함께). */
+    public void markPermissionsTrusted() {
+        this.permissionsUntrustedSince = null;
+    }
+
+    /**
+     * M09A 신규 - Catalog Sync가 이미 존재하는 문서 행에 새로 관측된 실제
+     * Version 변경을 반영한다(변경이 없는 문서는 이 메서드 자체를 호출하지
+     * 않는다 - 호출자가 {@code sourceVersion} 비교로 먼저 판단한다). 색인
+     * 상태를 PENDING/사유 없음으로 재설정한다 - 낡은 Generation을 더 이상
+     * "최신"으로 취급하지 않기 위함이다(실제 Embedding 행 삭제는 별도로
+     * {@code SourceDocumentJpaRepository.deleteEmbeddingIndexForDocument}가
+     * 같은 Transaction 안에서 수행한다).
+     */
+    public void applySyncedMetadata(String name, String mimeType, String sourceVersion, Instant modifiedAt,
+            String state) {
+        this.name = name;
+        this.mimeType = mimeType;
+        this.sourceVersion = sourceVersion;
+        this.modifiedAt = modifiedAt;
+        this.state = state;
+        this.indexStatus = "PENDING";
+        this.indexReason = null;
     }
 }
