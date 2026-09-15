@@ -885,6 +885,14 @@ class GoogleDriveConnectorContractTest {
     }
 
     @Test
+    void downloadMediaAbortsDuringReadingWhenContentLengthIsAbsent() {
+        SCRIPT.enqueue("DOWNLOAD_MEDIA", CannedResponse.chunked("application/octet-stream", new byte[101]));
+
+        assertThatThrownBy(() -> client.downloadMedia("token", "file-1", 100))
+                .hasMessageContaining("byte limit");
+    }
+
+    @Test
     void downloadMediaSucceedsExactlyAtTheByteLimit() {
         byte[] exact = new byte[100];
         SCRIPT.enqueue("DOWNLOAD_MEDIA", CannedResponse.bytes(200, "application/octet-stream", exact));
@@ -892,6 +900,22 @@ class GoogleDriveConnectorContractTest {
         byte[] result = client.downloadMedia("token", "file-1", 100);
 
         assertThat(result).hasSize(100);
+    }
+
+    @Test
+    void downloadMediaRejectsAnUnsolicitedPartialResponseWithoutReturningBytes() {
+        SCRIPT.enqueue("DOWNLOAD_MEDIA", CannedResponse.partial("application/octet-stream", new byte[] { 1, 2 }));
+
+        assertThatThrownBy(() -> client.downloadMedia("token", "file-1", 100))
+                .isInstanceOf(RuntimeException.class);
+    }
+
+    @Test
+    void downloadMediaRejectsADeclaredLengthThatEndsEarly() {
+        SCRIPT.enqueue("DOWNLOAD_MEDIA", CannedResponse.truncated("application/octet-stream", new byte[] { 1, 2 }, 5));
+
+        assertThatThrownBy(() -> client.downloadMedia("token", "file-1", 100))
+                .isInstanceOf(RuntimeException.class);
     }
 
     // ------------------------------------------------------------------
@@ -1592,20 +1616,40 @@ class GoogleDriveConnectorContractTest {
     // Dependency 없음). 각 Test가 호출 종류별로 응답을 미리 큐에 넣는다.
     // ------------------------------------------------------------------
 
-    record CannedResponse(int status, String contentType, byte[] body, int chunkSize, long chunkDelayMillis) {
+    record CannedResponse(int status, String contentType, byte[] body, int chunkSize, long chunkDelayMillis,
+            long declaredLength, Map<String, String> headers) {
         static CannedResponse json(int status, String json) {
             byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-            return new CannedResponse(status, "application/json", bytes, bytes.length, 0L);
+            return normal(status, "application/json", bytes, bytes.length, 0L);
         }
 
         static CannedResponse bytes(int status, String contentType, byte[] body) {
-            return new CannedResponse(status, contentType, body, body.length, 0L);
+            return normal(status, contentType, body, body.length, 0L);
         }
 
         /** M08 Review 교정 항목 5 전용 - Chunk 사이에 지연을 둬 "느리게 조금씩 오는" 응답을 재현한다. */
         static CannedResponse slowBytes(int status, String contentType, byte[] body, int chunkSize,
                 long chunkDelayMillis) {
-            return new CannedResponse(status, contentType, body, chunkSize, chunkDelayMillis);
+            return normal(status, contentType, body, chunkSize, chunkDelayMillis);
+        }
+
+        static CannedResponse partial(String contentType, byte[] body) {
+            return new CannedResponse(206, contentType, body, body.length, 0L, body.length,
+                    Map.of("Content-Range", "bytes 0-1/5"));
+        }
+
+        static CannedResponse truncated(String contentType, byte[] body, long declaredLength) {
+            return new CannedResponse(200, contentType, body, body.length, 0L, declaredLength, Map.of());
+        }
+
+        static CannedResponse chunked(String contentType, byte[] body) {
+            // HttpServer treats zero response length as chunked transfer encoding (no Content-Length).
+            return new CannedResponse(200, contentType, body, body.length, 0L, 0L, Map.of());
+        }
+
+        private static CannedResponse normal(int status, String contentType, byte[] body, int chunkSize,
+                long chunkDelayMillis) {
+            return new CannedResponse(status, contentType, body, chunkSize, chunkDelayMillis, body.length, Map.of());
         }
     }
 
@@ -1643,7 +1687,8 @@ class GoogleDriveConnectorContractTest {
                         ? CannedResponse.json(500, "{\"error\":{\"message\":\"unscripted call: " + kind + "\"}}")
                         : queue.poll();
                 exchange.getResponseHeaders().add("Content-Type", response.contentType());
-                exchange.sendResponseHeaders(response.status(), response.body().length);
+                response.headers().forEach((name, value) -> exchange.getResponseHeaders().add(name, value));
+                exchange.sendResponseHeaders(response.status(), response.declaredLength());
                 writeBody(exchange, response);
             } finally {
                 exchange.close();

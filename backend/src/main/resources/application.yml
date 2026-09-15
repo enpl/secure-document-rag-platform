@@ -68,3 +68,9 @@ sdv:
       max-page-index: ${SDV_RAG_DISCOVERY_MAX_PAGE_INDEX:500}
       live-check-budget-ms: ${SDV_RAG_DISCOVERY_LIVE_CHECK_BUDGET_MS:10000}
       max-candidate-scan: ${SDV_RAG_DISCOVERY_MAX_CANDIDATE_SCAN:200}
+  # M10C (SHR-004): full-download response is deliberately buffered.  A slot is held until
+  # servlet delivery terminates, so slow clients cannot create an unbounded buffer queue.
+  shared-download:
+    max-bytes: ${SDV_SHARED_DOWNLOAD_MAX_BYTES:26214400}
+    max-concurrent-downloads: ${SDV_SHARED_DOWNLOAD_MAX_CONCURRENT_DOWNLOADS:2}
+    request-timeout-ms: ${SDV_SHARED_DOWNLOAD_REQUEST_TIMEOUT_MS:30000}

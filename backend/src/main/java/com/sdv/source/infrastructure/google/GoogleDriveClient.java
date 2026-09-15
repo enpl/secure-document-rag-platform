@@ -111,7 +111,10 @@ public class GoogleDriveClient {
 
     /** {@code files.get} - {@code supportsAllDrives=true}로 공유 드라이브 문서도 조회한다. */
     public GoogleFile getFile(String accessToken, String fileId) {
-        Deadline deadline = Deadline.startingNow(operationDeadline);
+        return getFile(accessToken, fileId, Deadline.startingNow(operationDeadline));
+    }
+
+    GoogleFile getFile(String accessToken, String fileId, Deadline deadline) {
         return withRetry(deadline, () -> {
             try {
                 GoogleFile file = restClient.get()
@@ -250,7 +253,10 @@ public class GoogleDriveClient {
      * 받는다. {@code maxBytes}를 넘는 순간(다 받은 뒤가 아니라) 즉시 중단한다.
      */
     public byte[] downloadMedia(String accessToken, String fileId, long maxBytes) {
-        Deadline deadline = Deadline.startingNow(operationDeadline);
+        return downloadMedia(accessToken, fileId, maxBytes, Deadline.startingNow(operationDeadline));
+    }
+
+    byte[] downloadMedia(String accessToken, String fileId, long maxBytes, Deadline deadline) {
         return withRetry(deadline, () -> boundedGet("/drive/v3/files/" + fileId + "?alt=media&supportsAllDrives=true",
                 accessToken, maxBytes, deadline));
     }
@@ -260,7 +266,10 @@ public class GoogleDriveClient {
      * 변환해 받는다(동기 상한, Class Javadoc 참고).
      */
     public byte[] exportFile(String accessToken, String fileId, String exportMimeType, long maxBytes) {
-        Deadline deadline = Deadline.startingNow(operationDeadline);
+        return exportFile(accessToken, fileId, exportMimeType, maxBytes, Deadline.startingNow(operationDeadline));
+    }
+
+    byte[] exportFile(String accessToken, String fileId, String exportMimeType, long maxBytes, Deadline deadline) {
         return withRetry(deadline, () -> boundedGet("/drive/v3/files/" + fileId + "/export?mimeType=" + encode(exportMimeType),
                 accessToken, maxBytes, deadline));
     }
@@ -274,15 +283,26 @@ public class GoogleDriveClient {
                 .uri(uri)
                 .header(HttpHeaders.AUTHORIZATION, bearer(accessToken))
                 .exchange((request, response) -> {
-                    if (!response.getStatusCode().is2xxSuccessful()) {
+                    // SHR-004 is intentionally a full-file operation.  A 206 can only be a
+                    // response to a range request, which this client never issues; accepting it
+                    // would make a partial original look complete.
+                    if (response.getStatusCode().value() != 200
+                            || response.getHeaders().containsHeader(HttpHeaders.CONTENT_RANGE)) {
                         throw translateErrorResponse(response);
                     }
-                    return readBounded(response.getBody(), maxBytes, deadline);
+                    long declaredLength = response.getHeaders().getContentLength();
+                    if (declaredLength > maxBytes) {
+                        throw new GoogleContentSizeLimitExceededException(
+                                "content exceeded the configured byte limit before streaming");
+                    }
+                    return readBounded(response.getBody(), maxBytes, declaredLength, deadline);
                 });
     }
 
-    private byte[] readBounded(InputStream in, long maxBytes, Deadline deadline) {
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+    private byte[] readBounded(InputStream in, long maxBytes, long declaredLength, Deadline deadline) {
+        int initialCapacity = declaredLength >= 0 && declaredLength <= Integer.MAX_VALUE
+                ? (int) declaredLength : 8192;
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream(initialCapacity);
         byte[] chunk = new byte[8192];
         long total = 0;
         try {
@@ -313,6 +333,10 @@ public class GoogleDriveClient {
             } catch (IOException ignored) {
                 // Best-effort close - 이미 실패/성공 경로가 확정된 뒤이므로 추가로 할 것이 없다.
             }
+        }
+        if (declaredLength >= 0 && total != declaredLength) {
+            throw new GoogleApiException(GoogleApiException.Category.UNKNOWN,
+                    "content length did not match the response body");
         }
         return buffer.toByteArray();
     }

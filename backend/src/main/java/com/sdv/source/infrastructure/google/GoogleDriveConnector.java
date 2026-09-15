@@ -12,6 +12,8 @@ import com.sdv.source.domain.SourceChangeRecord;
 import com.sdv.source.domain.SourceChangeType;
 import com.sdv.source.domain.SourceContentOutcome;
 import com.sdv.source.domain.SourceContentResult;
+import com.sdv.source.domain.SourceDownloadResult;
+import com.sdv.source.domain.SourceAccessContext;
 import com.sdv.source.domain.SourceDocument;
 import com.sdv.source.domain.SourceDocumentState;
 import com.sdv.source.domain.SourceMetadataPage;
@@ -21,6 +23,7 @@ import com.sdv.source.domain.SourcePermissionsResult;
 import com.sdv.source.domain.SourceType;
 import com.sdv.source.infrastructure.persistence.entity.SourceConnectionEntity;
 import com.sdv.source.infrastructure.persistence.repository.SourceConnectionJpaRepository;
+import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -109,6 +112,7 @@ public class GoogleDriveConnector implements DocumentSourceConnector {
     private final GoogleDriveContentAdapter contentAdapter;
     private final GoogleDrivePermissionAdapter permissionAdapter;
     private final SourceConnectionJpaRepository sourceConnectionJpaRepository;
+    private final SourceDocumentJpaRepository sourceDocumentJpaRepository;
     private final Optional<SourceTokenStore> sourceTokenStore;
     private final Clock clock;
 
@@ -116,8 +120,9 @@ public class GoogleDriveConnector implements DocumentSourceConnector {
     public GoogleDriveConnector(GoogleDriveClient client, GoogleDriveContentAdapter contentAdapter,
             GoogleDrivePermissionAdapter permissionAdapter,
             SourceConnectionJpaRepository sourceConnectionJpaRepository,
+            SourceDocumentJpaRepository sourceDocumentJpaRepository,
             Optional<SourceTokenStore> sourceTokenStore) {
-        this(client, contentAdapter, permissionAdapter, sourceConnectionJpaRepository, sourceTokenStore,
+        this(client, contentAdapter, permissionAdapter, sourceConnectionJpaRepository, sourceDocumentJpaRepository, sourceTokenStore,
                 Clock.systemUTC());
     }
 
@@ -125,11 +130,13 @@ public class GoogleDriveConnector implements DocumentSourceConnector {
     GoogleDriveConnector(GoogleDriveClient client, GoogleDriveContentAdapter contentAdapter,
             GoogleDrivePermissionAdapter permissionAdapter,
             SourceConnectionJpaRepository sourceConnectionJpaRepository,
+            SourceDocumentJpaRepository sourceDocumentJpaRepository,
             Optional<SourceTokenStore> sourceTokenStore, Clock clock) {
         this.client = client;
         this.contentAdapter = contentAdapter;
         this.permissionAdapter = permissionAdapter;
         this.sourceConnectionJpaRepository = sourceConnectionJpaRepository;
+        this.sourceDocumentJpaRepository = sourceDocumentJpaRepository;
         this.sourceTokenStore = sourceTokenStore;
         this.clock = clock;
     }
@@ -213,6 +220,103 @@ public class GoogleDriveConnector implements DocumentSourceConnector {
                     "stored credential does not grant the scope required for this read");
         }
         return contentAdapter.fetchVerified(envelope.accessToken(), sourceDocumentId, expectedSourceVersion);
+    }
+
+    @Override
+    public SourceMetadataVerificationResult verifyDownload(SourceAccessContext context, long deadlineMs) {
+        DownloadCredential credential = resolveDownloadCredential(context);
+        if (credential.failure() != null) {
+            return SourceMetadataVerificationResult.failed(metadataOutcomeFor(credential.failure()),
+                    "shared download credential binding failed");
+        }
+        GoogleDriveClient.GoogleFile file;
+        try {
+            file = client.getFile(credential.accessToken(), credential.fileId(),
+                    GoogleDriveClient.Deadline.startingNow(java.time.Duration.ofMillis(deadlineMs)));
+        } catch (GoogleApiException e) {
+            return SourceMetadataVerificationResult.failed(metadataVerificationOutcomeFor(e), safeMetadataReason(e));
+        }
+        Optional<SourceMetadataVerificationOutcome> invalid = validateLiveFile(file, credential.fileId());
+        if (invalid.isPresent()) {
+            return SourceMetadataVerificationResult.failed(invalid.get(), "live metadata response failed verification");
+        }
+        if (file.capabilities() == null || !Boolean.TRUE.equals(file.capabilities().canDownload())) {
+            return SourceMetadataVerificationResult.failed(SourceMetadataVerificationOutcome.ACCESS_DENIED,
+                    "provider does not permit download");
+        }
+        return SourceMetadataVerificationResult.verified(file.name(), file.mimeType(), file.version(),
+                parseModifiedTimeSafely(file.modifiedTime()), true);
+    }
+
+    @Override
+    public SourceDownloadResult fetchDownload(SourceAccessContext context, String expectedSourceVersion,
+            long maxBytes, long deadlineMs) {
+        DownloadCredential credential = resolveDownloadCredential(context);
+        if (credential.failure() != null) {
+            return SourceDownloadResult.failed(credential.failure(), "shared download credential binding failed");
+        }
+        return contentAdapter.fetchVerifiedDownload(credential.accessToken(), credential.fileId(), expectedSourceVersion,
+                maxBytes, deadlineMs);
+    }
+
+    private DownloadCredential resolveDownloadCredential(SourceAccessContext context) {
+        if (context == null || context.requestedAction() != com.sdv.source.domain.ShareAction.DOWNLOAD) {
+            return DownloadCredential.failure(SourceContentOutcome.ACCESS_DENIED);
+        }
+        SourceConnectionEntity connection = sourceConnectionJpaRepository.findById(context.sourceId()).orElse(null);
+        if (connection == null || !GOOGLE_DRIVE_TYPE.equals(connection.getType())) {
+            return DownloadCredential.failure(SourceContentOutcome.NOT_FOUND);
+        }
+        if (!ACTIVE_STATUS.equals(connection.getStatus())
+                || !context.publisherSubject().equals(connection.getOwnerSubject())
+                || connection.getConnectionEpoch() != context.connectionGeneration()
+                || isBlank(connection.getProviderAccountId())) {
+            return DownloadCredential.failure(SourceContentOutcome.ACCESS_DENIED);
+        }
+        Optional<TokenEnvelope> token;
+        try {
+            token = loadToken(context.sourceId());
+        } catch (RuntimeException ignored) {
+            return DownloadCredential.failure(SourceContentOutcome.CREDENTIAL_UNREADABLE);
+        }
+        if (token.isEmpty() || isExpired(token.get())) {
+            return DownloadCredential.failure(SourceContentOutcome.MISSING_CREDENTIAL);
+        }
+        TokenEnvelope envelope = token.get();
+        if (!context.publisherSubject().equals(envelope.boundSubject())) {
+            return DownloadCredential.failure(SourceContentOutcome.CREDENTIAL_NOT_BOUND_TO_USER);
+        }
+        if (!hasRequiredScope(envelope)) {
+            return DownloadCredential.failure(SourceContentOutcome.INSUFFICIENT_SCOPE);
+        }
+        var document = sourceDocumentJpaRepository.findByIdAndOwnerSubject(context.documentId(), context.publisherSubject())
+                .orElse(null);
+        if (document == null || !context.sourceId().equals(document.getSourceId())
+                || document.getSourceDocumentId() == null || document.getSourceDocumentId().isBlank()) {
+            return DownloadCredential.failure(SourceContentOutcome.NOT_FOUND);
+        }
+        return DownloadCredential.success(envelope.accessToken(), document.getSourceDocumentId());
+    }
+
+    private static SourceMetadataVerificationOutcome metadataOutcomeFor(SourceContentOutcome outcome) {
+        return switch (outcome) {
+            case NOT_FOUND -> SourceMetadataVerificationOutcome.NOT_FOUND;
+            case ACCESS_DENIED, CREDENTIAL_NOT_BOUND_TO_USER -> SourceMetadataVerificationOutcome.ACCESS_DENIED;
+            case MISSING_CREDENTIAL -> SourceMetadataVerificationOutcome.MISSING_CREDENTIAL;
+            case CREDENTIAL_UNREADABLE -> SourceMetadataVerificationOutcome.CREDENTIAL_UNREADABLE;
+            case INSUFFICIENT_SCOPE -> SourceMetadataVerificationOutcome.INSUFFICIENT_SCOPE;
+            default -> SourceMetadataVerificationOutcome.FAILED;
+        };
+    }
+
+    private record DownloadCredential(String accessToken, String fileId, SourceContentOutcome failure) {
+        static DownloadCredential success(String accessToken, String fileId) {
+            return new DownloadCredential(accessToken, fileId, null);
+        }
+
+        static DownloadCredential failure(SourceContentOutcome failure) {
+            return new DownloadCredential(null, null, failure);
+        }
     }
 
     /**
