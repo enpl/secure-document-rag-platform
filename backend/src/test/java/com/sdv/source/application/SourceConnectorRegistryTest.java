@@ -6,6 +6,7 @@ import com.sdv.source.domain.SourceChangePage;
 import com.sdv.source.domain.SourceContentResult;
 import com.sdv.source.domain.SourceDocument;
 import com.sdv.source.domain.SourceMetadataPage;
+import com.sdv.source.domain.SourceMetadataVerificationResult;
 import com.sdv.source.domain.SourcePermissionsResult;
 import com.sdv.source.domain.SourceType;
 import org.junit.jupiter.api.Test;
@@ -88,6 +89,12 @@ class SourceConnectorRegistryTest {
 
             @Override
             public SourceChangePage findChanges(Long sourceId, String pageToken) {
+                throw new UnsupportedOperationException("not used in this test");
+            }
+
+            @Override
+            public SourceMetadataVerificationResult verifyCurrentMetadata(UserContext requestingUser, Long sourceId,
+                    String sourceDocumentId) {
                 throw new UnsupportedOperationException("not used in this test");
             }
         };
