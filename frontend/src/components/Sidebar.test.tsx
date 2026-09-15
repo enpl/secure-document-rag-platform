@@ -28,11 +28,17 @@ beforeEach(() => {
 })
 
 describe('Sidebar', () => {
-  it('hides Connection management from a USER and disables Find documents for everyone', () => {
+  it('hides Connection management from a USER but still offers Find documents (M16B)', () => {
     renderSidebar({ isAdmin: false, email: 'user@example.com', subject: 'user-1', logout: vi.fn() })
 
     expect(screen.queryByRole('link', { name: '연결 관리' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /문서 찾기/ })).toBeDisabled()
+    expect(screen.getByRole('link', { name: '문서 찾기' })).toBeInTheDocument()
+  })
+
+  it('offers Find documents to an ADMIN too (M16B)', () => {
+    renderSidebar({ isAdmin: true, email: 'admin@example.com', subject: 'admin-1', logout: vi.fn() })
+
+    expect(screen.getByRole('link', { name: '문서 찾기' })).toBeInTheDocument()
   })
 
   it('shows Connection management for an ADMIN', () => {
