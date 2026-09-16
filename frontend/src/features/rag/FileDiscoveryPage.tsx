@@ -7,7 +7,7 @@ import type { RagFileItem, RagFileSearchParams, RagFileSearchResponse, RagSortKe
 import { listSources } from '../../api/sources'
 import type { SourceResponse } from '../../api/sources'
 import { ApiError } from '../../api/client'
-import type { BlobResult } from '../../api/client'
+import { triggerBrowserDownload } from '../../api/browserDownload'
 
 /** Server default page size(`RagDiscoveryProperties.defaultPageSize`) - no page-size tuning UI (this slice's scope). */
 const PAGE_SIZE = 20
@@ -472,28 +472,6 @@ function FileRow({
  * 곧바로(다음 정리 시점에) 그 URL을 해제한다 - 이미 전달된 바이트 자체를
  * 되돌릴 방법은 없다(단지 이 탭이 그 URL을 더 오래 붙잡지 않을 뿐이다).
  */
-function triggerBrowserDownload(result: BlobResult, fallbackName: string): void {
-  const filename = safeDownloadFilename(result.filename) ?? safeDownloadFilename(fallbackName) ?? 'download'
-  const url = URL.createObjectURL(result.blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  anchor.rel = 'noopener'
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 10_000)
-}
-
-/** 방어적 재검증 - 서버가 이미 위험 문자를 걸러내지만, 이 값을 파일시스템 이름으로 직접 쓰기 전에 한 번 더 다듬는다. */
-function safeDownloadFilename(candidate: string | null): string | null {
-  if (!candidate) {
-    return null
-  }
-  const cleaned = candidate.replace(/[\\/:*?"<>|\r\n]/g, '').trim()
-  return cleaned.length > 0 ? cleaned : null
-}
-
 /**
  * 방어적 재검증 - 서버가 이미 `drive.google.com` 고정 URL만 보내지만, 이
  * Client는 그 값을 그대로 신뢰하지 않고 Scheme/Host를 다시 확인한 뒤에만

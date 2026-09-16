@@ -9,6 +9,9 @@ import com.sdv.rag.api.dto.RagFileSearchResponse;
 import com.sdv.rag.api.dto.RagFileSortKey;
 import com.sdv.rag.application.FileMetadataDiscoveryService;
 import com.sdv.rag.application.RagDiscoveryProperties;
+import com.sdv.security.application.SecurityFindingService;
+import com.sdv.security.infrastructure.persistence.entity.SecurityFindingEntity;
+import com.sdv.security.infrastructure.persistence.repository.SecurityFindingJpaRepository;
 import com.sdv.source.application.InvalidShareRequestException;
 import com.sdv.source.application.ShareGenerationConflictException;
 import com.sdv.source.application.SourceConnectionService;
@@ -102,6 +105,10 @@ class SelectiveSharingE2ETest {
     private DocumentShareRestrictionJpaRepository documentShareRestrictionJpaRepository;
     @Autowired
     private PlatformTransactionManager platformTransactionManager;
+    @Autowired
+    private SecurityFindingJpaRepository securityFindingJpaRepository;
+    @Autowired
+    private SecurityFindingService securityFindingService;
 
     private DocumentSourceConnector connectorMock;
     private FileMetadataDiscoveryService fileMetadataDiscoveryService;
@@ -562,6 +569,35 @@ class SelectiveSharingE2ETest {
         verify(connectorMock, never()).fetchContent(any(), any(), any(), any());
         verify(connectorMock, never()).getMetadata(any(), any());
         verify(connectorMock, never()).listMetadata(any(), any());
+    }
+
+    @Test
+    void adminFindingQueriesAndUpdatesExcludePrivateNeverPublishedDocumentsIncludingLegacyRows() {
+        securityFindingJpaRepository.deleteAll();
+        String owner = "finding-owner-" + unique();
+        long sourceId = createActiveSource(owner);
+        Doc published = createDocument(sourceId, "Published.pdf", "application/pdf", "v1");
+        Doc privateDocument = createDocument(sourceId, "Private.pdf", "application/pdf", "v1");
+        sourceSharingService.createShare(owner, sourceId, published.documentId(), "SECRET", Set.of("VIEW"),
+                Set.of("recipient-b"));
+
+        SecurityFindingEntity allowed = securityFindingJpaRepository.saveAndFlush(new SecurityFindingEntity(
+                "BROAD_PROVIDER_SHARING_HIGH_CLASSIFICATION", "HIGH", sourceId, published.documentId(),
+                java.util.Map.of("classification", "SECRET", "principalType", "ANYONE")));
+        SecurityFindingEntity privateLegacy = securityFindingJpaRepository.saveAndFlush(new SecurityFindingEntity(
+                "BROAD_PROVIDER_SHARING_HIGH_CLASSIFICATION", "HIGH", sourceId, privateDocument.documentId(),
+                java.util.Map.of("classification", "SECRET", "principalType", "ANYONE")));
+
+        var page = securityFindingService.list(null, 0, 1);
+
+        assertThat(page.items()).singleElement().satisfies(item -> assertThat(item.id()).isEqualTo(allowed.getId()));
+        assertThat(page.hasMore()).as("excluded private rows must not leak through pagination").isFalse();
+        assertThatThrownBy(() -> securityFindingService.update(
+                new UserContext("admin-a", null, Set.of(Role.ADMIN), Set.of()), privateLegacy.getId(), "ACKNOWLEDGED"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(securityFindingService.update(new UserContext("admin-a", null, Set.of(Role.ADMIN), Set.of()),
+                allowed.getId(), "ACKNOWLEDGED").status()).isEqualTo("ACKNOWLEDGED");
+        verify(connectorMock, never()).fetchContent(any(), any(), any(), any());
     }
 
     // ------------------------------------------------------------------

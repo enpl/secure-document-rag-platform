@@ -22,9 +22,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class AuditLogPersistenceAdapter implements AuditEventPort {
 
-    /** M03이 만드는 모든 Audit Event는 HTTP 요청(인증/인가 거부)에서 비롯된다. */
-    private static final String HTTP_REQUEST_TARGET_TYPE = "HTTP_REQUEST";
-
     private final AuditLogJpaRepository auditLogJpaRepository;
 
     public AuditLogPersistenceAdapter(AuditLogJpaRepository auditLogJpaRepository) {
@@ -36,7 +33,7 @@ public class AuditLogPersistenceAdapter implements AuditEventPort {
         AuditLogEntity entity = new AuditLogEntity(
                 event.actor(),
                 event.action(),
-                HTTP_REQUEST_TARGET_TYPE,
+                event.targetType(),
                 event.target(),
                 event.result(),
                 event.reasonCode(),

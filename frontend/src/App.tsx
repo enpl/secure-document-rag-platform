@@ -7,6 +7,8 @@ import { SourcesPage } from './pages/SourcesPage'
 import { SharedMaterialsAdminPage } from './pages/SharedMaterialsAdminPage'
 import { FileDiscoveryPage } from './features/rag/FileDiscoveryPage'
 import { MyDrivePage } from './features/sources/MyDrivePage'
+import { AuditLogPage } from './features/audit/AuditLogPage'
+import { SecurityDashboardPage } from './features/security/SecurityDashboardPage'
 
 /**
  * OIDC Authorization Code + PKCE is redirect-based - there is no custom
@@ -15,7 +17,7 @@ import { MyDrivePage } from './features/sources/MyDrivePage'
  * back (AuthContext).
  */
 function App() {
-  const { status, login, subject } = useAuth()
+  const { status, login, subject, isAdmin } = useAuth()
 
   if (status === 'initializing') {
     return <CenteredMessage>로그인 상태를 확인하는 중입니다...</CenteredMessage>
@@ -47,7 +49,7 @@ function App() {
         path="/"
         element={
           <AppShell title="새 질문">
-            <HomePage />
+            <HomePage key={subject} />
           </AppShell>
         }
       />
@@ -91,6 +93,8 @@ function App() {
           </AppShell>
         }
       />
+      <Route path="/admin/audits" element={isAdmin ? <AppShell title="감사 로그"><AuditLogPage key={subject} /></AppShell> : <Navigate to="/" replace />} />
+      <Route path="/admin/security" element={isAdmin ? <AppShell title="보안 발견"><SecurityDashboardPage key={subject} /></AppShell> : <Navigate to="/" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

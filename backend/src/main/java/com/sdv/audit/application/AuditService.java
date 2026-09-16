@@ -38,9 +38,15 @@ public class AuditService {
      */
     public void record(String actor, String action, String target, String result, String reasonCode,
             Map<String, String> metadata) {
+        recordResource(actor, action, "HTTP_REQUEST", target, result, reasonCode, metadata);
+    }
+
+    public void recordResource(String actor, String action, String targetType, String target, String result,
+            String reasonCode, Map<String, String> metadata) {
         AuditEvent event = new AuditEvent(
                 actor,
                 action,
+                targetType,
                 target,
                 result,
                 reasonCode,

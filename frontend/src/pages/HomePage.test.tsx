@@ -1,87 +1,46 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { HomePage } from './HomePage'
-import { useAuth } from '../auth/AuthContext'
-import type { AuthState } from '../auth/AuthContext'
-import { listSources } from '../api/sources'
-import type { SourceResponse } from '../api/sources'
 
-vi.mock('../auth/AuthContext')
-// SourcesPage.test.tsx와 같은 이유 - 항상 같은 참조를 반환해야 무한 Refetch
-// Loop을 피한다.
-vi.mock('../api/useApiClient', () => {
-  const stableClient = {}
-  return { useApiClient: () => stableClient }
-})
-vi.mock('../api/sources', async () => {
-  const actual = await vi.importActual<typeof import('../api/sources')>('../api/sources')
-  return { ...actual, listSources: vi.fn() }
-})
+const post = vi.fn()
+vi.mock('../api/useApiClient', () => ({ useApiClient: () => ({ post }) }))
+vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ isAdmin: false }) }))
 
-const mockedUseAuth = vi.mocked(useAuth)
-const mockedListSources = vi.mocked(listSources)
+beforeEach(() => post.mockReset())
 
-function asAuth(partial: Partial<AuthState>): AuthState {
-  return partial as unknown as AuthState
-}
+describe('HomePage ordinary-user assistant', () => {
+  it('submits a question without requiring a personal Google connection or ADMIN role', async () => {
+    post.mockResolvedValue({
+      status: 'SUCCESS', reasonCode: null, answer: '검증된 답변', generatedAnalysis: null,
+      citations: [], files: null, partial: false,
+    })
+    render(<MemoryRouter><HomePage /></MemoryRouter>)
 
-function source(overrides: Partial<SourceResponse>): SourceResponse {
-  return { id: 1, type: 'GOOGLE_DRIVE', name: 'x', status: 'ACTIVE', lastSyncAt: null, credentialPresent: false, ...overrides }
-}
+    await userEvent.type(screen.getByLabelText('질문'), '보안 정책의 핵심은 무엇인가요?')
+    await userEvent.click(screen.getByRole('button', { name: '질문 보내기' }))
 
-function renderHome() {
-  return render(
-    <MemoryRouter>
-      <HomePage />
-    </MemoryRouter>,
-  )
-}
-
-beforeEach(() => {
-  vi.clearAllMocks()
-})
-
-describe('HomePage', () => {
-  it('never implies a working chat and never calls the admin-only list API for a non-admin', () => {
-    mockedUseAuth.mockReturnValue(asAuth({ isAdmin: false }))
-
-    renderHome()
-
-    expect(screen.getByText('업무 문서에 질문해 보세요.')).toBeInTheDocument()
-    expect(screen.getByText(/문서 검색과 답변 기능은 아직 준비 중입니다/)).toBeInTheDocument()
-    expect(screen.getByText('질문 기능은 아직 준비 중입니다.')).toBeInTheDocument()
-    expect(mockedListSources).not.toHaveBeenCalled()
-    expect(screen.queryByRole('link', { name: '연결 관리로 이동' })).not.toBeInTheDocument()
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/rag/ask', {
+      question: '보안 정책의 핵심은 무엇인가요?', selectedDocumentIds: [],
+    }, expect.any(AbortSignal)))
+    expect(await screen.findByText('검증된 답변')).toBeInTheDocument()
+    expect(screen.queryByText(/관리자에게 Google Drive 연결을 요청/)).not.toBeInTheDocument()
   })
 
-  it('tells an admin with no active source to connect one first', async () => {
-    mockedUseAuth.mockReturnValue(asAuth({ isAdmin: true }))
-    mockedListSources.mockResolvedValue([])
+  it('renders hostile answer text inert instead of creating HTML or external resources', async () => {
+    post.mockResolvedValue({
+      status: 'SUCCESS', reasonCode: null,
+      answer: '<img src="https://evil.invalid/x" onerror="alert(1)"> **not markdown**',
+      generatedAnalysis: '<script>alert(1)</script>', citations: [], files: null, partial: false,
+    })
+    const { container } = render(<MemoryRouter><HomePage /></MemoryRouter>)
+    await userEvent.type(screen.getByLabelText('질문'), '문서 내용을 알려줘')
+    await userEvent.click(screen.getByRole('button', { name: '질문 보내기' }))
 
-    renderHome()
-
-    await waitFor(() => expect(screen.getByText(/아직 연결된 Source가 없습니다/)).toBeInTheDocument())
-    expect(screen.getByRole('link', { name: '연결 관리로 이동' })).toBeInTheDocument()
-  })
-
-  it('distinguishes a registered-but-not-yet-connected source from a fully connected one', async () => {
-    mockedUseAuth.mockReturnValue(asAuth({ isAdmin: true }))
-    mockedListSources.mockResolvedValue([source({ credentialPresent: false })])
-
-    renderHome()
-
-    await waitFor(() => expect(screen.getByText(/아직 Google 계정 연결이 끝나지 않았습니다/)).toBeInTheDocument())
-  })
-
-  it('shows the connected message without claiming search/answers are ready', async () => {
-    mockedUseAuth.mockReturnValue(asAuth({ isAdmin: true }))
-    mockedListSources.mockResolvedValue([source({ credentialPresent: true })])
-
-    renderHome()
-
-    await waitFor(() => expect(screen.getByText(/Google Drive가 연결되어 있습니다/)).toBeInTheDocument())
-    expect(screen.getByText(/아직 준비 중이며/)).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: '연결 관리로 이동' })).not.toBeInTheDocument()
+    expect(await screen.findByText(/<img src=/)).toBeInTheDocument()
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.querySelector('script')).toBeNull()
+    expect(container.querySelector('a[href="https://evil.invalid/x"]')).toBeNull()
   })
 })

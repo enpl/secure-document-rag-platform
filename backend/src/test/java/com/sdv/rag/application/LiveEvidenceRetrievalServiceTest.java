@@ -2,6 +2,7 @@ package com.sdv.rag.application;
 
 import com.sdv.common.model.Role;
 import com.sdv.common.model.UserContext;
+import com.sdv.audit.application.RagAuditRecorder;
 import com.sdv.rag.application.port.out.EphemeralEvidenceCapacityExceededException;
 import com.sdv.rag.application.port.out.EphemeralEvidenceStore;
 import com.sdv.rag.domain.EvidenceHandle;
@@ -33,6 +34,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -41,6 +43,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doAnswer;
 
 /**
  * M12 Focused Acceptance Test Group D(근거 정확성) - 순수 단위 테스트(Mockito). 실제
@@ -68,6 +71,8 @@ class LiveEvidenceRetrievalServiceTest {
     private EvidenceConversationLifecycle conversationLifecycle;
     @Mock
     private EvidenceConversationLifecycle.Lease conversationLease;
+    @Mock
+    private RagAuditRecorder audit;
 
     private LiveEvidenceRetrievalService service;
 
@@ -75,7 +80,8 @@ class LiveEvidenceRetrievalServiceTest {
     void setUp() {
         LiveRetrievalProperties properties = new LiveRetrievalProperties(5, 20_000, 60_000, 4_000, 10, 500);
         service = new LiveEvidenceRetrievalService(sourceConsistencyGuard, documentParsingClient,
-                ephemeralEvidenceStore, properties, conversationLifecycle);
+                ephemeralEvidenceStore, properties, conversationLifecycle,
+                new LiveContentAdmission(2, 50L * 1024 * 1024), audit);
         lenient().when(conversationLifecycle.requireActive(any(), any())).thenReturn(conversationLease);
         lenient().when(conversationLifecycle.isActive(conversationLease)).thenReturn(true);
         lenient().when(ephemeralEvidenceStore.putEncryptedFenced(any(), any(), anyLong()))
@@ -121,6 +127,34 @@ class LiveEvidenceRetrievalServiceTest {
         ArgumentCaptor<byte[]> textCaptor = ArgumentCaptor.forClass(byte[].class);
         verify(ephemeralEvidenceStore).putEncrypted(any(), textCaptor.capture());
         assertThat(new String(textCaptor.getValue(), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo(page2);
+        verify(audit).documentStage(eq(REQUESTER), eq("LIVE_PRE_VERIFICATION"), eq(DOCUMENT_ID),
+                eq("SUCCESS"), eq("OK"), any());
+        verify(audit).documentStage(eq(REQUESTER), eq("LIVE_POST_VERIFICATION"), eq(DOCUMENT_ID),
+                eq("SUCCESS"), eq("OK"), any());
+        verify(audit).documentStage(eq(REQUESTER), eq("EVIDENCE_ADMISSION"), eq(DOCUMENT_ID),
+                eq("SUCCESS"), eq("OK"), any());
+    }
+
+    @Test
+    void auditFailureAfterEvidenceAdmissionEvictsTheNewHandle() {
+        when(sourceConsistencyGuard.verifyBefore(any(), eq(DOCUMENT_ID), anyLong()))
+                .thenReturn(identity("v1", "application/pdf"));
+        when(connector.fetchForAi(any(), eq("v1"), anyLong()))
+                .thenReturn(SourceContentResult.verified("bytes".getBytes(), "application/pdf", "v1", false));
+        when(documentParsingClient.parse(any(), any(), any(), anyLong())).thenReturn(ParseOutcome.success(
+                "pdfminer.six", "1", "1", "text",
+                List.of(new ExtractedLocation(LocatorType.DOCUMENT, "1", 0, 4))));
+        EvidenceHandle handle = new EvidenceHandle(UUID.randomUUID(), Instant.now(), Instant.now().plusSeconds(300));
+        when(ephemeralEvidenceStore.putEncrypted(any(), any())).thenReturn(handle);
+        doAnswer(invocation -> {
+            if ("EVIDENCE_ADMISSION".equals(invocation.getArgument(1)))
+                throw new IllegalStateException("audit unavailable");
+            return null;
+        }).when(audit).documentStage(any(), any(), any(), any(), any(), any());
+
+        assertThatThrownBy(() -> service.retrieveLive(REQUESTER, DOCUMENT_ID, "conv-audit", null))
+                .isInstanceOf(IllegalStateException.class);
+        verify(ephemeralEvidenceStore).evict(handle);
     }
 
     @Test
@@ -199,6 +233,10 @@ class LiveEvidenceRetrievalServiceTest {
 
         assertThat(result.status()).isEqualTo(LiveRetrievalStatus.VERIFIED);
         verify(sourceConsistencyGuard, times(2)).verifyBefore(any(), eq(DOCUMENT_ID), anyLong());
+        verify(audit).documentStage(eq(REQUESTER), eq("VERSION_DISCARD"), eq(DOCUMENT_ID),
+                eq("FAILURE"), eq("DOCUMENT_CHANGED"), any());
+        verify(audit).documentStage(eq(REQUESTER), eq("VERSION_RETRY"), eq(DOCUMENT_ID),
+                eq("STARTED"), eq("DOCUMENT_CHANGED"), any());
     }
 
     @Test

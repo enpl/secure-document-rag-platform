@@ -12,6 +12,7 @@ import com.sdv.source.infrastructure.persistence.repository.SourceConnectionJpaR
 import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRepository;
 import com.sdv.sync.application.PermissionSyncWriter.PermissionApplyResult;
 import com.sdv.sync.infrastructure.persistence.entity.SyncRunEntity;
+import com.sdv.security.application.PermissionSyncRiskService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -45,19 +46,36 @@ public class PermissionSyncService {
     private final SyncRunLifecycle syncRunLifecycle;
     private final AuditService auditService;
     private final Clock clock;
+    private final PermissionSyncRiskService permissionSyncRiskService;
 
     @Autowired
     public PermissionSyncService(SourceConnectionJpaRepository sourceConnectionJpaRepository,
             SourceDocumentJpaRepository sourceDocumentJpaRepository, GoogleDriveConnector googleDriveConnector,
+            PermissionSyncWriter permissionSyncWriter, SyncRunLifecycle syncRunLifecycle, AuditService auditService,
+            PermissionSyncRiskService permissionSyncRiskService) {
+        this(sourceConnectionJpaRepository, sourceDocumentJpaRepository, googleDriveConnector, permissionSyncWriter,
+                syncRunLifecycle, auditService, Clock.systemUTC(), permissionSyncRiskService);
+    }
+
+    public PermissionSyncService(SourceConnectionJpaRepository sourceConnectionJpaRepository,
+            SourceDocumentJpaRepository sourceDocumentJpaRepository, GoogleDriveConnector googleDriveConnector,
             PermissionSyncWriter permissionSyncWriter, SyncRunLifecycle syncRunLifecycle, AuditService auditService) {
         this(sourceConnectionJpaRepository, sourceDocumentJpaRepository, googleDriveConnector, permissionSyncWriter,
-                syncRunLifecycle, auditService, Clock.systemUTC());
+                syncRunLifecycle, auditService, Clock.systemUTC(), PermissionSyncRiskService.noop());
     }
 
     PermissionSyncService(SourceConnectionJpaRepository sourceConnectionJpaRepository,
             SourceDocumentJpaRepository sourceDocumentJpaRepository, GoogleDriveConnector googleDriveConnector,
             PermissionSyncWriter permissionSyncWriter, SyncRunLifecycle syncRunLifecycle, AuditService auditService,
             Clock clock) {
+        this(sourceConnectionJpaRepository, sourceDocumentJpaRepository, googleDriveConnector, permissionSyncWriter,
+                syncRunLifecycle, auditService, clock, PermissionSyncRiskService.noop());
+    }
+
+    PermissionSyncService(SourceConnectionJpaRepository sourceConnectionJpaRepository,
+            SourceDocumentJpaRepository sourceDocumentJpaRepository, GoogleDriveConnector googleDriveConnector,
+            PermissionSyncWriter permissionSyncWriter, SyncRunLifecycle syncRunLifecycle, AuditService auditService,
+            Clock clock, PermissionSyncRiskService permissionSyncRiskService) {
         this.sourceConnectionJpaRepository = sourceConnectionJpaRepository;
         this.sourceDocumentJpaRepository = sourceDocumentJpaRepository;
         this.googleDriveConnector = googleDriveConnector;
@@ -65,6 +83,7 @@ public class PermissionSyncService {
         this.syncRunLifecycle = syncRunLifecycle;
         this.auditService = auditService;
         this.clock = clock;
+        this.permissionSyncRiskService = permissionSyncRiskService;
     }
 
     public PermissionSyncResult syncPermissions(Long sourceId, String ownerSubject) {
@@ -96,6 +115,11 @@ public class PermissionSyncService {
                         document.getSourceDocumentId());
                 PermissionApplyResult applied = permissionSyncWriter.applyOneDocument(sourceId, run.getId(),
                         ownerSubject, document.getId(), document.getSourceDocumentId(), result);
+                if (applied.runOwned()) {
+                    // applyOneDocument is a separate proxied @Transactional bean, so its ACL/trust-state commit
+                    // has completed before risk inspection reads it. A rollback is never reported as an observation.
+                    permissionSyncRiskService.inspect(document.getId());
+                }
                 if (!applied.runOwned()) {
                     failed = documents.size() - succeeded;
                     break;

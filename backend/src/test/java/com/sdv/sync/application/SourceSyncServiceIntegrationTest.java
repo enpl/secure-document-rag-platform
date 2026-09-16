@@ -9,6 +9,8 @@ import com.sdv.event.infrastructure.persistence.repository.OutboxEventJpaReposit
 import com.sdv.policy.application.EffectivePermissionService;
 import com.sdv.policy.domain.PolicyDecision;
 import com.sdv.policy.domain.PolicyReasonCode;
+import com.sdv.policy.infrastructure.persistence.repository.SecurityLabelJpaRepository;
+import com.sdv.security.infrastructure.persistence.repository.SecurityFindingJpaRepository;
 import com.sdv.source.application.port.SourceSyncException;
 import com.sdv.source.domain.DocumentIndexStatus;
 import com.sdv.source.domain.SourceChangePage;
@@ -20,6 +22,7 @@ import com.sdv.source.domain.SourceMetadataPage;
 import com.sdv.source.domain.SourcePermission;
 import com.sdv.source.domain.SourcePermissionsResult;
 import com.sdv.source.domain.SourcePrincipal;
+import com.sdv.source.application.SourceSharingService;
 import com.sdv.source.infrastructure.google.GoogleDriveConnector;
 import com.sdv.source.infrastructure.persistence.entity.SourceConnectionEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourceDocumentEntity;
@@ -122,6 +125,12 @@ class SourceSyncServiceIntegrationTest {
     private TransactionTemplate transactionTemplate;
     @Autowired
     private AuditLogJpaRepository auditLogJpaRepository;
+    @Autowired
+    private SecurityLabelJpaRepository securityLabelJpaRepository;
+    @Autowired
+    private SecurityFindingJpaRepository securityFindingJpaRepository;
+    @Autowired
+    private SourceSharingService sourceSharingService;
     // Spy(Mock 아님) - 실제 Spring Bean(실제 의존성 전부 정상 연결됨) 위에 얹는다.
     // SourceConnectorRegistry가 기동 시점에 읽는 supportedType()은 그대로 실제 메서드가
     // 응답한다(고정 상수 반환, 필드 의존 없음) - Mock이었다면 stub 전까지 null을 반환해
@@ -745,6 +754,112 @@ class SourceSyncServiceIntegrationTest {
         assertThat(eventsForSource(sourceId))
                 .as("no Outbox row for the earlier (rolled back) document may survive either")
                 .isEmpty();
+        assertThat(securityFindingJpaRepository.findAll()).noneMatch(finding -> sourceId.equals(finding.getSourceId()));
+    }
+
+    @Test
+    void normalUserSyncThenSecretPublicationCreatesHighFindingWithoutLegacyLabel() {
+        String owner = owner();
+        Long sourceId = createSource(owner);
+        doReturn("risk-start").when(googleDriveConnector).getStartPageToken(sourceId);
+        doReturn(new SourceMetadataPage(List.of(document(sourceId, "broad-file", "v1")), null, true, true))
+                .when(googleDriveConnector).listMetadata(sourceId, null);
+        doReturn(SourcePermissionsResult.ok(List.of(
+                new SourcePermission(new SourcePrincipal("anyone", ""), "READ"))))
+                .when(googleDriveConnector).getPermissions(sourceId, "broad-file");
+        doReturn(new SourceChangePage(List.of(), null, "risk-cursor", true))
+                .when(googleDriveConnector).findChanges(sourceId, "risk-start");
+
+        sourceSyncService.sync(sourceId, owner);
+        SourceDocumentEntity document = sourceDocumentJpaRepository
+                .findBySourceAndSourceDocId(sourceId, "broad-file").orElseThrow();
+        assertThat(securityLabelJpaRepository.findById(document.getId())).isEmpty();
+        assertThat(securityFindingJpaRepository.findFirstByTypeAndDocumentId(
+                "BROAD_PROVIDER_SHARING_HIGH_CLASSIFICATION", document.getId())).isEmpty();
+
+        sourceSharingService.createShare(owner, sourceId, document.getId(), "SECRET", Set.of("VIEW"),
+                Set.of("recipient-b"));
+
+        assertThat(sourcePermissionJpaRepository.findByDocumentId(document.getId()))
+                .singleElement().satisfies(permission -> assertThat(permission.getPrincipalType()).isEqualTo("anyone"));
+
+        var findings = securityFindingJpaRepository.findAll().stream()
+                .filter(finding -> document.getId().equals(finding.getDocumentId())).toList();
+        assertThat(findings).singleElement().satisfies(finding -> {
+            assertThat(finding.getSeverity()).isEqualTo("HIGH");
+            assertThat(finding.getEvidence()).containsEntry("classification", "SECRET")
+                    .containsEntry("principalType", "ANYONE")
+                    .doesNotContainValue("sensitive.pdf").doesNotContainValue("broad-file");
+        });
+    }
+
+    @Test
+    void rolledBackPublicationDoesNotCreateFinding() {
+        String owner = owner();
+        Long sourceId = createSource(owner);
+        doReturn("rollback-start").when(googleDriveConnector).getStartPageToken(sourceId);
+        doReturn(new SourceMetadataPage(List.of(document(sourceId, "rollback-risk", "v1")), null, true, true))
+                .when(googleDriveConnector).listMetadata(sourceId, null);
+        doReturn(SourcePermissionsResult.ok(List.of(
+                new SourcePermission(new SourcePrincipal("anyone", ""), "READ"))))
+                .when(googleDriveConnector).getPermissions(sourceId, "rollback-risk");
+        doReturn(new SourceChangePage(List.of(), null, "rollback-cursor", true))
+                .when(googleDriveConnector).findChanges(sourceId, "rollback-start");
+        sourceSyncService.sync(sourceId, owner);
+        Long documentId = sourceDocumentJpaRepository.findBySourceAndSourceDocId(sourceId, "rollback-risk")
+                .orElseThrow().getId();
+
+        assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status -> {
+            sourceSharingService.createShare(owner, sourceId, documentId, "SECRET", Set.of("VIEW"),
+                    Set.of("recipient-b"));
+            throw new IllegalStateException("rollback marker");
+        })).isInstanceOf(IllegalStateException.class);
+
+        assertThat(securityFindingJpaRepository.findFirstByTypeAndDocumentId(
+                "BROAD_PROVIDER_SHARING_HIGH_CLASSIFICATION", documentId)).isEmpty();
+    }
+
+    @Test
+    void incrementalAclAndPublishedClassificationChangesRefreshOneFinding() {
+        String owner = owner();
+        Long sourceId = createSource(owner);
+        doReturn("change-start").when(googleDriveConnector).getStartPageToken(sourceId);
+        SourceDocument initial = document(sourceId, "changing-risk", "v1");
+        doReturn(new SourceMetadataPage(List.of(initial), null, true, true))
+                .when(googleDriveConnector).listMetadata(sourceId, null);
+        SourcePermissionsResult domain = SourcePermissionsResult.ok(List.of(
+                new SourcePermission(new SourcePrincipal("domain", "example.com"), "READ")));
+        SourcePermissionsResult anyone = SourcePermissionsResult.ok(List.of(
+                new SourcePermission(new SourcePrincipal("anyone", ""), "READ")));
+        doReturn(domain, anyone).when(googleDriveConnector).getPermissions(sourceId, "changing-risk");
+        doReturn(new SourceChangePage(List.of(), null, "change-cursor-0", true))
+                .when(googleDriveConnector).findChanges(sourceId, "change-start");
+
+        sourceSyncService.sync(sourceId, owner);
+        SourceDocumentEntity document = sourceDocumentJpaRepository
+                .findBySourceAndSourceDocId(sourceId, "changing-risk").orElseThrow();
+        var share = sourceSharingService.createShare(owner, sourceId, document.getId(), "CONFIDENTIAL",
+                Set.of("VIEW"), Set.of("recipient-b"));
+        assertThat(securityFindingJpaRepository.findFirstByTypeAndDocumentId(
+                "BROAD_PROVIDER_SHARING_HIGH_CLASSIFICATION", document.getId()).orElseThrow().getSeverity())
+                .isEqualTo("MEDIUM");
+
+        share = sourceSharingService.updateShare(owner, share.getId(), share.getGeneration(), "SECRET", Set.of("VIEW"),
+                Set.of("recipient-b"));
+        doReturn(new SourceChangePage(List.of(new SourceChangeRecord("changing-risk", SourceChangeType.CHANGED,
+                document(sourceId, "changing-risk", "v1"))), null, "change-cursor-1", true))
+                .when(googleDriveConnector).findChanges(sourceId, "change-cursor-0");
+        sourceSyncService.sync(sourceId, owner);
+
+        var findings = securityFindingJpaRepository.findAll().stream()
+                .filter(finding -> document.getId().equals(finding.getDocumentId())
+                        && "BROAD_PROVIDER_SHARING_HIGH_CLASSIFICATION".equals(finding.getType()))
+                .toList();
+        assertThat(findings).singleElement().satisfies(finding -> {
+            assertThat(finding.getSeverity()).isEqualTo("HIGH");
+            assertThat(finding.getEvidence()).containsEntry("classification", "SECRET")
+                    .containsEntry("principalType", "ANYONE");
+        });
     }
 
     private void expireRunningRun(Long sourceId) {
