@@ -19,6 +19,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Clock;
@@ -63,6 +64,8 @@ class SourceSharingServiceIndexEventsTest {
     private OutboxEventJpaRepository outboxEventJpaRepository;
     @Mock
     private AuditService auditService;
+    @Mock
+    private ApplicationEventPublisher applicationEventPublisher;
 
     private SourceSharingService service;
 
@@ -71,7 +74,7 @@ class SourceSharingServiceIndexEventsTest {
         Clock fixedClock = Clock.fixed(Instant.parse("2026-09-16T00:00:00Z"), ZoneOffset.UTC);
         service = new SourceSharingService(documentShareJpaRepository, documentShareRecipientJpaRepository,
                 documentShareRestrictionJpaRepository, sourceDocumentJpaRepository, sourceConnectionJpaRepository,
-                outboxEventJpaRepository, auditService, fixedClock);
+                outboxEventJpaRepository, auditService, applicationEventPublisher, fixedClock);
     }
 
     @Test

@@ -8,6 +8,7 @@ import com.sdv.event.infrastructure.persistence.entity.OutboxEventEntity;
 import com.sdv.event.infrastructure.persistence.repository.OutboxEventJpaRepository;
 import com.sdv.policy.domain.SecurityLevel;
 import com.sdv.source.domain.DocumentShare;
+import com.sdv.source.domain.ShareAccessRevokedEvent;
 import com.sdv.source.domain.ShareAction;
 import com.sdv.source.domain.SourceConnection;
 import com.sdv.source.infrastructure.persistence.entity.DocumentShareEntity;
@@ -22,6 +23,7 @@ import com.sdv.source.infrastructure.persistence.repository.SourceConnectionJpaR
 import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRepository;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -66,6 +68,7 @@ public class SourceSharingService {
     private final SourceConnectionJpaRepository sourceConnectionJpaRepository;
     private final OutboxEventJpaRepository outboxEventJpaRepository;
     private final AuditService auditService;
+    private final ApplicationEventPublisher applicationEventPublisher;
     private final Clock clock;
 
     @Autowired
@@ -74,10 +77,11 @@ public class SourceSharingService {
             DocumentShareRestrictionJpaRepository documentShareRestrictionJpaRepository,
             SourceDocumentJpaRepository sourceDocumentJpaRepository,
             SourceConnectionJpaRepository sourceConnectionJpaRepository,
-            OutboxEventJpaRepository outboxEventJpaRepository, AuditService auditService) {
+            OutboxEventJpaRepository outboxEventJpaRepository, AuditService auditService,
+            ApplicationEventPublisher applicationEventPublisher) {
         this(documentShareJpaRepository, documentShareRecipientJpaRepository, documentShareRestrictionJpaRepository,
                 sourceDocumentJpaRepository, sourceConnectionJpaRepository, outboxEventJpaRepository, auditService,
-                Clock.systemUTC());
+                applicationEventPublisher, Clock.systemUTC());
     }
 
     SourceSharingService(DocumentShareJpaRepository documentShareJpaRepository,
@@ -85,7 +89,8 @@ public class SourceSharingService {
             DocumentShareRestrictionJpaRepository documentShareRestrictionJpaRepository,
             SourceDocumentJpaRepository sourceDocumentJpaRepository,
             SourceConnectionJpaRepository sourceConnectionJpaRepository,
-            OutboxEventJpaRepository outboxEventJpaRepository, AuditService auditService, Clock clock) {
+            OutboxEventJpaRepository outboxEventJpaRepository, AuditService auditService,
+            ApplicationEventPublisher applicationEventPublisher, Clock clock) {
         this.documentShareJpaRepository = documentShareJpaRepository;
         this.documentShareRecipientJpaRepository = documentShareRecipientJpaRepository;
         this.documentShareRestrictionJpaRepository = documentShareRestrictionJpaRepository;
@@ -93,6 +98,7 @@ public class SourceSharingService {
         this.sourceConnectionJpaRepository = sourceConnectionJpaRepository;
         this.outboxEventJpaRepository = outboxEventJpaRepository;
         this.auditService = auditService;
+        this.applicationEventPublisher = applicationEventPublisher;
         this.clock = clock;
     }
 
@@ -242,6 +248,10 @@ public class SourceSharingService {
         // 동일한 선례: index_status는 "마지막 처리 시도"만 기록할 뿐, 지금의 공유 자격은
         // document_shares.revoked_at/admin_blocked가 단독으로 결정한다.
         sourceDocumentJpaRepository.deleteEmbeddingIndexForDocument(share.getDocumentId());
+        // M12 - 이 문서에 대해 이미 발급된 Ephemeral Evidence가 있다면 즉시 무효화한다
+        // (§2A.6 "revoke ... must evict"). Source는 RAG를 참조하지 않는다 - RAG 쪽
+        // Listener가 이 domain-neutral Event를 구독해 실제 제거를 수행한다.
+        applicationEventPublisher.publishEvent(new ShareAccessRevokedEvent(share.getDocumentId()));
         auditService.record(publisherSubject, "SHARE_UNSHARED", "share:" + shareId, SUCCESS, OK, Map.of());
     }
 
@@ -291,6 +301,8 @@ public class SourceSharingService {
         if (blocked && !wasBlocked) {
             // M11 - 차단은 unshare와 동일하게 즉시 색인 자격을 무효화한다.
             sourceDocumentJpaRepository.deleteEmbeddingIndexForDocument(share.getDocumentId());
+            // M12 - unshare와 동일하게 관리자 차단도 이미 발급된 Ephemeral Evidence를 즉시 무효화한다.
+            applicationEventPublisher.publishEvent(new ShareAccessRevokedEvent(share.getDocumentId()));
         } else if (!blocked && wasBlocked) {
             // M11 - 해제는 색인 자격을 되돌릴 수 있다 - 새 IndexRequestedEvent로 다시 판단하게 한다.
             SourceDocumentEntity document = sourceDocumentJpaRepository.findById(share.getDocumentId()).orElse(null);

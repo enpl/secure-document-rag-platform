@@ -30,6 +30,8 @@ public class GoogleApiException extends RuntimeException {
         RETRYABLE_SERVER_ERROR,
         /** 400 등 그 밖의 Client 오류 - 재시도하지 않는다. */
         BAD_REQUEST,
+        /** Caller-supplied operation deadline elapsed in bounded provider transport. */
+        TIMEOUT,
         /** 분류할 수 없는 실패(Network/Timeout/알 수 없는 응답 등). */
         UNKNOWN
     }

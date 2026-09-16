@@ -23,6 +23,9 @@ public record ParseOutcome(
         String normalizationVersion,
         String normalizedText,
         List<ExtractedLocation> locations,
+        String chunkingVersion,
+        String embeddingModel,
+        List<ExtractedChunk> chunks,
         String reason) {
 
     public ParseOutcome {
@@ -34,22 +37,34 @@ public record ParseOutcome(
             Objects.requireNonNull(normalizedText, "normalizedText must not be null for SUCCESS");
             Objects.requireNonNull(locations, "locations must not be null for SUCCESS");
             locations = List.copyOf(locations);
+            Objects.requireNonNull(chunkingVersion, "chunkingVersion must not be null for SUCCESS");
+            Objects.requireNonNull(embeddingModel, "embeddingModel must not be null for SUCCESS");
+            Objects.requireNonNull(chunks, "chunks must not be null for SUCCESS");
+            chunks = List.copyOf(chunks);
         } else {
             Objects.requireNonNull(reason, "reason must not be null for a non-SUCCESS outcome");
             locations = locations == null ? List.of() : List.copyOf(locations);
+            chunks = chunks == null ? List.of() : List.copyOf(chunks);
         }
     }
 
     public static ParseOutcome success(String parserName, String parserVersion, String normalizationVersion,
             String normalizedText, List<ExtractedLocation> locations) {
         return new ParseOutcome(ParseOutcomeKind.SUCCESS, parserName, parserVersion, normalizationVersion,
-                normalizedText, locations, null);
+                normalizedText, locations, "legacy", "legacy", List.of(), null);
+    }
+
+    public static ParseOutcome success(String parserName, String parserVersion, String normalizationVersion,
+            String normalizedText, List<ExtractedLocation> locations, String chunkingVersion, String embeddingModel,
+            List<ExtractedChunk> chunks) {
+        return new ParseOutcome(ParseOutcomeKind.SUCCESS, parserName, parserVersion, normalizationVersion,
+                normalizedText, locations, chunkingVersion, embeddingModel, chunks, null);
     }
 
     public static ParseOutcome failure(ParseOutcomeKind kind, String reason) {
         if (kind == ParseOutcomeKind.SUCCESS) {
             throw new IllegalArgumentException("Use success(...) for ParseOutcomeKind.SUCCESS");
         }
-        return new ParseOutcome(kind, null, null, null, null, List.of(), reason);
+        return new ParseOutcome(kind, null, null, null, null, List.of(), null, null, List.of(), reason);
     }
 }

@@ -23,9 +23,25 @@ import hmac as hmac_module
 from typing import List, NamedTuple, Optional, Tuple
 
 from app.core.config import Settings
-from app.models.schemas import LocationDto
+from app.models.schemas import ChunkCoordinateDto, LocationDto
 
-CHUNKING_VERSION = "1"
+# M12 교정으로 "2"로 올렸다 - Chunk 경계를 Locator에 매핑할 때 Python 코드포인트
+# 오프셋과 Location의 UTF-16 오프셋을 섞어 비교하던 결함을 고쳤다(비-BMP 문자
+# 근처에서 잘못된 Page/Section에 배정될 수 있었다). "1"로 만들어진 기존 Generation은
+# 이 수정 이전 규칙으로 만들어졌으므로 호환되지 않는 것으로 취급해야 한다
+# (DocumentEmbeddingJpaRepository.replaceGeneration의 Generation 동질성 검증이
+# chunkingVersion도 함께 확인한다 - 기존 스케줄링 경로를 통한 재색인이 자연히
+# "1" 세대를 "2" 세대로 교체한다, 별도 Migration/Backfill 강제 없음).
+CHUNKING_VERSION = "2"
+
+
+def _utf16_offset(text: str, codepoint_offset: int) -> int:
+    """``parser_service._utf16_offset``와 동일한 변환(같은 Wire 단위 규약) -
+    Location의 ``startOffset``/``endOffset``는 이미 UTF-16 Code Unit 단위로
+    변환돼 있으므로(``ExtractedLocation`` Javadoc 참고), 이 Chunk 경계
+    (Python ``str`` 코드포인트 단위)를 같은 단위로 바꾼 뒤에만 비교해야 한다."""
+
+    return len(text[:codepoint_offset].encode("utf-16-le")) // 2
 
 
 class Chunk(NamedTuple):
@@ -63,17 +79,19 @@ def _windows(length: int, chunk_size: int, overlap: int) -> List[Tuple[int, int]
     return windows
 
 
-def _locator_for_offset(locations: List[LocationDto], offset: int) -> LocationDto:
-    """``offset``(코드포인트 단위)을 포함하는(또는 그 직전에서 시작하는) Location을
-    찾는다. Location은 Parser가 발생 순서대로 반환한다고 가정한다(모든 현재
-    Parser가 그렇게 만든다) - 정확히 일치하는 코드포인트/UTF-16 단위 차이는
-    최악의 경우 Non-BMP 문자 근처에서 인접 Locator로 살짝 치우칠 수 있는, 알려진
-    사소한 근사치다(Locator는 이미 일반화된 좌표일 뿐이라 보안/정확성에 영향을
-    주지 않는다 - 남은 한계로 문서화한다)."""
+def _locator_for_offset(locations: List[LocationDto], utf16_offset: int) -> LocationDto:
+    """``utf16_offset``(UTF-16 Code Unit 단위 - Location의 ``startOffset``와
+    동일한 Wire 단위 규약, ``ExtractedLocation``/``parser_service._utf16_offset``
+    참고)을 포함하는(또는 그 직전에서 시작하는) Location을 찾는다. 호출자
+    (``chunk_text``)가 반드시 Chunk 경계를 이 단위로 변환해 넘겨야 한다 - 코드포인트
+    오프셋을 그대로 넘기면 Non-BMP 문자(예: 이모지) 앞뒤에서 잘못된 Locator로
+    Chunk가 배정될 수 있었다(M12 교정 - 이전에는 이 두 단위가 섞여 비교됐다).
+    Location은 Parser가 발생 순서대로 반환한다고 가정한다(모든 현재 Parser가
+    그렇게 만든다)."""
 
     chosen = locations[0]
     for location in locations:
-        if location.startOffset <= offset:
+        if location.startOffset <= utf16_offset:
             chosen = location
         else:
             break
@@ -102,7 +120,23 @@ def chunk_text(text: str, locations: List[LocationDto], settings: Settings,
     chunks: List[Chunk] = []
     for index, (start, end) in enumerate(windows):
         chunk_text_value = text[start:end]
-        locator = _locator_for_offset(locations, start)
+        locator = _locator_for_offset(locations, _utf16_offset(text, start))
         content_hmac = compute_content_hmac(chunk_text_value, hmac_key)
         chunks.append(Chunk(index, locator.locatorType, locator.locatorValue, chunk_text_value, content_hmac))
     return chunks
+
+
+def chunk_coordinates(text: str, locations: List[LocationDto], settings: Settings) -> Optional[List[ChunkCoordinateDto]]:
+    """Expose only the same deterministic index chunk boundaries for live evidence selection."""
+    if not locations:
+        return None
+    windows = _windows(len(text), settings.chunk_max_chars, settings.chunk_overlap_chars)
+    if not windows or len(windows) > settings.max_chunks_per_document:
+        return None
+    return [ChunkCoordinateDto(
+        chunkIndex=index,
+        locatorType=(locator := _locator_for_offset(locations, _utf16_offset(text, start))).locatorType,
+        locatorValue=locator.locatorValue,
+        startOffset=_utf16_offset(text, start),
+        endOffset=_utf16_offset(text, end),
+    ) for index, (start, end) in enumerate(windows)]

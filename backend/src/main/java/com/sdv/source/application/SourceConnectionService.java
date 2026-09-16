@@ -4,6 +4,7 @@ import com.sdv.audit.application.AuditService;
 import com.sdv.common.exception.NotFoundException;
 import com.sdv.source.application.port.SourceTokenStore;
 import com.sdv.source.domain.SourceConnection;
+import com.sdv.source.domain.SourceConnectionAccessRevokedEvent;
 import com.sdv.source.infrastructure.persistence.entity.SourceConnectionEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourceDocumentEntity;
 import com.sdv.source.infrastructure.persistence.mapper.SourcePersistenceMapper;
@@ -15,6 +16,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Slice;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
@@ -66,6 +68,7 @@ public class SourceConnectionService {
     private final SourcePersistenceMapper sourcePersistenceMapper;
     private final Optional<SourceTokenStore> sourceTokenStore;
     private final AuditService auditService;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     public SourceConnectionService(
             SourceConnectionJpaRepository sourceConnectionJpaRepository,
@@ -73,13 +76,14 @@ public class SourceConnectionService {
             SourceOAuthTokenJpaRepository sourceOAuthTokenJpaRepository,
             SourcePersistenceMapper sourcePersistenceMapper,
             Optional<SourceTokenStore> sourceTokenStore,
-            AuditService auditService) {
+            AuditService auditService, ApplicationEventPublisher applicationEventPublisher) {
         this.sourceConnectionJpaRepository = sourceConnectionJpaRepository;
         this.sourceDocumentJpaRepository = sourceDocumentJpaRepository;
         this.sourceOAuthTokenJpaRepository = sourceOAuthTokenJpaRepository;
         this.sourcePersistenceMapper = sourcePersistenceMapper;
         this.sourceTokenStore = sourceTokenStore;
         this.auditService = auditService;
+        this.applicationEventPublisher = applicationEventPublisher;
     }
 
     /**
@@ -226,6 +230,7 @@ public class SourceConnectionService {
         sourceDocumentJpaRepository.deleteEmbeddingIndexForSource(id);
 
         auditService.record(ownerSubject, "SOURCE_DISCONNECTED", "source:" + id, SUCCESS, OK, Map.of());
+        applicationEventPublisher.publishEvent(new SourceConnectionAccessRevokedEvent(id));
     }
 
     /**

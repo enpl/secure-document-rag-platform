@@ -116,6 +116,35 @@ public interface DocumentSourceConnector {
     }
 
     /**
+     * M12 신규(F-BE-103, §2A.5 Mandatory Live Retrieval) - AI 검색/응답을 위한
+     * Share-bound Content Fetch 전 사전(pre-fetch) 확인. {@link #verifyDownload}와
+     * 의도적으로 분리한 별도 연산이다 - AI 자격은 {@code ShareAction.VIEW} 부여 +
+     * 별도의 Local AI Usage Policy 평가로 판단하며(CORE_SPEC §2A.5), {@code
+     * ShareAction.DOWNLOAD}를 요구하거나 대신하지 않는다("Do not add a new
+     * ShareAction or silently require DOWNLOAD for AI use" - 승인된 작업 범위).
+     * 게시자(A)의 File-Bound Provider Delegation만 사용하고 요청자(B)에게 노출하지
+     * 않는다.
+     */
+    default SourceMetadataVerificationResult verifyForAi(SourceAccessContext context, long deadlineMs) {
+        return SourceMetadataVerificationResult.failed(
+                com.sdv.source.domain.SourceMetadataVerificationOutcome.FAILED,
+                "AI content retrieval is not supported by this connector");
+    }
+
+    /**
+     * {@link #verifyForAi}와 동일한 Share-bound Credential로 실제 Content Byte를
+     * Bounded/검증된 형태로 가져온다({@link SourceContentResult#outcome()}이
+     * {@code VERIFIED}일 때만 Byte가 존재한다) - Core 포맷 화이트리스트/Google
+     * Docs Transient Export/Fetch 전후 Version 재확인(1회 재시도 포함)을 모두
+     * 적용한다({@link #fetchContent}와 동일한 검증, Credential 결합 방식만 다르다).
+     */
+    default SourceContentResult fetchForAi(SourceAccessContext context, String expectedSourceVersion,
+            long deadlineMs) {
+        return SourceContentResult.failed(com.sdv.source.domain.SourceContentOutcome.FAILED,
+                "AI content retrieval is not supported by this connector");
+    }
+
+    /**
      * Catalog Sync용 ACL 조회 - Source Owner의 Credential로 수행된다. 모든
      * 페이지를 합쳐 반환한다(중간에 잘리지 않는다) - 실패/불확실 시
      * {@link SourcePermissionsResult#unknown()}/{@link SourcePermissionsResult#failed()}를
