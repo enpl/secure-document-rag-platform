@@ -8,6 +8,7 @@ import com.sdv.event.infrastructure.persistence.entity.OutboxEventEntity;
 import com.sdv.event.infrastructure.persistence.repository.OutboxEventJpaRepository;
 import com.sdv.policy.domain.SecurityLevel;
 import com.sdv.source.domain.DocumentShare;
+import com.sdv.source.domain.DocumentAccessMetadataChangedEvent;
 import com.sdv.source.domain.ShareAccessRevokedEvent;
 import com.sdv.source.domain.ShareAction;
 import com.sdv.source.domain.SourceConnection;
@@ -150,6 +151,7 @@ public class SourceSharingService {
         }
 
         auditService.record(publisherSubject, "SHARE_PUBLISHED", "share:" + saved.getId(), SUCCESS, OK, Map.of());
+        applicationEventPublisher.publishEvent(new DocumentAccessMetadataChangedEvent(saved.getDocumentId()));
         return toDomain(saved, recipients);
     }
 
@@ -215,6 +217,7 @@ public class SourceSharingService {
         }
 
         auditService.record(publisherSubject, "SHARE_UPDATED", "share:" + shareId, SUCCESS, OK, Map.of());
+        applicationEventPublisher.publishEvent(new DocumentAccessMetadataChangedEvent(share.getDocumentId()));
         return toDomain(share, recipients);
     }
 
@@ -252,6 +255,7 @@ public class SourceSharingService {
         // (§2A.6 "revoke ... must evict"). Source는 RAG를 참조하지 않는다 - RAG 쪽
         // Listener가 이 domain-neutral Event를 구독해 실제 제거를 수행한다.
         applicationEventPublisher.publishEvent(new ShareAccessRevokedEvent(share.getDocumentId()));
+        applicationEventPublisher.publishEvent(new DocumentAccessMetadataChangedEvent(share.getDocumentId()));
         auditService.record(publisherSubject, "SHARE_UNSHARED", "share:" + shareId, SUCCESS, OK, Map.of());
     }
 

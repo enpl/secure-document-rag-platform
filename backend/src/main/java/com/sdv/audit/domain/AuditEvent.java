@@ -15,6 +15,7 @@ import java.util.Map;
 public record AuditEvent(
         String actor,
         String action,
+        String targetType,
         String target,
         String result,
         String reasonCode,
@@ -22,4 +23,8 @@ public record AuditEvent(
         Map<String, String> metadata,
         Instant timestamp
 ) {
+    public AuditEvent(String actor, String action, String target, String result, String reasonCode, String traceId,
+            Map<String, String> metadata, Instant timestamp) {
+        this(actor, action, "HTTP_REQUEST", target, result, reasonCode, traceId, metadata, timestamp);
+    }
 }

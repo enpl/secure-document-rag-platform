@@ -66,7 +66,7 @@ describe('createApiClient cancellation after asynchronous token acquisition (M16
     const client = createApiClient(getAccessToken)
     const controller = new AbortController()
 
-    const requestPromise = client.patch('/shares/5', { expectedGeneration: 1 }, controller.signal)
+    const requestPromise = client.patch('/admin/security/findings/5', { status: 'ACKNOWLEDGED' }, controller.signal)
     const rejection = expect(requestPromise).rejects.toMatchObject({ name: 'AbortError' })
     await Promise.resolve()
     controller.abort()

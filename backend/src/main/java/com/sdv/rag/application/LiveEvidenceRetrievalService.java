@@ -1,6 +1,7 @@
 package com.sdv.rag.application;
 
 import com.sdv.common.model.UserContext;
+import com.sdv.audit.application.RagAuditRecorder;
 import com.sdv.rag.application.port.out.EphemeralEvidenceCapacityExceededException;
 import com.sdv.rag.application.port.out.EphemeralEvidenceInvalidatedException;
 import com.sdv.rag.application.port.out.EphemeralEvidenceStore;
@@ -51,25 +52,35 @@ public class LiveEvidenceRetrievalService {
     private final LiveRetrievalProperties properties;
     private final EvidenceConversationLifecycle conversationLifecycle;
     private final LiveContentAdmission contentAdmission;
+    private final RagAuditRecorder audit;
 
     public LiveEvidenceRetrievalService(SourceConsistencyGuard sourceConsistencyGuard,
             DocumentParsingClient documentParsingClient, EphemeralEvidenceStore ephemeralEvidenceStore,
             LiveRetrievalProperties properties, EvidenceConversationLifecycle conversationLifecycle) {
         this(sourceConsistencyGuard, documentParsingClient, ephemeralEvidenceStore, properties, conversationLifecycle,
-                new LiveContentAdmission(2, 50L * 1024 * 1024));
+                new LiveContentAdmission(2, 50L * 1024 * 1024), RagAuditRecorder.noop());
+    }
+
+    public LiveEvidenceRetrievalService(SourceConsistencyGuard sourceConsistencyGuard,
+            DocumentParsingClient documentParsingClient, EphemeralEvidenceStore ephemeralEvidenceStore,
+            LiveRetrievalProperties properties, EvidenceConversationLifecycle conversationLifecycle,
+            LiveContentAdmission contentAdmission) {
+        this(sourceConsistencyGuard, documentParsingClient, ephemeralEvidenceStore, properties, conversationLifecycle,
+                contentAdmission, RagAuditRecorder.noop());
     }
 
     @Autowired
     public LiveEvidenceRetrievalService(SourceConsistencyGuard sourceConsistencyGuard,
             DocumentParsingClient documentParsingClient, EphemeralEvidenceStore ephemeralEvidenceStore,
             LiveRetrievalProperties properties, EvidenceConversationLifecycle conversationLifecycle,
-            LiveContentAdmission contentAdmission) {
+            LiveContentAdmission contentAdmission, RagAuditRecorder audit) {
         this.sourceConsistencyGuard = sourceConsistencyGuard;
         this.documentParsingClient = documentParsingClient;
         this.ephemeralEvidenceStore = ephemeralEvidenceStore;
         this.properties = properties;
         this.conversationLifecycle = conversationLifecycle;
         this.contentAdmission = contentAdmission;
+        this.audit = audit;
     }
 
     /**
@@ -91,8 +102,11 @@ public class LiveEvidenceRetrievalService {
             return attempt(requester, documentId, conversationId, candidate, true, lease, deadline);
         } catch (LiveRetrievalException e) {
             if (e.reason() == LiveRetrievalException.Reason.DOCUMENT_CHANGED) {
+                audit.documentStage(requester, "VERSION_DISCARD", documentId, "FAILURE", "DOCUMENT_CHANGED",
+                        java.util.Map.of("retry", true));
                 return retryOnVersionChange(requester, documentId, conversationId, candidate, lease, deadline);
             }
+            audit.documentStage(requester, "LIVE_FAILURE", documentId, "FAILURE", e.reason().name(), java.util.Map.of());
             return LiveRetrievalResult.failed(documentId, mapStatus(e.reason()));
         }
     }
@@ -108,8 +122,12 @@ public class LiveEvidenceRetrievalService {
     private LiveRetrievalResult retryOnVersionChange(UserContext requester, Long documentId, String conversationId,
             VectorCandidate candidate, EvidenceConversationLifecycle.Lease lease, LiveRetrievalDeadline deadline) {
         try {
+            audit.documentStage(requester, "VERSION_RETRY", documentId, "STARTED", "DOCUMENT_CHANGED",
+                    java.util.Map.of("retry", true));
             return attempt(requester, documentId, conversationId, candidate, false, lease, deadline);
         } catch (LiveRetrievalException e) {
+            audit.documentStage(requester, "LIVE_FAILURE", documentId, "FAILURE", e.reason().name(),
+                    java.util.Map.of("retry", true));
             return LiveRetrievalResult.failed(documentId, mapStatus(e.reason()));
         }
     }
@@ -131,6 +149,10 @@ public class LiveEvidenceRetrievalService {
         }
         SourceConsistencyGuard.LiveIdentity before = sourceConsistencyGuard.verifyBefore(requester, documentId,
                 deadlineMs);
+        audit.documentStage(requester, "LIVE_PRE_VERIFICATION", documentId, "SUCCESS", "OK", java.util.Map.of(
+                "shareGeneration", before.context().shareGeneration(),
+                "connectionGeneration", before.context().connectionGeneration(),
+                "sourceVersion", before.expectedSourceVersion()));
         long sourceFence = ephemeralEvidenceStore.captureSourceFence(before.context().sourceId());
 
         ParseOutcome parsed;
@@ -170,6 +192,10 @@ public class LiveEvidenceRetrievalService {
         // 근거를 노출하기 전 마지막 재확인 - Fetch/Parse가 진행되는 동안의 Revoke/Block/
         // Disconnect/Version 변경을 여기서 잡는다.
         sourceConsistencyGuard.verifyAfter(before, deadline.fileBudgetMillis(properties.perFileDeadlineMs()));
+        audit.documentStage(requester, "LIVE_POST_VERIFICATION", documentId, "SUCCESS", "OK", java.util.Map.of(
+                "shareGeneration", before.context().shareGeneration(),
+                "connectionGeneration", before.context().connectionGeneration(),
+                "sourceVersion", before.expectedSourceVersion()));
         if (!conversationLifecycle.isActive(lease)) {
             throw new LiveRetrievalException(LiveRetrievalException.Reason.NOT_AUTHORIZED);
         }
@@ -185,6 +211,15 @@ public class LiveEvidenceRetrievalService {
             throw new LiveRetrievalException(LiveRetrievalException.Reason.CAPACITY_EXHAUSTED);
         } catch (EphemeralEvidenceInvalidatedException e) {
             throw new LiveRetrievalException(LiveRetrievalException.Reason.NOT_AUTHORIZED);
+        }
+        try {
+            audit.documentStage(requester, "EVIDENCE_ADMISSION", documentId, "SUCCESS", "OK", java.util.Map.of(
+                    "shareGeneration", before.context().shareGeneration(),
+                    "connectionGeneration", before.context().connectionGeneration(),
+                    "sourceVersion", before.expectedSourceVersion()));
+        } catch (RuntimeException auditFailure) {
+            ephemeralEvidenceStore.evict(handle);
+            throw auditFailure;
         }
         return LiveRetrievalResult.verified(documentId, handle, selection.locatorType(), selection.locatorValue(),
                 selection.partialCoverage());

@@ -53,6 +53,8 @@ export function Sidebar({ open, onNavigate, onClose }: SidebarProps) {
             공유 자료 관리
           </NavLink>
         )}
+        {isAdmin && <NavLink to="/admin/audits" className="sidebar__link" onClick={onNavigate}>감사 로그</NavLink>}
+        {isAdmin && <NavLink to="/admin/security" className="sidebar__link" onClick={onNavigate}>보안 발견</NavLink>}
       </nav>
 
       <div className="sidebar__footer">

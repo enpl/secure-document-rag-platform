@@ -10,6 +10,7 @@ import com.sdv.event.infrastructure.persistence.repository.OutboxEventJpaReposit
 import com.sdv.source.domain.SourceChangeRecord;
 import com.sdv.source.domain.SourceChangeType;
 import com.sdv.source.domain.SourceConnection;
+import com.sdv.source.domain.DocumentAccessMetadataChangedEvent;
 import com.sdv.source.domain.SourceDocument;
 import com.sdv.source.domain.SourcePermission;
 import com.sdv.source.domain.SourcePermissionsResult;
@@ -25,6 +26,7 @@ import com.sdv.sync.infrastructure.persistence.entity.SyncRunEntity;
 import com.sdv.sync.infrastructure.persistence.repository.SyncRunJpaRepository;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -86,6 +88,7 @@ public class SourceSyncPageWriter {
     private final SyncRunJpaRepository syncRunJpaRepository;
     private final OutboxEventJpaRepository outboxEventJpaRepository;
     private final SourceDeletionService sourceDeletionService;
+    private final ApplicationEventPublisher applicationEventPublisher;
     private final Clock clock;
 
     @Autowired
@@ -93,10 +96,11 @@ public class SourceSyncPageWriter {
             SourceDocumentJpaRepository sourceDocumentJpaRepository,
             SourcePermissionJpaRepository sourcePermissionJpaRepository,
             SourceSyncCursorJpaRepository sourceSyncCursorJpaRepository, SyncRunJpaRepository syncRunJpaRepository,
-            OutboxEventJpaRepository outboxEventJpaRepository, SourceDeletionService sourceDeletionService) {
+            OutboxEventJpaRepository outboxEventJpaRepository, SourceDeletionService sourceDeletionService,
+            ApplicationEventPublisher applicationEventPublisher) {
         this(sourceConnectionJpaRepository, sourceDocumentJpaRepository, sourcePermissionJpaRepository,
                 sourceSyncCursorJpaRepository, syncRunJpaRepository, outboxEventJpaRepository, sourceDeletionService,
-                Clock.systemUTC());
+                Clock.systemUTC(), applicationEventPublisher);
     }
 
     /** 테스트가 통제된 {@link Clock}을 직접 주입하기 위한 패키지 전용 생성자. */
@@ -106,6 +110,17 @@ public class SourceSyncPageWriter {
             SourceSyncCursorJpaRepository sourceSyncCursorJpaRepository, SyncRunJpaRepository syncRunJpaRepository,
             OutboxEventJpaRepository outboxEventJpaRepository, SourceDeletionService sourceDeletionService,
             Clock clock) {
+        this(sourceConnectionJpaRepository, sourceDocumentJpaRepository, sourcePermissionJpaRepository,
+                sourceSyncCursorJpaRepository, syncRunJpaRepository, outboxEventJpaRepository, sourceDeletionService,
+                clock, event -> { });
+    }
+
+    SourceSyncPageWriter(SourceConnectionJpaRepository sourceConnectionJpaRepository,
+            SourceDocumentJpaRepository sourceDocumentJpaRepository,
+            SourcePermissionJpaRepository sourcePermissionJpaRepository,
+            SourceSyncCursorJpaRepository sourceSyncCursorJpaRepository, SyncRunJpaRepository syncRunJpaRepository,
+            OutboxEventJpaRepository outboxEventJpaRepository, SourceDeletionService sourceDeletionService,
+            Clock clock, ApplicationEventPublisher applicationEventPublisher) {
         this.sourceConnectionJpaRepository = sourceConnectionJpaRepository;
         this.sourceDocumentJpaRepository = sourceDocumentJpaRepository;
         this.sourcePermissionJpaRepository = sourcePermissionJpaRepository;
@@ -113,6 +128,7 @@ public class SourceSyncPageWriter {
         this.syncRunJpaRepository = syncRunJpaRepository;
         this.outboxEventJpaRepository = outboxEventJpaRepository;
         this.sourceDeletionService = sourceDeletionService;
+        this.applicationEventPublisher = applicationEventPublisher;
         this.clock = clock;
     }
 
@@ -205,6 +221,7 @@ public class SourceSyncPageWriter {
                         entity.getId(), document.getSourceDocumentId(), SourceDocumentDeletedEvent.REASON_TRASHED,
                         now, currentTraceId()));
             }
+            applicationEventPublisher.publishEvent(new DocumentAccessMetadataChangedEvent(entity.getId()));
             return true;
         }
 
@@ -240,6 +257,7 @@ public class SourceSyncPageWriter {
             writeOutboxEvent(new SourceDocumentChangedEvent(UUID.randomUUID(), sourceId, ownerSubject, entity.getId(),
                     document.getSourceDocumentId(), document.getSourceVersion(), now, currentTraceId()));
         }
+        applicationEventPublisher.publishEvent(new DocumentAccessMetadataChangedEvent(entity.getId()));
         return permissionsOk;
     }
 
@@ -262,6 +280,7 @@ public class SourceSyncPageWriter {
         }
         writeOutboxEvent(new SourceDocumentDeletedEvent(UUID.randomUUID(), sourceId, ownerSubject, entity.getId(),
                 sourceDocumentId, reason, now, currentTraceId()));
+        applicationEventPublisher.publishEvent(new DocumentAccessMetadataChangedEvent(entity.getId()));
     }
 
     private void advanceCursor(Long sourceId, String cursor, Instant now) {

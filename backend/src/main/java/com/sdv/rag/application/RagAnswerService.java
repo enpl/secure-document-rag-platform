@@ -8,6 +8,7 @@ import com.sdv.ai.application.NaturalLanguageFileQueryParser;
 import com.sdv.ai.application.PolicyEnforcedLlmGateway;
 import com.sdv.ai.application.PromptComposer;
 import com.sdv.ai.application.port.LlmPort;
+import com.sdv.audit.application.RagAuditRecorder;
 import com.sdv.common.model.UserContext;
 import com.sdv.rag.api.dto.RagAnswerResponse;
 import com.sdv.rag.api.dto.RagCitation;
@@ -20,6 +21,7 @@ import com.sdv.rag.domain.LiveRetrievalResult;
 import com.sdv.rag.domain.LiveRetrievalStatus;
 import com.sdv.rag.domain.VectorCandidate;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -40,10 +42,13 @@ public class RagAnswerService {
     private final PolicyEnforcedLlmGateway llm;
     private final CitationAssembler citationAssembler;
     private final AssistantProperties properties;
+    private final RagAuditRecorder audit;
 
+    @Autowired
     public RagAnswerService(AssistantRouter router, NaturalLanguageFileQueryParser fileQueryParser,
             FileMetadataDiscoveryService fileDiscovery, RagRetrievalService retrieval, PromptComposer promptComposer,
-            PolicyEnforcedLlmGateway llm, CitationAssembler citationAssembler, AssistantProperties properties) {
+            PolicyEnforcedLlmGateway llm, CitationAssembler citationAssembler, AssistantProperties properties,
+            RagAuditRecorder audit) {
         this.router = router;
         this.fileQueryParser = fileQueryParser;
         this.fileDiscovery = fileDiscovery;
@@ -52,12 +57,29 @@ public class RagAnswerService {
         this.llm = llm;
         this.citationAssembler = citationAssembler;
         this.properties = properties;
+        this.audit = audit;
+    }
+
+    public RagAnswerService(AssistantRouter router, NaturalLanguageFileQueryParser fileQueryParser,
+            FileMetadataDiscoveryService fileDiscovery, RagRetrievalService retrieval, PromptComposer promptComposer,
+            PolicyEnforcedLlmGateway llm, CitationAssembler citationAssembler, AssistantProperties properties) {
+        this(router, fileQueryParser, fileDiscovery, retrieval, promptComposer, llm, citationAssembler, properties,
+                RagAuditRecorder.noop());
     }
 
     public RagAnswerResponse ask(UserContext requester, String question, List<Long> selectedDocumentIds) {
+        audit.stage(requester, "REQUEST", "STARTED", "OK", Map.of(
+                "selectedCount", selectedDocumentIds == null ? 0 : selectedDocumentIds.size()));
+        RagAnswerResponse response = doAsk(requester, question, selectedDocumentIds);
+        audit.finalOutcome(requester, response);
+        return response;
+    }
+
+    private RagAnswerResponse doAsk(UserContext requester, String question, List<Long> selectedDocumentIds) {
         AskDeadline deadline = AskDeadline.startingNow(properties.totalDeadlineMs());
         boolean hasSelectedDocuments = selectedDocumentIds != null && !selectedDocumentIds.isEmpty();
         AssistantRouter.Route route = router.route(question, hasSelectedDocuments, deadline);
+        audit.stage(requester, "ROUTING", "DECIDED", route.reasonCode(), Map.of("intent", route.intent().name()));
         if (route.intent() == AssistantIntent.POLICY_BYPASS)
             return RagAnswerResponse.failed("REJECTED", "POLICY_BYPASS");
         if (route.intent() == AssistantIntent.OUT_OF_SCOPE)
@@ -86,6 +108,10 @@ public class RagAnswerService {
         try {
             CandidateSelectionResult shortlist = retrieval.retrieveCandidatesForDocuments(requester, question,
                     selected, properties.maxEvidenceSpans(), deadline.remainingMillis());
+            audit.stage(requester, "CANDIDATE_RETRIEVAL",
+                    shortlist.status() == CandidateSelectionResult.Status.SUCCESS ? "SUCCESS" : "FAILURE",
+                    shortlist.status().name(), Map.of("candidateCount", shortlist.candidates().size(),
+                            "selectedCount", selected.size()));
             if (shortlist.status() != CandidateSelectionResult.Status.SUCCESS) return fromCandidateFailure(shortlist.status());
 
             if (shortlist.candidates().isEmpty()) return RagAnswerResponse.failed("NO_EVIDENCE", "NO_RELEVANT_EVIDENCE");
@@ -99,6 +125,10 @@ public class RagAnswerService {
             }
             EvidenceBatchResult batch = retrieval.retrieveVerifiedEvidenceCandidates(requester, conversationId,
                     shortlist.candidates(), deadline.remainingMillis());
+            long verifiedCount = batch.results().stream().filter(item -> item.status() == LiveRetrievalStatus.VERIFIED).count();
+            audit.stage(requester, "LIVE_VERIFICATION", verifiedCount > 0 ? "SUCCESS" : "FAILURE",
+                    batch.requestPartial() ? "PARTIAL" : "OK", Map.of("verifiedCount", verifiedCount,
+                            "failedCount", batch.results().size() - verifiedCount, "partial", batch.requestPartial()));
 
             List<BoundEvidence> supplied = new ArrayList<>();
             String failure = null;
@@ -112,6 +142,9 @@ public class RagAnswerService {
                 coveragePartial |= item.partialCoverage();
                 EvidenceReleaseResult release = retrieval.releaseVerifiedEvidence(requester, item, conversationId,
                         deadline.remainingMillis());
+                audit.documentStage(requester, "EVIDENCE_RELEASE", item.documentId(),
+                        release.status() == EvidenceReleaseStatus.RELEASED ? "SUCCESS" : "FAILURE",
+                        release.status().name(), Map.of());
                 if (release.status() != EvidenceReleaseStatus.RELEASED) {
                     failure = reason(release.status());
                     coveragePartial = true;
@@ -146,6 +179,9 @@ public class RagAnswerService {
                 return RagAnswerResponse.incomplete("COMPARISON_INPUT_INCOMPLETE");
             }
             var generated = llm.generate(composition.request(), deadline);
+            audit.stage(requester, "MODEL_USE",
+                    generated.failure() == PolicyEnforcedLlmGateway.Failure.NONE ? "SUCCESS" : "FAILURE",
+                    generated.failure().name(), Map.of("suppliedCount", supplied.size()));
             if (generated.failure() != PolicyEnforcedLlmGateway.Failure.NONE)
                 return RagAnswerResponse.failed("FAILED", modelFailure(generated.failure()));
 
@@ -158,6 +194,9 @@ public class RagAnswerService {
             for (BoundEvidence evidence : supplied) {
                 EvidenceReleaseResult current = retrieval.releaseVerifiedEvidence(requester, evidence.live(),
                         conversationId, deadline.remainingMillis());
+                audit.documentStage(requester, "EVIDENCE_REVALIDATION", evidence.live().documentId(),
+                        current.status() == EvidenceReleaseStatus.RELEASED ? "SUCCESS" : "FAILURE",
+                        current.status().name(), Map.of());
                 if (current.status() != EvidenceReleaseStatus.RELEASED
                         || !sameBinding(evidence.release().provenance(), current.provenance())) {
                     return RagAnswerResponse.failed("FAILED", reason(current.status()));
@@ -176,6 +215,8 @@ public class RagAnswerService {
             supported.forEach(c -> cited.addAll(c.evidenceLabels()));
             List<RagCitation> citations = cited.stream().map(byLabel::get).filter(java.util.Objects::nonNull)
                     .map(e -> citationAssembler.assemble(requester, e.release().provenance())).toList();
+            audit.stage(requester, "CITATION_RELEASE", "SUCCESS", "OK",
+                    Map.of("citationCount", citations.size()));
             String answer = supported.stream().map(LlmPort.Claim::text).reduce((a, b) -> a + "\n" + b).orElse(null);
             successful = true;
             return new RagAnswerResponse(coveragePartial ? "PARTIAL" : "SUCCESS",
@@ -184,6 +225,8 @@ public class RagAnswerService {
         } finally {
             if (successful) retrieval.closeEvidenceConversation(requester, conversationId);
             else retrieval.failEvidenceConversation(requester, conversationId);
+            audit.stage(requester, "EVIDENCE_INVALIDATION", "SUCCESS",
+                    successful ? "CONVERSATION_CLOSED" : "TERMINAL_ERROR", Map.of());
         }
     }
 
