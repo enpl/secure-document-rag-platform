@@ -437,6 +437,41 @@ public class DocumentParsingClient {
         }
     }
 
+    /** Budget-aware M13/M14 overload. The same timer covers upload, headers and body consumption. */
+    public QueryEmbeddingOutcome embedQuery(String text, long deadlineMs) {
+        if (deadlineMs <= 0 || serviceUri == null || objectMapper == null || boundedHttpClient == null) {
+            return QueryEmbeddingOutcome.failure("request deadline expired");
+        }
+        long startedNanos = System.nanoTime();
+        try {
+            byte[] request = objectMapper.writeValueAsBytes(new EmbedQueryRequest(text));
+            long remainingMs = remainingMillis(startedNanos, deadlineMs);
+            if (remainingMs <= 0) return QueryEmbeddingOutcome.failure("request deadline expired");
+            HttpRequest httpRequest = HttpRequest.newBuilder(serviceUri.resolve("/embed-query"))
+                    .timeout(Duration.ofMillis(remainingMs))
+                    .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(request)).build();
+            HttpResponse<byte[]> response = boundedHttpClient.send(httpRequest,
+                    limitedByteArrayHandler(1_000_000, startedNanos, deadlineMs));
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                return QueryEmbeddingOutcome.failure("AI service call failed");
+            }
+            if (remainingMillis(startedNanos, deadlineMs) <= 0) {
+                return QueryEmbeddingOutcome.failure("request deadline expired");
+            }
+            return toQueryEmbeddingOutcome(objectMapper.readValue(response.body(), EmbedQueryResponse.class));
+        } catch (HttpTimeoutException e) {
+            return QueryEmbeddingOutcome.failure("request deadline expired");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return QueryEmbeddingOutcome.failure("request deadline expired");
+        } catch (IOException | RuntimeException e) {
+            return remainingMillis(startedNanos, deadlineMs) <= 0
+                    ? QueryEmbeddingOutcome.failure("request deadline expired")
+                    : QueryEmbeddingOutcome.failure("AI service call failed");
+        }
+    }
+
     private static QueryEmbeddingOutcome toQueryEmbeddingOutcome(EmbedQueryResponse response) {
         if (response == null || !"SUCCESS".equals(response.outcome())) {
             return QueryEmbeddingOutcome.failure(

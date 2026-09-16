@@ -2,6 +2,8 @@ package com.sdv.rag.api;
 
 import com.sdv.rag.api.dto.RagFileSearchResponse;
 import com.sdv.rag.application.FileMetadataDiscoveryService;
+import com.sdv.rag.application.RagAnswerService;
+import com.sdv.rag.api.dto.RagAnswerResponse;
 import com.sdv.testsupport.TestcontainersConfiguration;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -22,6 +24,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -46,6 +50,26 @@ class RagQueryControllerWebTest {
     private MockMvc mockMvc;
     @MockitoBean
     private FileMetadataDiscoveryService fileMetadataDiscoveryService;
+    @MockitoBean
+    private RagAnswerService ragAnswerService;
+
+    @Test
+    void askAllowsNormalMultilineWhitespaceAndDisablesCaching() throws Exception {
+        when(ragAnswerService.ask(any(), any(), any())).thenReturn(RagAnswerResponse.failed("NO_EVIDENCE", "NO_EVIDENCE"));
+        mockMvc.perform(post("/api/rag/ask").with(userSubject("user-a")).contentType(APPLICATION_JSON)
+                        .content("{\"question\":\"첫 줄\\n둘째 줄\\t조건\",\"selectedDocumentIds\":[1]}"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")))
+                .andExpect(jsonPath("$.reasonCode").value("NO_EVIDENCE"));
+    }
+
+    @Test
+    void askRejectsDisallowedControlCharacter() throws Exception {
+        mockMvc.perform(post("/api/rag/ask").with(userSubject("user-a")).contentType(APPLICATION_JSON)
+                        .content("{\"question\":\"bad\\u0001input\",\"selectedDocumentIds\":[1]}"))
+                .andExpect(status().isBadRequest());
+    }
 
     @Test
     void missingTokenReturns401() throws Exception {

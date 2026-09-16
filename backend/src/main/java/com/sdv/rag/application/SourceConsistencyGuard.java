@@ -70,12 +70,16 @@ public class SourceConsistencyGuard {
      * Fetch하지 않는다.
      */
     public LiveIdentity verifyBefore(UserContext requester, Long documentId, long deadlineMs) {
+        if (deadlineMs <= 0) throw new LiveRetrievalException(LiveRetrievalException.Reason.REQUEST_TIMEOUT);
         Snapshot snapshot = readFreshSnapshot(requester.subject(), documentId);
         authorize(requester, snapshot.context());
         DocumentSourceConnector connector = sourceConnectorRegistry.getConnector(snapshot.sourceType())
                 .orElseThrow(() -> new LiveRetrievalException(LiveRetrievalException.Reason.NOT_AVAILABLE));
+        long started = System.nanoTime();
         SourceMetadataVerificationResult live = connector.verifyForAi(snapshot.context(), deadlineMs);
         if (live.outcome() != SourceMetadataVerificationOutcome.VERIFIED) {
+            if (elapsedMillis(started) >= deadlineMs)
+                throw new LiveRetrievalException(LiveRetrievalException.Reason.REQUEST_TIMEOUT);
             throw new LiveRetrievalException(LiveRetrievalException.Reason.NOT_AVAILABLE);
         }
         return new LiveIdentity(requester, snapshot, connector, live.sourceVersion(), live.mimeType(), live.name());
@@ -89,9 +93,13 @@ public class SourceConsistencyGuard {
      * 쓰지 않는다.
      */
     public void verifyAfter(LiveIdentity before, long deadlineMs) {
+        if (deadlineMs <= 0) throw new LiveRetrievalException(LiveRetrievalException.Reason.REQUEST_TIMEOUT);
+        long started = System.nanoTime();
         SourceMetadataVerificationResult live = before.connector().verifyForAi(before.snapshot().context(),
                 deadlineMs);
         if (live.outcome() != SourceMetadataVerificationOutcome.VERIFIED) {
+            if (elapsedMillis(started) >= deadlineMs)
+                throw new LiveRetrievalException(LiveRetrievalException.Reason.REQUEST_TIMEOUT);
             throw new LiveRetrievalException(LiveRetrievalException.Reason.NOT_AVAILABLE);
         }
         if (!before.expectedSourceVersion().equals(live.sourceVersion())) {
@@ -143,6 +151,10 @@ public class SourceConsistencyGuard {
 
     private static boolean sameBinding(Snapshot before, Snapshot after) {
         return before.context().equals(after.context()) && before.sourceType() == after.sourceType();
+    }
+
+    private static long elapsedMillis(long startedNanos) {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
     }
 
     record Snapshot(SourceAccessContext context, SourceType sourceType) {

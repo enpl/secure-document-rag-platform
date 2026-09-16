@@ -20,8 +20,9 @@ public enum LiveRetrievalStatus {
     /** Core AI 처리 대상 형식이 아니다. */
     UNSUPPORTED_FORMAT,
     /** 이 요청/Store에 허용된 유한 자원 상한을 넘었다. */
-    CAPACITY_EXHAUSTED
-    ,
+    CAPACITY_EXHAUSTED,
+    /** Google Workspace synchronous export exceeded the provider's supported bound. */
+    EXPORT_LIMIT_EXCEEDED,
     /** The shared request deadline expired; this is distinct from finite capacity admission. */
     REQUEST_TIMEOUT
 }

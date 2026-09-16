@@ -196,6 +196,7 @@ public class LiveEvidenceRetrievalService {
                     LiveRetrievalException.Reason.DOCUMENT_CHANGED);
             case UNSUPPORTED_FORMAT -> new LiveRetrievalException(LiveRetrievalException.Reason.UNSUPPORTED_FORMAT);
             case TIMEOUT -> new LiveRetrievalException(LiveRetrievalException.Reason.REQUEST_TIMEOUT);
+            case EXPORT_LIMIT_EXCEEDED -> new LiveRetrievalException(LiveRetrievalException.Reason.EXPORT_LIMIT_EXCEEDED);
             default -> new LiveRetrievalException(LiveRetrievalException.Reason.NOT_AVAILABLE);
         };
     }
@@ -208,6 +209,7 @@ public class LiveEvidenceRetrievalService {
             case NO_EVIDENCE -> LiveRetrievalStatus.NO_EVIDENCE;
             case UNSUPPORTED_FORMAT -> LiveRetrievalStatus.UNSUPPORTED_FORMAT;
             case CAPACITY_EXHAUSTED -> LiveRetrievalStatus.CAPACITY_EXHAUSTED;
+            case EXPORT_LIMIT_EXCEEDED -> LiveRetrievalStatus.EXPORT_LIMIT_EXCEEDED;
             case REQUEST_TIMEOUT -> LiveRetrievalStatus.REQUEST_TIMEOUT;
         };
     }
