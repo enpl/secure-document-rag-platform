@@ -338,7 +338,7 @@ class DocumentEmbeddingJpaRepositoryTest {
     private static DocumentEmbeddingEntity entity(long documentId, int chunkIndex, String vector,
             String sourceVersion) {
         return new DocumentEmbeddingEntity(documentId, chunkIndex, "PAGE", "1", vector, sourceVersion,
-                "0".repeat(64), "1", "bge-m3:567m", Instant.now());
+                "0".repeat(64), "1", "1", "bge-m3:567m", Instant.now());
     }
 
     /** pgvector 텍스트 형식({@code "[firstValue,0,0,...]"}, 나머지 1023차원은 0) 리터럴을 만든다. */

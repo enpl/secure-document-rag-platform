@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 
 def _int_env(name: str, default: int) -> int:
@@ -17,6 +18,16 @@ def _int_env(name: str, default: int) -> int:
     if raw is None or raw.strip() == "":
         return default
     return int(raw)
+
+
+def _str_env(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    return default if raw is None or raw.strip() == "" else raw
+
+
+def _optional_str_env(name: str) -> Optional[str]:
+    raw = os.getenv(name)
+    return raw if raw and raw.strip() != "" else None
 
 
 @dataclass(frozen=True)
@@ -60,6 +71,28 @@ class Settings:
     # 이 Service Instance 안에서 동시에 활성화할 수 있는 Parser 작업 수 상한.
     max_concurrent_parses: int = 4
 
+    # M11 - /index Chunking 한도(제안된 구현 기본값 - v3.2 명세가 확정한 값이 아니다).
+    # Chunk 하나의 최대 문자 수.
+    chunk_max_chars: int = 1800
+    # 인접 Chunk 사이 겹침 문자 수(경계 근처 문맥 유실 완화) - chunk_max_chars보다 작아야 한다.
+    chunk_overlap_chars: int = 200
+    # 문서 하나가 만들 수 있는 최대 Chunk 개수 - 넘으면 잘라내지 않고 FAILED로 실패한다
+    # (parser_service.py의 출력 길이 상한과 동일한 "잘린 결과를 성공으로 포장하지 않는다" 원칙).
+    max_chunks_per_document: int = 200
+
+    # M11 - Local Embedding Provider(Ollama, CLAUDE.md "Local LLM(Ollama)을 기본
+    # Provider로 사용한다"). 이미 Backend(application-*.yml)가 쓰는 것과 같은 환경변수
+    # 이름을 재사용한다(OLLAMA_BASE_URL, .env.example에 이미 존재) - 새 이름을 만들지 않는다.
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_embed_timeout_seconds: int = 60
+
+    # M11 - Content HMAC Key. 외부에서 주입되어야 한다(운영자 Secret) - 하드코딩된
+    # 운영 Key/Unkeyed Hash 대체/조용한 미보안 기본값을 두지 않는다. None이면 /index가
+    # 이 Key가 실제로 필요해지는 시점(성공적인 Chunking 이후, HMAC 계산 직전)에만
+    # FAILED로 안전하게 거부한다(Application 기동 자체는 막지 않는다 - Backend의
+    # token-encryption-key와 동일한 "실제 사용 시점에만 Fail Closed" 관례).
+    index_content_hmac_key: Optional[str] = None
+
 
 def get_settings() -> Settings:
     return Settings(
@@ -73,4 +106,11 @@ def get_settings() -> Settings:
         max_output_chars=_int_env("SDV_PARSE_MAX_OUTPUT_CHARS", Settings.max_output_chars),
         parse_timeout_seconds=_int_env("SDV_PARSE_TIMEOUT_SECONDS", Settings.parse_timeout_seconds),
         max_concurrent_parses=_int_env("SDV_PARSE_MAX_CONCURRENT", Settings.max_concurrent_parses),
+        chunk_max_chars=_int_env("SDV_INDEX_CHUNK_MAX_CHARS", Settings.chunk_max_chars),
+        chunk_overlap_chars=_int_env("SDV_INDEX_CHUNK_OVERLAP_CHARS", Settings.chunk_overlap_chars),
+        max_chunks_per_document=_int_env("SDV_INDEX_MAX_CHUNKS", Settings.max_chunks_per_document),
+        ollama_base_url=_str_env("OLLAMA_BASE_URL", Settings.ollama_base_url),
+        ollama_embed_timeout_seconds=_int_env("SDV_INDEX_OLLAMA_TIMEOUT_SECONDS",
+                Settings.ollama_embed_timeout_seconds),
+        index_content_hmac_key=_optional_str_env("SDV_INDEX_CONTENT_HMAC_KEY"),
     )

@@ -46,3 +46,30 @@ class ParseResponseDto(BaseModel):
 
 class HealthResponseDto(BaseModel):
     status: str
+
+
+class IndexChunkDto(BaseModel):
+    """M11 신규 - 청크 하나의 색인 결과. 평문 Chunk Text를 절대 담지 않는다 -
+    Embedding Vector/일반화된 Locator/원문을 복원할 수 없는 Content HMAC뿐이다."""
+
+    chunkIndex: int
+    locatorType: str
+    locatorValue: str
+    embedding: List[float]
+    contentHmac: str
+
+
+class IndexResponseDto(BaseModel):
+    """M11 신규(F-AI-index) - {@code /index} 응답. outcome이 SUCCESS일 때만
+    parserVersion/chunkingVersion/embeddingModel/embeddingDimensions/chunks가
+    채워진다 - Java DocumentParsingClient.index()가 그대로 IndexOutcome으로 옮긴다.
+    reason은 실패/미지원/텍스트 없음일 때만 채워지며, /parse와 동일하게 짧고 고정된
+    값이어야 한다(원본 파일 내용/예외 Stack Trace 금지)."""
+
+    outcome: str
+    parserVersion: Optional[str] = None
+    chunkingVersion: Optional[str] = None
+    embeddingModel: Optional[str] = None
+    embeddingDimensions: Optional[int] = None
+    chunks: Optional[List[IndexChunkDto]] = None
+    reason: Optional[str] = None

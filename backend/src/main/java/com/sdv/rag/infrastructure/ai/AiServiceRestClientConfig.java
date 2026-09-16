@@ -22,9 +22,10 @@ import org.springframework.web.client.RestClient;
 public class AiServiceRestClientConfig {
 
     private static final int CONNECT_TIMEOUT_MS = 5_000;
-    // 서버 측 Parser 실행 상한(60s)보다 여유 있게 크다 - Client가 서버보다
-    // 먼저 포기하면 서버가 실제로 작업을 끝냈는지 알 수 없는 채로 실패 처리하게 된다.
-    private static final int READ_TIMEOUT_MS = 65_000;
+    // 서버 측 Parser 실행 상한(60s) + M11 /index가 추가로 수행하는 Chunking/Ollama
+    // Embedding 호출 시간까지 여유 있게 덮는다 - Client가 서버보다 먼저 포기하면
+    // 서버가 실제로 작업을 끝냈는지 알 수 없는 채로 실패 처리하게 된다.
+    private static final int READ_TIMEOUT_MS = 120_000;
 
     /**
      * 기본값은 {@code application-local.yml}의 기존 {@code AI_SERVICE_URL} 기본값과

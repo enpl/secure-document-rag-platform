@@ -283,6 +283,11 @@ public class SourceSyncPageWriter {
             case SourceDocumentChangedEvent e -> "source:" + e.sourceId() + ":doc:" + e.externalDocumentId();
             case SourceDocumentDeletedEvent e -> "source:" + e.sourceId() + ":doc:" + e.externalDocumentId();
             case SourcePermissionChangedEvent e -> "source:" + e.sourceId() + ":doc:" + e.externalDocumentId();
+            // M11 - this Writer never actually creates an IndexRequestedEvent itself
+            // (SourceSharingService does, with its own partition-key helper) - this branch only
+            // keeps the exhaustive sealed-interface switch compiling now that DomainEvent has a
+            // fourth permit.
+            case com.sdv.event.domain.IndexRequestedEvent e -> "source:" + e.sourceId() + ":doc:" + e.externalDocumentId();
         };
     }
 

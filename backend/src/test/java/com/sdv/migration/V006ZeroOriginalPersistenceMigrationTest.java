@@ -220,11 +220,14 @@ class V006ZeroOriginalPersistenceMigrationTest {
     }
 
     private void insertEmbeddingRow(Connection connection, long documentId, int chunkIndex) throws SQLException {
+        // M11(V012)이 chunking_version NOT NULL 컬럼을 추가했다 - 이 Test는 그 이전부터
+        // 있던 나머지 컬럼만 채우고, 새 컬럼은 고정 합성 값으로 채운다(이 Test의 목적인
+        // "V006 이후 평문 컬럼이 전혀 없다" 검증과 무관하다).
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO document_embedding_index "
                         + "(document_id, chunk_index, locator_type, locator_value, embedding, source_version, "
-                        + "content_hmac, parser_version, embedding_model) "
-                        + "VALUES (?, ?, 'DOCUMENT', '1', CAST(? AS vector), 'v1', ?, '1', 'bge-m3:567m')")) {
+                        + "content_hmac, parser_version, chunking_version, embedding_model) "
+                        + "VALUES (?, ?, 'DOCUMENT', '1', CAST(? AS vector), 'v1', ?, '1', '1', 'bge-m3:567m')")) {
             ps.setLong(1, documentId);
             ps.setInt(2, chunkIndex);
             ps.setString(3, zeroVectorLiteral());

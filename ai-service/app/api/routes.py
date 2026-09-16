@@ -1,8 +1,9 @@
-"""F-AI-002. Backend 전용 내부 API - {@code /parse}, {@code /health}.
+"""F-AI-002. Backend 전용 내부 API - {@code /parse}, {@code /index}, {@code /health}.
 
-M06은 {@code /parse}/{@code /health}만 구현한다({@code /index}는 M11+ 범위).
-공개 인증되지 않은 배포를 전제하지 않는다 - 고정된 운영자 설정 내부
-주소로만 호출된다({@code sdv.ai-service.url}, Backend 쪽 설정).
+M06이 {@code /parse}/{@code /health}를 구현했고, M11이 {@code /index}(Parse+Chunk+
+Embed - 평문 Chunk를 절대 응답에 담지 않는다)를 추가한다. 공개 인증되지 않은 배포를
+전제하지 않는다 - 고정된 운영자 설정 내부 주소로만 호출된다({@code
+sdv.ai-service.url}, Backend 쪽 설정).
 """
 
 from __future__ import annotations
@@ -13,8 +14,9 @@ from fastapi import APIRouter, HTTPException, Request
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.core.config import get_settings
-from app.models.schemas import HealthResponseDto, ParseResponseDto
+from app.models.schemas import HealthResponseDto, IndexResponseDto, ParseResponseDto
 from app.services.parser_service import parse_document
+from app.workers.index_worker import run_index
 
 router = APIRouter()
 
@@ -41,6 +43,35 @@ async def parse(request: Request) -> ParseResponseDto:
     해석한다.
     """
     settings = get_settings()
+    file, declared_mime_type, content = await _read_bounded_upload(request, settings)
+    # 실제 Parsing(Multiprocessing Timeout/Semaphore 포함)은 Blocking 작업이다
+    # - Event Loop를 막지 않도록 별도 Thread에서 실행한다(그래야 이 요청이
+    # 느리게 처리되는 동안에도 /health 등 다른 요청이 계속 응답할 수 있다).
+    return await asyncio.to_thread(parse_document, content, file.filename or "", declared_mime_type or None,
+            settings)
+
+
+@router.post("/index", response_model=IndexResponseDto)
+async def index(request: Request) -> IndexResponseDto:
+    """M11 신규(F-AI-index) - Parse+Chunk+Embed 전체 Pipeline을 한 번에 수행한다.
+    {@code /parse}와 동일한 Bounded Multipart 읽기(``_read_bounded_upload``)를
+    재사용한다. 응답에는 평문 Chunk Text가 전혀 담기지 않는다({@code
+    index_worker.run_index}/{@code IndexResponseDto} 참고) - {@code /parse}와
+    달리 정규화된 전체 Text 자체도 응답으로 나가지 않는다."""
+
+    settings = get_settings()
+    file, declared_mime_type, content = await _read_bounded_upload(request, settings)
+    # /parse와 동일한 이유로 별도 Thread에서 실행한다 - Parsing/Chunking/Embedding
+    # Provider 호출 전체가 Blocking이다.
+    return await asyncio.to_thread(run_index, content, file.filename or "", declared_mime_type or None, settings)
+
+
+async def _read_bounded_upload(request: Request, settings):
+    """``/parse``와 ``/index``가 공유하는 Bounded Multipart 업로드 읽기 - 원본
+    ASGI Byte Stream을 직접 소비하면서 한도를 넘는 즉시 중단한다(``/parse``
+    Docstring의 이유와 동일, Starlette의 표준 {@code UploadFile = File(...)}
+    자동 주입은 그 검사 이전에 이미 전체 Body를 Parsing/Spool한다)."""
+
     bounded_body = await _read_bounded_body(request, settings.max_input_bytes + _MULTIPART_ENVELOPE_OVERHEAD_BYTES)
     bounded_request = _request_with_body(request, bounded_body)
     form = await bounded_request.form(max_part_size=settings.max_input_bytes + _MULTIPART_ENVELOPE_OVERHEAD_BYTES)
@@ -50,14 +81,9 @@ async def parse(request: Request) -> ParseResponseDto:
             raise HTTPException(status_code=400, detail="file part is required")
         declared_mime_type = form.get("declaredMimeType") or ""
         content = await file.read()
+        return file, declared_mime_type, content
     finally:
         await form.close()
-
-    # 실제 Parsing(Multiprocessing Timeout/Semaphore 포함)은 Blocking 작업이다
-    # - Event Loop를 막지 않도록 별도 Thread에서 실행한다(그래야 이 요청이
-    # 느리게 처리되는 동안에도 /health 등 다른 요청이 계속 응답할 수 있다).
-    return await asyncio.to_thread(parse_document, content, file.filename or "", declared_mime_type or None,
-            settings)
 
 
 async def _read_bounded_body(request: Request, max_bytes: int) -> bytes:

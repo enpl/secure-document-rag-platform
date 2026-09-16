@@ -88,6 +88,16 @@ public class DocumentEmbeddingEntity {
     private String parserVersion;
 
     /**
+     * M11 신규(V012) - "같은 입력을 어떤 Chunking 규칙(크기/겹침/개수 상한)으로
+     * 나눴는가"의 명시적 식별자. {@link #parserVersion}/{@link #modelVersion}과는
+     * 독립적인 축이다 - Chunking 규칙만 바뀌어도 이전 세대와 새 세대가 섞이면 안
+     * 된다({@link com.sdv.rag.infrastructure.persistence.repository.DocumentEmbeddingJpaRepository#replaceGeneration}
+     * 의 Generation 동질성 검증이 이 필드도 함께 확인한다).
+     */
+    @Column(name = "chunking_version", nullable = false, length = 50)
+    private String chunkingVersion;
+
+    /**
      * File Manifest(F-BE-106)의 공식 Java Contract 이름은 {@code modelVersion}이다
      * - DB Column 이름({@code embedding_model})과는 의도적으로 다르다({@code
      * CORE_SPEC.md}의 §"document_embedding_index" 목표 Schema는 DB Column을
@@ -108,7 +118,7 @@ public class DocumentEmbeddingEntity {
 
     public DocumentEmbeddingEntity(Long documentId, Integer chunkIndex, String locatorType, String locatorValue,
             String embedding, String sourceVersion, String contentHmac, String parserVersion,
-            String modelVersion, Instant indexedAt) {
+            String chunkingVersion, String modelVersion, Instant indexedAt) {
         this.documentId = documentId;
         this.chunkIndex = chunkIndex;
         this.locatorType = locatorType;
@@ -117,6 +127,7 @@ public class DocumentEmbeddingEntity {
         this.sourceVersion = sourceVersion;
         this.contentHmac = contentHmac;
         this.parserVersion = parserVersion;
+        this.chunkingVersion = chunkingVersion;
         this.modelVersion = modelVersion;
         this.indexedAt = indexedAt;
     }
@@ -155,6 +166,10 @@ public class DocumentEmbeddingEntity {
 
     public String getParserVersion() {
         return parserVersion;
+    }
+
+    public String getChunkingVersion() {
+        return chunkingVersion;
     }
 
     public String getModelVersion() {
