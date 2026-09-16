@@ -7,8 +7,12 @@ import com.sdv.common.trace.TraceIdFilter;
 import com.sdv.rag.api.dto.RagFileSearchQuery;
 import com.sdv.rag.api.dto.RagFileSearchResponse;
 import com.sdv.rag.api.dto.RagFileSortKey;
+import com.sdv.rag.api.dto.RagAskRequest;
+import com.sdv.rag.api.dto.RagAnswerResponse;
 import com.sdv.rag.application.FileMetadataDiscoveryService;
+import com.sdv.rag.application.RagAnswerService;
 import com.sdv.rag.application.RagDiscoveryProperties;
+import com.sdv.ai.application.AssistantProperties;
 import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -16,6 +20,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
@@ -45,12 +51,37 @@ public class RagQueryController {
     private final FileMetadataDiscoveryService fileMetadataDiscoveryService;
     private final CurrentUserProvider currentUserProvider;
     private final RagDiscoveryProperties properties;
+    private final RagAnswerService ragAnswerService;
+    private final AssistantProperties assistantProperties;
 
     public RagQueryController(FileMetadataDiscoveryService fileMetadataDiscoveryService,
-            CurrentUserProvider currentUserProvider, RagDiscoveryProperties properties) {
+            CurrentUserProvider currentUserProvider, RagDiscoveryProperties properties,
+            RagAnswerService ragAnswerService, AssistantProperties assistantProperties) {
         this.fileMetadataDiscoveryService = fileMetadataDiscoveryService;
         this.currentUserProvider = currentUserProvider;
         this.properties = properties;
+        this.ragAnswerService = ragAnswerService;
+        this.assistantProperties = assistantProperties;
+    }
+
+    @PostMapping("/ask")
+    public ResponseEntity<RagAnswerResponse> ask(@RequestBody RagAskRequest request) {
+        if (request == null || invalidQuestion(request.question(), assistantProperties.maxQuestionChars())
+                || request.selectedDocumentIds().stream().anyMatch(id -> id == null || id <= 0)) {
+            throw new InvalidDiscoveryQueryException();
+        }
+        RagAnswerResponse response = ragAnswerService.ask(currentUserProvider.getCurrentUser(), request.question(),
+                request.selectedDocumentIds());
+        return ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore()).body(response);
+    }
+
+    private static boolean invalidQuestion(String question, int maxQuestionChars) {
+        if (question == null || question.isBlank() || question.length() > maxQuestionChars) return true;
+        for (int i = 0; i < question.length(); i++) {
+            char value = question.charAt(i);
+            if (Character.isISOControl(value) && value != '\n' && value != '\r' && value != '\t') return true;
+        }
+        return false;
     }
 
     @GetMapping("/files")

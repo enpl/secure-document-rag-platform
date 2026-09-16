@@ -1,5 +1,6 @@
 package com.sdv.rag.application;
 
+import com.sdv.ai.application.NaturalLanguageFileQueryParser;
 import com.sdv.common.model.Role;
 import com.sdv.common.model.UserContext;
 import com.sdv.policy.application.EffectivePermissionService;
@@ -906,6 +907,24 @@ class FileMetadataDiscoveryServiceTest {
                 .as("B's own visibility (and anything possibly beyond it) was never resolved - must not guess FALSE")
                 .isNull();
         assertThat(fakeConnector.verifyCalls()).hasSize(1);
+    }
+
+    @Test
+    void naturalLanguageZipDiscoveryUsesTheRealMetadataServiceWithoutContentProcessing() {
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        Fixture fixture = createDocument(publisher, "ACTIVE", "ACTIVE", "release-bundle.zip",
+                "application/zip", "v1", "SKIPPED_UNSUPPORTED");
+        shareWith(fixture, publisher, recipient);
+        fakeConnector.stub(fixture.sourceId(), fixture.sourceDocumentId(), SourceMetadataVerificationResult.verified(
+                "release-bundle.zip", "application/zip", "v1", clock.instant(), true));
+        var parsed = new NaturalLanguageFileQueryParser().parse("ZIP 파일 찾아줘", 20);
+
+        assertThat(parsed.failureReason()).isNull();
+        assertThat(parsed.query().mimeType()).isEqualTo("application/zip");
+        RagFileSearchResponse response = search(recipient, parsed.query());
+        assertThat(response.items()).extracting(RagFileItem::name).containsExactly("release-bundle.zip");
+        assertThat(fakeConnector.verifyCalls()).containsExactly(fixture.sourceId() + ":" + fixture.sourceDocumentId());
     }
 
     // ------------------------------------------------------------------

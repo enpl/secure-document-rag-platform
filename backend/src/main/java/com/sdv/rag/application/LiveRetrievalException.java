@@ -21,6 +21,7 @@ public class LiveRetrievalException extends RuntimeException {
         UNSUPPORTED_FORMAT,
         /** 이 요청/Store에 허용된 유한 자원 상한(파일 수/시간/근거 크기 등)을 넘었다. */
         CAPACITY_EXHAUSTED,
+        EXPORT_LIMIT_EXCEEDED,
         /** 이 파일에 허용된 벽시계 예산을 넘었다. */
         REQUEST_TIMEOUT
     }

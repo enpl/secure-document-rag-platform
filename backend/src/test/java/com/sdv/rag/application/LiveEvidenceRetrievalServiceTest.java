@@ -170,6 +170,19 @@ class LiveEvidenceRetrievalServiceTest {
     }
 
     @Test
+    void exportLimitIsNotCollapsedIntoUnavailableOrNoEvidence() {
+        when(sourceConsistencyGuard.verifyBefore(any(), eq(DOCUMENT_ID), anyLong()))
+                .thenReturn(identity("v1", "application/vnd.google-apps.document"));
+        when(connector.fetchForAi(any(), eq("v1"), anyLong()))
+                .thenReturn(SourceContentResult.failed(SourceContentOutcome.EXPORT_LIMIT_EXCEEDED, "bounded export"));
+
+        LiveRetrievalResult result = service.retrieveLive(REQUESTER, DOCUMENT_ID, "conv-export-limit", null);
+
+        assertThat(result.status()).isEqualTo(LiveRetrievalStatus.EXPORT_LIMIT_EXCEEDED);
+        verify(documentParsingClient, never()).parse(any(), any(), any(), anyLong());
+    }
+
+    @Test
     void aSingleVersionChangeIsRetriedExactlyOnceAndSucceedsOnTheFreshAttempt() {
         when(sourceConsistencyGuard.verifyBefore(any(), eq(DOCUMENT_ID), anyLong()))
                 .thenReturn(identity("v1", "application/pdf"), identity("v2", "application/pdf"));

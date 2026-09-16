@@ -1,0 +1,6 @@
+package com.sdv.ai.application;
+
+public enum AssistantIntent {
+    FIND_FILE, FIND_CONTENT, SUMMARIZE, COMPARE, GROUNDED_ANALYSIS,
+    OUT_OF_SCOPE, POLICY_BYPASS, CLARIFICATION_REQUIRED
+}

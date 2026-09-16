@@ -7,6 +7,10 @@ import com.sdv.rag.application.port.VectorSearchPort;
 import com.sdv.rag.application.port.out.EphemeralEvidenceStore;
 import com.sdv.rag.domain.EvidenceBatchResult;
 import com.sdv.rag.domain.EvidenceKey;
+import com.sdv.rag.domain.EvidenceProvenance;
+import com.sdv.rag.domain.EvidenceReleaseResult;
+import com.sdv.rag.domain.EvidenceReleaseStatus;
+import com.sdv.rag.domain.CandidateSelectionResult;
 import com.sdv.rag.domain.LiveRetrievalResult;
 import com.sdv.rag.domain.LiveRetrievalStatus;
 import com.sdv.rag.domain.QueryEmbeddingOutcome;
@@ -107,6 +111,49 @@ public class RagRetrievalService {
     }
 
     /**
+     * M13 selected-document path. Every requested id must be authorized both before and after
+     * bounded query embedding; vector search never receives an empty/global filter.
+     */
+    public CandidateSelectionResult retrieveCandidatesForDocuments(UserContext requester, String queryText,
+            List<Long> selectedDocumentIds, int topK, long deadlineMs) {
+        if (requester == null || queryText == null || queryText.isBlank()) {
+            return CandidateSelectionResult.failed(CandidateSelectionResult.Status.NO_EVIDENCE);
+        }
+        if (deadlineMs <= 0) return CandidateSelectionResult.failed(CandidateSelectionResult.Status.REQUEST_TIMEOUT);
+        List<Long> selected = selectedDocumentIds == null ? List.of()
+                : selectedDocumentIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        boolean restrictedSelection = !selected.isEmpty();
+        LiveRetrievalDeadline deadline = LiveRetrievalDeadline.startingNow(deadlineMs);
+        Map<Long, SourceAccessContext> allowed = resolveAllowedDocuments(requester);
+        if (allowed.isEmpty()) return CandidateSelectionResult.failed(CandidateSelectionResult.Status.NO_EVIDENCE);
+        if (restrictedSelection && !allowed.keySet().containsAll(selected)) {
+            return CandidateSelectionResult.failed(CandidateSelectionResult.Status.NOT_AUTHORIZED);
+        }
+        QueryEmbeddingOutcome embedding = documentParsingClient.embedQuery(queryText, deadline.remainingMillis());
+        if (!embedding.success()) {
+            return CandidateSelectionResult.failed(deadline.expired()
+                    || "request deadline expired".equals(embedding.reason())
+                    ? CandidateSelectionResult.Status.REQUEST_TIMEOUT
+                    : CandidateSelectionResult.Status.NOT_AVAILABLE);
+        }
+        if (deadline.expired()) return CandidateSelectionResult.failed(CandidateSelectionResult.Status.REQUEST_TIMEOUT);
+        Map<Long, SourceAccessContext> currentAllowed = resolveAllowedDocuments(requester);
+        if (currentAllowed.isEmpty()) return CandidateSelectionResult.failed(CandidateSelectionResult.Status.NO_EVIDENCE);
+        if (restrictedSelection && !currentAllowed.keySet().containsAll(selected)) {
+            return CandidateSelectionResult.failed(CandidateSelectionResult.Status.NOT_AUTHORIZED);
+        }
+        java.util.Set<Long> searchScope = restrictedSelection
+                ? new java.util.LinkedHashSet<>(selected)
+                : new java.util.LinkedHashSet<>(currentAllowed.keySet());
+        int boundedTopK = Math.max(1, Math.min(topK, properties.maxTopK()));
+        List<VectorCandidate> candidates = vectorSearchPort.searchAllowed(searchScope,
+                embedding.embedding(), boundedTopK).stream()
+                .filter(candidate -> searchScope.contains(candidate.documentId()))
+                .filter(candidate -> isCurrentCandidate(candidate, currentAllowed)).toList();
+        return CandidateSelectionResult.success(candidates);
+    }
+
+    /**
      * 여러 파일(Vector Candidate 유래 또는 직접 선택)에 대해 Mandatory Live
      * Retrieval을 순차 수행한다. {@code candidatesByDocumentId}에 없는 문서 ID는
      * 직접 선택으로 취급된다(Locator 힌트 없음). 파일 수/총 시간 예산 상한에
@@ -115,6 +162,13 @@ public class RagRetrievalService {
      */
     public EvidenceBatchResult retrieveVerifiedEvidence(UserContext requester, String conversationId,
             List<Long> documentIds, Map<Long, VectorCandidate> candidatesByDocumentId) {
+        return retrieveVerifiedEvidence(requester, conversationId, documentIds, candidatesByDocumentId,
+                properties.totalRequestDeadlineMs());
+    }
+
+    /** Budget-aware overload for an enclosing M13/M14 ask operation. */
+    public EvidenceBatchResult retrieveVerifiedEvidence(UserContext requester, String conversationId,
+            List<Long> documentIds, Map<Long, VectorCandidate> candidatesByDocumentId, long deadlineMs) {
         EvidenceConversationLifecycle.Lease lease;
         try {
             lease = conversationLifecycle.requireActive(requester, conversationId);
@@ -123,7 +177,8 @@ public class RagRetrievalService {
         }
         List<LiveRetrievalResult> results = new ArrayList<>();
         boolean requestPartial = false;
-        LiveRetrievalDeadline deadline = LiveRetrievalDeadline.startingNow(properties.totalRequestDeadlineMs());
+        LiveRetrievalDeadline deadline = LiveRetrievalDeadline.startingNow(
+                Math.min(properties.totalRequestDeadlineMs(), Math.max(1L, deadlineMs)));
         int limit = Math.min(documentIds.size(), properties.maxFilesPerRequest());
         if (documentIds.size() > properties.maxFilesPerRequest()) {
             requestPartial = true;
@@ -143,6 +198,35 @@ public class RagRetrievalService {
     }
 
     /**
+     * M13 bounded span path: each server-side vector candidate is live-fetched and matched by
+     * exact generation/chunk. It never invokes M12's candidate-null first-location behavior.
+     */
+    public EvidenceBatchResult retrieveVerifiedEvidenceCandidates(UserContext requester, String conversationId,
+            List<VectorCandidate> candidates, long deadlineMs) {
+        if (deadlineMs <= 0 || candidates == null || candidates.isEmpty()) {
+            return new EvidenceBatchResult(List.of(), true);
+        }
+        EvidenceConversationLifecycle.Lease lease;
+        try {
+            lease = conversationLifecycle.requireActive(requester, conversationId);
+        } catch (LiveRetrievalException denied) {
+            return new EvidenceBatchResult(List.of(), true);
+        }
+        LiveRetrievalDeadline deadline = LiveRetrievalDeadline.startingNow(
+                Math.min(properties.totalRequestDeadlineMs(), Math.max(1L, deadlineMs)));
+        List<LiveRetrievalResult> results = new ArrayList<>();
+        int limit = Math.min(candidates.size(), properties.maxFilesPerRequest());
+        boolean partial = candidates.size() > limit;
+        for (int i = 0; i < limit; i++) {
+            if (deadline.expired() || !conversationLifecycle.isActive(lease)) { partial = true; break; }
+            VectorCandidate candidate = candidates.get(i);
+            results.add(liveEvidenceRetrievalService.retrieveLive(requester, candidate.documentId(), conversationId,
+                    candidate, deadline));
+        }
+        return new EvidenceBatchResult(results, partial);
+    }
+
+    /**
      * 미래 답변(LLM) 계층이 실제로 근거 Text를 쓰기 직전에 호출해야 하는 최종
      * 공개 경계다("Expose a usable internal evidence-release/revalidation boundary
      * for the future answer layer" - 이 작업 지시사항). 매 호출마다 요청자 SDV
@@ -154,9 +238,33 @@ public class RagRetrievalService {
      */
     public Optional<String> releaseEvidence(UserContext requester, Long documentId, String conversationId,
             com.sdv.rag.domain.EvidenceHandle handle) {
+        EvidenceReleaseResult released = releaseEvidenceInternal(requester, documentId, conversationId, handle,
+                null, null, properties.perFileDeadlineMs());
+        return released.status() == EvidenceReleaseStatus.RELEASED ? Optional.of(released.text()) : Optional.empty();
+    }
+
+    /** Typed final-use boundary used by M14; provenance and plaintext come from one fresh check. */
+    public EvidenceReleaseResult releaseVerifiedEvidence(UserContext requester, LiveRetrievalResult evidence,
+            String conversationId, long deadlineMs) {
+        if (evidence == null || evidence.status() != LiveRetrievalStatus.VERIFIED) {
+            return EvidenceReleaseResult.failed(EvidenceReleaseStatus.UNAVAILABLE);
+        }
+        return releaseEvidenceInternal(requester, evidence.documentId(), conversationId, evidence.evidenceHandle(),
+                evidence.locatorType(), evidence.locatorValue(), deadlineMs);
+    }
+
+    private EvidenceReleaseResult releaseEvidenceInternal(UserContext requester, Long documentId,
+            String conversationId, com.sdv.rag.domain.EvidenceHandle handle,
+            com.sdv.rag.domain.LocatorType locatorType, String locatorValue, long deadlineMs) {
+        if (handle == null) return EvidenceReleaseResult.failed(EvidenceReleaseStatus.UNAVAILABLE);
+        if (deadlineMs <= 0) return EvidenceReleaseResult.failed(EvidenceReleaseStatus.REQUEST_TIMEOUT);
+        if (!Instant.now().isBefore(handle.expiresAt())) {
+            ephemeralEvidenceStore.evict(handle);
+            return EvidenceReleaseResult.failed(EvidenceReleaseStatus.EXPIRED);
+        }
         EvidenceConversationLifecycle.Lease lease;
         SourceConsistencyGuard.LiveIdentity fresh;
-        LiveRetrievalDeadline deadline = LiveRetrievalDeadline.startingNow(properties.perFileDeadlineMs());
+        LiveRetrievalDeadline deadline = LiveRetrievalDeadline.startingNow(deadlineMs);
         try {
             lease = conversationLifecycle.requireActive(requester, conversationId);
             fresh = sourceConsistencyGuard.verifyBefore(requester, documentId,
@@ -170,16 +278,64 @@ public class RagRetrievalService {
             }
         } catch (LiveRetrievalException e) {
             ephemeralEvidenceStore.evict(handle);
-            return Optional.empty();
+            return EvidenceReleaseResult.failed(switch (e.reason()) {
+                case NOT_AUTHORIZED -> EvidenceReleaseStatus.NOT_AUTHORIZED;
+                case DOCUMENT_CHANGED -> EvidenceReleaseStatus.DOCUMENT_CHANGED;
+                case REQUEST_TIMEOUT -> EvidenceReleaseStatus.REQUEST_TIMEOUT;
+                default -> EvidenceReleaseStatus.UNAVAILABLE;
+            });
         }
         EvidenceKey currentBinding = new EvidenceKey(requester.subject(), conversationId,
                 fresh.context().sourceId(), documentId, fresh.context().shareId(), fresh.context().shareGeneration(),
                 fresh.context().connectionGeneration(), fresh.expectedSourceVersion());
         long sourceFence = ephemeralEvidenceStore.captureSourceFence(fresh.context().sourceId());
         long conversationFence = ephemeralEvidenceStore.captureConversationFence(requester.subject(), conversationId);
-        return ephemeralEvidenceStore.getIfAuthorizedAndCurrentFenced(handle, currentBinding, sourceFence,
-                conversationFence)
-                .map(bytes -> new String(bytes, StandardCharsets.UTF_8));
+        Optional<byte[]> bytes = ephemeralEvidenceStore.getIfAuthorizedAndCurrentFenced(handle, currentBinding,
+                sourceFence, conversationFence);
+        if (bytes.isEmpty()) return EvidenceReleaseResult.failed(
+                Instant.now().isBefore(handle.expiresAt()) ? EvidenceReleaseStatus.UNAVAILABLE
+                        : EvidenceReleaseStatus.EXPIRED);
+        EvidenceProvenance provenance = new EvidenceProvenance(documentId, fresh.context().sourceId(),
+                fresh.context().publisherSubject(), fresh.context().shareId(), fresh.context().shareGeneration(), fresh.context().connectionGeneration(),
+                fresh.expectedSourceVersion(), locatorType, locatorValue, handle.createdAt(), handle.expiresAt(),
+                Instant.now());
+        byte[] plaintext = bytes.get();
+        try {
+            return EvidenceReleaseResult.released(new String(plaintext, StandardCharsets.UTF_8), provenance);
+        } finally {
+            java.util.Arrays.fill(plaintext, (byte) 0);
+        }
+    }
+
+    /**
+     * Final local release fence after all provider checks. This is the response linearization
+     * boundary; invalidation that wins before it prevents output, while bytes already returned
+     * to the HTTP caller cannot be recalled.
+     */
+    public boolean validateEvidenceForResponse(UserContext requester, String conversationId,
+            LiveRetrievalResult evidence, EvidenceProvenance provenance) {
+        if (evidence == null || provenance == null || evidence.status() != LiveRetrievalStatus.VERIFIED
+                || !Instant.now().isBefore(provenance.expiresAt())) return false;
+        EvidenceConversationLifecycle.Lease lease;
+        try {
+            lease = conversationLifecycle.requireActive(requester, conversationId);
+        } catch (LiveRetrievalException denied) {
+            return false;
+        }
+        SourceAccessContext context = new SourceAccessContext(requester.subject(), provenance.publisherSubject(),
+                provenance.sourceId(), provenance.documentId(), provenance.shareId(), ShareAction.VIEW,
+                provenance.shareGeneration(), provenance.connectionGeneration());
+        if (effectivePermissionService.evaluateSharedAccess(requester, context, AiRequestContext.local()).isDenied()
+                || !conversationLifecycle.isActive(lease)) return false;
+        EvidenceKey binding = new EvidenceKey(requester.subject(), conversationId, provenance.sourceId(),
+                provenance.documentId(), provenance.shareId(), provenance.shareGeneration(),
+                provenance.connectionGeneration(), provenance.sourceVersion());
+        long sourceFence = ephemeralEvidenceStore.captureSourceFence(provenance.sourceId());
+        long conversationFence = ephemeralEvidenceStore.captureConversationFence(requester.subject(), conversationId);
+        Optional<byte[]> current = ephemeralEvidenceStore.getIfAuthorizedAndCurrentFenced(evidence.evidenceHandle(),
+                binding, sourceFence, conversationFence);
+        current.ifPresent(bytes -> java.util.Arrays.fill(bytes, (byte) 0));
+        return current.isPresent() && conversationLifecycle.isActive(lease);
     }
 
     public String openEvidenceConversation(UserContext requester) {
