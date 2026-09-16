@@ -1,6 +1,8 @@
 package com.sdv.rag.infrastructure.ai;
 
+import com.sdv.rag.domain.EmbeddingChunk;
 import com.sdv.rag.domain.ExtractedLocation;
+import com.sdv.rag.domain.IndexOutcome;
 import com.sdv.rag.domain.LocatorType;
 import com.sdv.rag.domain.ParseOutcome;
 import com.sdv.rag.domain.ParseOutcomeKind;
@@ -16,8 +18,9 @@ import org.springframework.web.client.RestClientException;
 import java.util.List;
 
 /**
- * F-BE-108(경로/이름은 Manifest 확정, M06이 구현). Python AI Service(F-AI-001/002/003)의
- * {@code /parse}만 호출한다({@code /index}는 M11+ 범위, 여기서 구현하지 않는다).
+ * F-BE-108(경로/이름은 Manifest 확정, M06이 구현, M11이 {@code /index}를 추가).
+ * Python AI Service(F-AI-001/002/003/M11 신규 F-AI-index)의 {@code /parse}와
+ * {@code /index}를 호출한다.
  *
  * <p>고정된 운영자 설정 내부 주소만 사용한다({@code sdv.ai-service.url} - 이미
  * {@code application-local.yml}/{@code application-compose.yml}에 존재하는 설정,
@@ -108,6 +111,67 @@ public class DocumentParsingClient {
         } catch (IllegalArgumentException e) {
             // 인식 불가 값 - Fail Closed로 실패 취급한다.
             return ParseOutcomeKind.FAILED;
+        }
+    }
+
+    /**
+     * M11 신규 - 이미 Fetch된 원본 Byte를 Python {@code /index}로 전송해 Parse+Chunk+
+     * Embed 전체 Pipeline을 한 번의 호출로 수행한다. 응답에는 평문 Chunk Text가 전혀
+     * 담기지 않는다 - Embedding Vector/일반화된 Locator/Content HMAC/Version 메타데이터
+     * 뿐이다({@link IndexOutcome} Class Javadoc 참고). {@code /parse}와 동일하게
+     * 네트워크/Timeout/5xx 등 호출 자체의 실패는 {@link ParseOutcomeKind#FAILED}로
+     * 변환한다 - 원본 예외 메시지는 절대 옮기지 않는다.
+     */
+    public IndexOutcome index(byte[] content, String fileName, String declaredMimeType) {
+        try {
+            IndexResponse response = restClient.post()
+                    .uri("/index")
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(multipartBody(content, fileName, declaredMimeType))
+                    .retrieve()
+                    .body(IndexResponse.class);
+            return toIndexOutcome(response);
+        } catch (RestClientException e) {
+            return IndexOutcome.failure(ParseOutcomeKind.FAILED, "AI service call failed");
+        }
+    }
+
+    private static IndexOutcome toIndexOutcome(IndexResponse response) {
+        if (response == null || response.outcome() == null) {
+            return IndexOutcome.failure(ParseOutcomeKind.FAILED, "empty index response");
+        }
+        ParseOutcomeKind kind = parseKind(response.outcome());
+        if (kind != ParseOutcomeKind.SUCCESS) {
+            String reason = response.reason() == null ? "unspecified" : response.reason();
+            return IndexOutcome.failure(kind, reason);
+        }
+        if (response.chunks() == null || response.chunks().isEmpty() || response.parserVersion() == null
+                || response.chunkingVersion() == null || response.embeddingModel() == null) {
+            return IndexOutcome.failure(ParseOutcomeKind.FAILED, "malformed successful index response");
+        }
+        List<EmbeddingChunk> chunks;
+        try {
+            chunks = response.chunks().stream().map(IndexChunkResponse::toDomain).toList();
+        } catch (RuntimeException malformed) {
+            // 예: 인식 불가 locatorType, 빈 embedding - 원본 예외 메시지를 옮기지 않는다.
+            return IndexOutcome.failure(ParseOutcomeKind.FAILED, "malformed chunk in index response");
+        }
+        return IndexOutcome.success(response.parserVersion(), response.chunkingVersion(), response.embeddingModel(),
+                chunks);
+    }
+
+    /** {@code /index} 응답 JSON 매핑 전용 - 패키지 밖으로 노출하지 않는다. */
+    record IndexResponse(String outcome, String parserVersion, String chunkingVersion, String embeddingModel,
+            Integer embeddingDimensions, List<IndexChunkResponse> chunks, String reason) {
+    }
+
+    record IndexChunkResponse(int chunkIndex, String locatorType, String locatorValue, List<Double> embedding,
+            String contentHmac) {
+        EmbeddingChunk toDomain() {
+            List<Float> floats = embedding == null ? List.of()
+                    : embedding.stream().map(Double::floatValue).toList();
+            return new EmbeddingChunk(chunkIndex, LocatorType.valueOf(locatorType), locatorValue, floats,
+                    contentHmac);
         }
     }
 

@@ -6,13 +6,12 @@ import java.util.UUID;
 
 /**
  * F-BE-068 (M09A 신규). Transactional Outbox에 쓰이는 모든 이벤트의 공통 계약
- * (SYN-005). 이 Slice가 실제로 발행하는 세 가지 구체 타입만 {@code permits}에
- * 나열한다 - 추측성으로 더 넓혀두지 않는다({@link
- * com.sdv.sync.application.AbstractSourceSyncJob} 참고, F-BE-072
- * {@code IndexRequestedEvent}는 실제 Consumer/Indexing Orchestration(M11)이
- * "색인이 필요하다"를 어떤 형태로 표현할지 그 작업에서 결정해야 하므로 이
- * Slice에서 지어내지 않는다 - {@code docs/plan/SDV_MVP_DEFERRED.md}에 남은
- * 작업으로 기록한다).
+ * (SYN-005). M09A는 세 Catalog Sync 이벤트만 나열했다 - F-BE-072
+ * {@code IndexRequestedEvent}(색인 필요 신호)는 실제 Consumer/Indexing
+ * Orchestration(M11)이 그 형태를 결정해야 한다는 이유로 그 작업이
+ * 의도적으로 비워뒀다. M11이 이제 {@link IndexRequestedEvent}를 네 번째
+ * permit으로 추가한다({@link com.sdv.sync.application.AbstractSourceSyncJob}
+ * 참고).
  *
  * <p><b>Payload 안전 규칙(절대 위반 금지)</b>: {@link #toPayload()}가 반환하는
  * 값에는 Token/Secret/서명된 URL/ACL Principal 목록/원본 Byte/추출 Text/
@@ -21,7 +20,8 @@ import java.util.UUID;
  * Event"/"원본 비보관" 규칙).</p>
  */
 public sealed interface DomainEvent
-        permits SourceDocumentChangedEvent, SourceDocumentDeletedEvent, SourcePermissionChangedEvent {
+        permits SourceDocumentChangedEvent, SourceDocumentDeletedEvent, SourcePermissionChangedEvent,
+        IndexRequestedEvent {
 
     UUID eventId();
 

@@ -79,4 +79,19 @@ public interface OutboxEventJpaRepository extends JpaRepository<OutboxEventEntit
     @Query("UPDATE OutboxEventEntity o SET o.status = 'PENDING', o.claimedAt = null, o.claimToken = null "
             + "WHERE o.status = 'PUBLISHING' AND o.claimedAt < :staleBefore")
     int recoverStaleClaims(@Param("staleBefore") Instant staleBefore);
+
+    /**
+     * M11 후속 교정 - 겹치거나 반복되는 색인 스케줄링 호출(공유 생성/수정/관리자 차단
+     * 해제, 재연결, 수동 Backfill)이 같은 문서에 대해 아직 소비되지 않은 {@code
+     * INDEX_REQUESTED} 요청을 중복으로 쌓지 않도록 하는 가드다. {@code PENDING}/{@code
+     * PUBLISHING} 상태만 "아직 살아있는 요청"으로 본다 - 이미 {@code PUBLISHED}되면
+     * Consumer 쪽 {@code processed_events} 멱등성이 중복 처리를 막고, {@code FAILED}
+     * (Bounded 재시도 소진)는 더 이상 저절로 재시도되지 않으므로 새 요청을 막을 이유가
+     * 없다. 이 확인만으로 완벽한 직렬화를 보장하지는 않는다(경쟁 자체는 여전히 가능하다)
+     * - 순전히 "뻔히 보이는 반복 호출의 중복 적재"를 줄이기 위한 최선 노력이다.
+     */
+    @Query("SELECT (COUNT(o) > 0) FROM OutboxEventEntity o WHERE o.partitionKey = :partitionKey "
+            + "AND o.eventType = :eventType AND o.status IN ('PENDING', 'PUBLISHING')")
+    boolean existsPendingByPartitionKeyAndEventType(@Param("partitionKey") String partitionKey,
+            @Param("eventType") String eventType);
 }

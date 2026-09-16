@@ -1,5 +1,6 @@
 package com.sdv.source.infrastructure.persistence.repository;
 
+import com.sdv.source.infrastructure.persistence.entity.DocumentShareEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourceConnectionEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourceDocumentEntity;
 import com.sdv.testsupport.TestcontainersConfiguration;
@@ -10,7 +11,10 @@ import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Slice;
 
+import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -32,6 +36,9 @@ class SourceDocumentJpaRepositoryTest {
 
     @Autowired
     private SourceDocumentJpaRepository sourceDocumentJpaRepository;
+
+    @Autowired
+    private DocumentShareJpaRepository documentShareJpaRepository;
 
     @Autowired
     private EntityManager entityManager;
@@ -133,6 +140,97 @@ class SourceDocumentJpaRepositoryTest {
 
         assertThat(sourceDocumentJpaRepository.findBySourceAndSourceDocId(sourceId, "lookup-doc")).isPresent();
         assertThat(sourceDocumentJpaRepository.findBySourceAndSourceDocId(sourceId, "missing-doc")).isEmpty();
+    }
+
+    /**
+     * M11 후속 교정 검증 - {@link SourceDocumentJpaRepository#updateIndexStatusIfCurrent}는
+     * 현재 {@code source_version}과 정확히 일치하고 아직 {@code INDEXED}가 아닐 때만
+     * 실제로 적용된다.
+     */
+    @Test
+    void updateIndexStatusIfCurrentAppliesOnlyWhenVersionMatchesAndNotAlreadyIndexed() {
+        Long sourceId = persistSource("owner-doc-fencing-current");
+        SourceDocumentEntity document = sourceDocumentJpaRepository.saveAndFlush(
+                new SourceDocumentEntity(sourceId, "fencing-doc", "Doc.pdf", "application/pdf", "v1", null, "ACTIVE",
+                        "PENDING", null));
+        Long documentId = document.getId();
+        entityManager.clear();
+
+        int mismatchedVersion = sourceDocumentJpaRepository.updateIndexStatusIfCurrent(documentId,
+                "SKIPPED_NO_TEXT", "AI_SERVICE_NO_TEXT", "v2-not-current");
+        assertThat(mismatchedVersion).as("a stale expected version must not be applied").isZero();
+        entityManager.clear();
+        assertThat(sourceDocumentJpaRepository.findById(documentId).orElseThrow().getIndexStatus())
+                .isEqualTo("PENDING");
+
+        int matched = sourceDocumentJpaRepository.updateIndexStatusIfCurrent(documentId, "SKIPPED_NO_TEXT",
+                "AI_SERVICE_NO_TEXT", "v1");
+        assertThat(matched).isEqualTo(1);
+        entityManager.clear();
+        SourceDocumentEntity afterSkip = sourceDocumentJpaRepository.findById(documentId).orElseThrow();
+        assertThat(afterSkip.getIndexStatus()).isEqualTo("SKIPPED_NO_TEXT");
+        assertThat(afterSkip.getIndexReason()).isEqualTo("AI_SERVICE_NO_TEXT");
+
+        // 이미 INDEXED가 된 뒤에는(같은 Version이라도) 낡은 SKIPPED/FAILED 시도가 덮어쓰지 못한다.
+        sourceDocumentJpaRepository.updateIndexStatus(documentId, "INDEXED", null);
+        entityManager.clear();
+        int afterIndexed = sourceDocumentJpaRepository.updateIndexStatusIfCurrent(documentId, "SKIPPED_UNSUPPORTED",
+                "AI_SERVICE_UNSUPPORTED_FORMAT", "v1");
+        assertThat(afterIndexed).as("an obsolete SKIPPED write must never downgrade an already-INDEXED document")
+                .isZero();
+        entityManager.clear();
+        assertThat(sourceDocumentJpaRepository.findById(documentId).orElseThrow().getIndexStatus())
+                .isEqualTo("INDEXED");
+    }
+
+    /**
+     * M11 후속 교정 검증 - {@link SourceDocumentJpaRepository#findActivelySharedForReconnectScheduling}
+     * (재연결 색인 스케줄링)은 정확히 이 Source에 속하고, 지금 활성(미철회)+관리자
+     * 미차단 공유가 있는 ACTIVE 문서만 반환한다 - 철회/차단된 공유와 다른 Source의
+     * 문서는 제외된다("preserving restrictions and revoked shares").
+     */
+    @Test
+    void findActivelySharedForReconnectSchedulingReturnsOnlyCurrentlyEligibleDocumentsForThatSource() {
+        Long sourceId = persistSource("owner-reconnect-scheduling");
+        Long otherSourceId = persistSource("owner-reconnect-scheduling-other");
+
+        SourceDocumentEntity sharedActive = sourceDocumentJpaRepository.saveAndFlush(
+                new SourceDocumentEntity(sourceId, "shared-active", "Shared.pdf", "application/pdf", "v1", null,
+                        "ACTIVE", "PENDING", null));
+        SourceDocumentEntity revokedShareDoc = sourceDocumentJpaRepository.saveAndFlush(
+                new SourceDocumentEntity(sourceId, "revoked-share", "Revoked.pdf", "application/pdf", "v1", null,
+                        "ACTIVE", "PENDING", null));
+        SourceDocumentEntity blockedShareDoc = sourceDocumentJpaRepository.saveAndFlush(
+                new SourceDocumentEntity(sourceId, "blocked-share", "Blocked.pdf", "application/pdf", "v1", null,
+                        "ACTIVE", "PENDING", null));
+        SourceDocumentEntity otherSourceDoc = sourceDocumentJpaRepository.saveAndFlush(
+                new SourceDocumentEntity(otherSourceId, "other-source-shared", "Other.pdf", "application/pdf", "v1",
+                        null, "ACTIVE", "PENDING", null));
+
+        DocumentShareEntity activeShare = new DocumentShareEntity("owner-reconnect-scheduling", sourceId,
+                sharedActive.getId(), "INTERNAL", "VIEW", Instant.now());
+        documentShareJpaRepository.saveAndFlush(activeShare);
+
+        DocumentShareEntity revokedShare = new DocumentShareEntity("owner-reconnect-scheduling", sourceId,
+                revokedShareDoc.getId(), "INTERNAL", "VIEW", Instant.now());
+        revokedShare.revoke(Instant.now());
+        documentShareJpaRepository.saveAndFlush(revokedShare);
+
+        DocumentShareEntity blockedShare = new DocumentShareEntity("owner-reconnect-scheduling", sourceId,
+                blockedShareDoc.getId(), "INTERNAL", "VIEW", Instant.now());
+        blockedShare.applyAdminBlock(true, "policy violation", Instant.now());
+        documentShareJpaRepository.saveAndFlush(blockedShare);
+
+        DocumentShareEntity otherSourceShare = new DocumentShareEntity("owner-reconnect-scheduling-other",
+                otherSourceId, otherSourceDoc.getId(), "INTERNAL", "VIEW", Instant.now());
+        documentShareJpaRepository.saveAndFlush(otherSourceShare);
+        entityManager.clear();
+
+        Slice<SourceDocumentEntity> result = sourceDocumentJpaRepository
+                .findActivelySharedForReconnectScheduling(sourceId, PageRequest.of(0, 200));
+
+        assertThat(result.getContent()).extracting(SourceDocumentEntity::getSourceDocumentId)
+                .containsExactly("shared-active");
     }
 
     private Long persistSource(String ownerSubject) {

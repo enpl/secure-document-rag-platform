@@ -13,6 +13,12 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    # M11 - IndexRequestedConsumer가 쓰는 Consumer 쪽 (De)Serializer. Producer와 동일하게
+    # Payload는 이미 위생 처리된 JSON 문자열이다(원본 Object 역직렬화 아님).
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: earliest
 
 server:
   port: 8080
@@ -68,6 +74,16 @@ sdv:
       max-page-index: ${SDV_RAG_DISCOVERY_MAX_PAGE_INDEX:500}
       live-check-budget-ms: ${SDV_RAG_DISCOVERY_LIVE_CHECK_BUDGET_MS:10000}
       max-candidate-scan: ${SDV_RAG_DISCOVERY_MAX_CANDIDATE_SCAN:200}
+    # M11 (F-BE-072/§2A.11) - IndexRequestedConsumer/IndexOrchestrator. enabled는
+    # 모든 Profile에서 기본 false다 - 이 Slice는 실제 개인 Drive에 대해 자동으로
+    # 색인을 시작하지 않는다. 격리된 Test Kafka Broker를 쓰는 테스트만 이 값을
+    # 명시적으로 true로 Override한다(docs/runbooks/M11_INDEXING_ACTIVATION.md 참고).
+    index-consumer:
+      enabled: ${SDV_RAG_INDEX_CONSUMER_ENABLED:false}
+      topic: ${SDV_RAG_INDEX_CONSUMER_TOPIC:sdv.source.events}
+      group-id: ${SDV_RAG_INDEX_CONSUMER_GROUP_ID:sdv-rag-index-orchestrator}
+      max-attempts: ${SDV_RAG_INDEX_CONSUMER_MAX_ATTEMPTS:4}
+      backoff-ms: ${SDV_RAG_INDEX_CONSUMER_BACKOFF_MS:2000}
   # M10C (SHR-004): full-download response is deliberately buffered.  A slot is held until
   # servlet delivery terminates, so slow clients cannot create an unbounded buffer queue.
   shared-download:

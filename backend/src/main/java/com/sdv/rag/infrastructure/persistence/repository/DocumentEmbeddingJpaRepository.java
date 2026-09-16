@@ -134,7 +134,7 @@ public interface DocumentEmbeddingJpaRepository extends JpaRepository<DocumentEm
      *       않는다).</li>
      *   <li>비어있지 않은 배치는 정확히 하나의 Generation을 나타낸다 - 모든
      *       행의 {@code sourceVersion}/{@code parserVersion}/
-     *       {@code modelVersion}이 같다.</li>
+     *       {@code chunkingVersion}(M11 신규)/{@code modelVersion}이 같다.</li>
      *   <li>{@code chunkIndex}는 {@code null}이 아니고 음수가 아니며, 배치
      *       안에서 중복되지 않는다.</li>
      * </ul>
@@ -147,6 +147,7 @@ public interface DocumentEmbeddingJpaRepository extends JpaRepository<DocumentEm
         }
         String sourceVersion = null;
         String parserVersion = null;
+        String chunkingVersion = null;
         String modelVersion = null;
         Set<Integer> seenChunkIndexes = new HashSet<>();
         for (DocumentEmbeddingEntity row : newGeneration) {
@@ -160,11 +161,12 @@ public interface DocumentEmbeddingJpaRepository extends JpaRepository<DocumentEm
             if (sourceVersion == null) {
                 sourceVersion = row.getSourceVersion();
                 parserVersion = row.getParserVersion();
+                chunkingVersion = row.getChunkingVersion();
                 modelVersion = row.getModelVersion();
             } else if (!sourceVersion.equals(row.getSourceVersion()) || !parserVersion.equals(row.getParserVersion())
-                    || !modelVersion.equals(row.getModelVersion())) {
+                    || !chunkingVersion.equals(row.getChunkingVersion()) || !modelVersion.equals(row.getModelVersion())) {
                 throw new IllegalArgumentException("every row in newGeneration must share the same "
-                        + "sourceVersion/parserVersion/modelVersion (exactly one generation) - "
+                        + "sourceVersion/parserVersion/chunkingVersion/modelVersion (exactly one generation) - "
                         + "found more than one combination");
             }
             Integer chunkIndex = row.getChunkIndex();

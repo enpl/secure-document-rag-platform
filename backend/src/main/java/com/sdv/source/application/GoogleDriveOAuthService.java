@@ -2,6 +2,10 @@ package com.sdv.source.application;
 
 import com.sdv.audit.application.AuditService;
 import com.sdv.common.exception.NotFoundException;
+import com.sdv.common.trace.TraceIdFilter;
+import com.sdv.event.domain.IndexRequestedEvent;
+import com.sdv.event.infrastructure.persistence.entity.OutboxEventEntity;
+import com.sdv.event.infrastructure.persistence.repository.OutboxEventJpaRepository;
 import com.sdv.source.application.port.SourceTokenStore;
 import com.sdv.source.application.port.TokenEnvelope;
 import com.sdv.source.domain.SourceConnection;
@@ -11,7 +15,12 @@ import com.sdv.source.infrastructure.google.GoogleDriveConnector;
 import com.sdv.source.infrastructure.google.GoogleOAuthClient;
 import com.sdv.source.infrastructure.google.GoogleOAuthException;
 import com.sdv.source.infrastructure.persistence.entity.SourceConnectionEntity;
+import com.sdv.source.infrastructure.persistence.entity.SourceDocumentEntity;
 import com.sdv.source.infrastructure.persistence.repository.SourceConnectionJpaRepository;
+import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRepository;
+import org.slf4j.MDC;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Slice;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.oauth2.core.OAuth2RefreshToken;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AccessTokenResponse;
@@ -19,10 +28,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * M08 MVP OAuth ({@code docs/spec/SDV_M08_TOKEN_CONTRACT.md}) - {@link
@@ -52,25 +64,56 @@ public class GoogleDriveOAuthService {
     private static final String SUCCESS = "SUCCESS";
     private static final String OK = "OK";
 
+    /**
+     * M11 후속 교정(이 작업 지시사항 1번, "connect a successful verified same-account
+     * reconnect to bounded scheduling of fresh eligible work") - 재연결 한 번이
+     * 예약하는 최대 문서 수. Disconnect가 이 Source의 모든 Embedding을 이미 지웠으므로
+     * 재연결 시점의 활성+비차단 공유 문서 전부가 재색인 후보이지만, 한 Drive가 매우
+     * 많은 공유 문서를 가질 수 있어 이 짧은 Callback Transaction 안에서 무제한으로
+     * 예약하지 않는다 - 이 상한을 넘는 나머지는 운영자의 수동 {@code
+     * IndexBackfillService} 호출이 이어서 채운다(그 Method가 이제 "과거 이력"이 아니라
+     * "현재 Generation 존재 여부"로 정확하게 후보를 재계산하므로 안전하게 이어받는다).
+     */
+    static final int RECONNECT_REINDEX_BATCH_SIZE = 200;
+
     private final SourceConnectionJpaRepository sourceConnectionJpaRepository;
+    private final SourceDocumentJpaRepository sourceDocumentJpaRepository;
+    private final OutboxEventJpaRepository outboxEventJpaRepository;
     private final GoogleOAuthStateStore stateStore;
     private final GoogleOAuthClient googleOAuthClient;
     private final GoogleDriveClient googleDriveClient;
     private final Optional<SourceTokenStore> sourceTokenStore;
     private final AuditService auditService;
     private final TransactionTemplate transactionTemplate;
+    private final Clock clock;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public GoogleDriveOAuthService(SourceConnectionJpaRepository sourceConnectionJpaRepository,
+            SourceDocumentJpaRepository sourceDocumentJpaRepository, OutboxEventJpaRepository outboxEventJpaRepository,
             GoogleOAuthStateStore stateStore, GoogleOAuthClient googleOAuthClient, GoogleDriveClient googleDriveClient,
             Optional<SourceTokenStore> sourceTokenStore, AuditService auditService,
             PlatformTransactionManager transactionManager) {
+        this(sourceConnectionJpaRepository, sourceDocumentJpaRepository, outboxEventJpaRepository, stateStore,
+                googleOAuthClient, googleDriveClient, sourceTokenStore, auditService, transactionManager,
+                Clock.systemUTC());
+    }
+
+    /** 테스트가 통제된 {@link Clock}을 주입하기 위한 패키지 전용 생성자. */
+    GoogleDriveOAuthService(SourceConnectionJpaRepository sourceConnectionJpaRepository,
+            SourceDocumentJpaRepository sourceDocumentJpaRepository, OutboxEventJpaRepository outboxEventJpaRepository,
+            GoogleOAuthStateStore stateStore, GoogleOAuthClient googleOAuthClient, GoogleDriveClient googleDriveClient,
+            Optional<SourceTokenStore> sourceTokenStore, AuditService auditService,
+            PlatformTransactionManager transactionManager, Clock clock) {
         this.sourceConnectionJpaRepository = sourceConnectionJpaRepository;
+        this.sourceDocumentJpaRepository = sourceDocumentJpaRepository;
+        this.outboxEventJpaRepository = outboxEventJpaRepository;
         this.stateStore = stateStore;
         this.googleOAuthClient = googleOAuthClient;
         this.googleDriveClient = googleDriveClient;
         this.sourceTokenStore = sourceTokenStore;
         this.auditService = auditService;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.clock = clock;
     }
 
     /**
@@ -225,6 +268,7 @@ public class GoogleDriveOAuthService {
         if (sourceTokenStore.isEmpty()) {
             return false;
         }
+        boolean wasDisabled = DISABLED_STATUS.equals(connection.getStatus());
         // 재연결(DISABLED -> ACTIVE)일 수 있다 - GoogleTokenService.store()가 Token 행을 쓰기
         // 전에 이 Source가 지금 ACTIVE인지 자신의 Native Query로 다시 확인하므로(1차 캐시를
         // 우회한다, SourceConnectionJpaRepository.lockAndReadCurrentOwnershipState Javadoc
@@ -238,7 +282,44 @@ public class GoogleDriveOAuthService {
         sourceTokenStore.get().save(attempt.sourceId(), envelope);
         auditService.record(attempt.subject(), "SOURCE_GOOGLE_CONNECTED", "source:" + attempt.sourceId(), SUCCESS,
                 OK, Map.of());
+        if (wasDisabled) {
+            scheduleReindexForReconnectedSource(attempt.sourceId());
+        }
         return true;
+    }
+
+    /**
+     * M11 후속 교정 - "connect a successful verified same-account reconnect to
+     * bounded scheduling of fresh eligible work, preserving restrictions and revoked
+     * shares." Disconnect가 {@code SourceConnectionService.disconnect}의
+     * {@code deleteEmbeddingIndexForSource}로 이 Source의 모든 Embedding을 이미
+     * 지웠으므로, 지금 이 순간 활성+비차단 공유가 있는 문서 전부가 다시 색인이
+     * 필요하다({@link SourceDocumentJpaRepository#findActivelySharedForReconnectScheduling}이
+     * 그 문서만, {@link #RECONNECT_REINDEX_BATCH_SIZE}로 Bounded해 반환한다 - 철회된
+     * 공유/관리자 차단은 그 Query의 WHERE 절 자체가 제외한다). 이 메서드가 발행하는
+     * {@link IndexRequestedEvent}의 어떤 필드도 인가 증거가 아니다 - {@code
+     * IndexOrchestrator}가 소비 시점에 전부 다시 조회한다({@code
+     * SourceSharingService.publishIndexRequested}와 동일한 원칙). RAG 도메인 Class를
+     * 전혀 Import하지 않는다 - Source -> RAG 역방향 의존을 만들지 않는다.
+     */
+    private void scheduleReindexForReconnectedSource(Long sourceId) {
+        Slice<SourceDocumentEntity> eligible = sourceDocumentJpaRepository.findActivelySharedForReconnectScheduling(
+                sourceId, PageRequest.of(0, RECONNECT_REINDEX_BATCH_SIZE));
+        if (eligible.isEmpty()) {
+            return;
+        }
+        Instant now = clock.instant();
+        String traceId = MDC.get(TraceIdFilter.MDC_KEY);
+        for (SourceDocumentEntity document : eligible.getContent()) {
+            IndexRequestedEvent event = new IndexRequestedEvent(UUID.randomUUID(), document.getSourceId(), null,
+                    document.getId(), document.getSourceDocumentId(), document.getSourceVersion(), now, traceId);
+            String partitionKey = "source:" + event.sourceId() + ":doc:" + event.externalDocumentId();
+            if (outboxEventJpaRepository.existsPendingByPartitionKeyAndEventType(partitionKey, event.eventType())) {
+                continue;
+            }
+            outboxEventJpaRepository.save(new OutboxEventEntity(event.eventId(), event.eventType(),
+                    event.toPayload(), partitionKey, now));
+        }
     }
 
     private static TokenEnvelope toEnvelope(String boundSubject, OAuth2AccessTokenResponse response) {

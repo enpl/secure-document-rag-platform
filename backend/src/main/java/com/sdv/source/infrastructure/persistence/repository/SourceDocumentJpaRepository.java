@@ -97,6 +97,32 @@ public interface SourceDocumentJpaRepository extends JpaRepository<SourceDocumen
             @Param("indexReason") String indexReason);
 
     /**
+     * M11 후속 교정 - {@link IndexOrchestrator}(패키지가 달라 Javadoc {@code @link}를
+     * 걸 수 없어 이름으로만 언급한다, {@code com.sdv.rag.application.IndexOrchestrator})의
+     * SKIPPED_UNSUPPORTED/SKIPPED_NO_TEXT 같은 비-INDEXED 종결 기록 전용 조건부
+     * 버전이다. 이 문서의 현재 {@code source_version}이 호출자가 캡처해 둔
+     * {@code expectedSourceVersion}과 여전히 같고, 아직 {@code INDEXED}가 아닐 때만
+     * 실제로 갱신한다 - 이미 더 새로운 Generation이 발행됐거나(다른 Version) 이미
+     * 성공적으로 색인된 뒤라면(비록 더 오래된 시도의 실패/미지원 판정이 뒤늦게
+     * 도착해도) 그 최신 상태를 덮어쓰지 않는다("Old work must never overwrite/downgrade
+     * a newer generation's terminal state"). 반환값(갱신된 행 수)은 실제로 적용됐는지
+     * 여부를 호출자가 알 수 있게 한다 - 0이면 조용히 무시된(Fenced-out) 것이다.
+     *
+     * <p><b>M11 후속 교정(이번 작업 지시사항 A)</b>: 호출자({@code
+     * IndexOrchestrator.finalizeNonSuccess})는 이제 이 SQL {@code WHERE} 절만으로
+     * 펜싱을 끝내지 않는다 - 호출 전에 이미 같은 짧은 새 Transaction 안에서 연결
+     * {@code connectionEpoch}/공유 {@code shareId}+{@code generation}까지 잠그고
+     * 재확인한다("indexStatus != INDEXED" alone is not a generation fence). 이
+     * Method의 {@code source_version}+비-INDEXED 조건은 그 Java 레벨 확인 위에 얹는
+     * SQL 레벨 이중 방어(Defense-in-depth)다 - 비용 없이 안전을 하나 더 얹는다.</p>
+     */
+    @Modifying
+    @Query("UPDATE SourceDocumentEntity e SET e.indexStatus = :indexStatus, e.indexReason = :indexReason "
+            + "WHERE e.id = :documentId AND e.sourceVersion = :expectedSourceVersion AND e.indexStatus <> 'INDEXED'")
+    int updateIndexStatusIfCurrent(@Param("documentId") Long documentId, @Param("indexStatus") String indexStatus,
+            @Param("indexReason") String indexReason, @Param("expectedSourceVersion") String expectedSourceVersion);
+
+    /**
      * M06이 추가한 행 단위 비관적 쓰기 Lock({@code SELECT ... FOR UPDATE})
      * 조회 - 원래 목적은 {@code ContentExtractionService.finalizePublish}가
      * 발행 직전 재검증(ACTIVE 상태 등)과 실제 발행 사이에 동시
@@ -202,4 +228,26 @@ public interface SourceDocumentJpaRepository extends JpaRepository<SourceDocumen
             + "AND c.type = 'GOOGLE_DRIVE' AND c.status = 'ACTIVE' AND d.state = 'ACTIVE'")
     Slice<SourceDocumentEntity> findOwnedForPicker(@Param("ownerSubject") String ownerSubject,
             @Param("sourceId") Long sourceId, Pageable pageable);
+
+    /**
+     * M11 후속 교정(이 작업 지시사항의 1번, "connect a successful verified same-account
+     * reconnect to bounded scheduling of fresh eligible work") - 정확히 이 {@code
+     * sourceId}에 속하고, 지금 이 순간 활성(미철회)+관리자 미차단 공유가 있는 ACTIVE
+     * 문서만 Bounded({@link Pageable}의 Page Size)로 반환한다. Disconnect가
+     * {@code deleteEmbeddingIndexForSource}로 이 Source의 모든 Embedding을 이미
+     * 지웠으므로, 재연결 시점에는 버전 비교 없이 "지금 자격이 있는 문서 전부"가
+     * 곧 "다시 색인이 필요한 문서 전부"다. 철회된 공유/관리자 차단은 WHERE 절
+     * 자체에서 제외된다("preserving restrictions and revoked shares") - 이 결과에
+     * 나타난 문서만 {@code GoogleDriveOAuthService}가 새 {@code IndexRequestedEvent}로
+     * 스케줄링한다. {@code DocumentShareEntity}는 이 Source 도메인 자신의 Entity이므로
+     * (V010) 이 JPQL Join이 RAG 도메인을 전혀 참조하지 않는다(의존 방향 규칙 유지).
+     */
+    @Query("SELECT d FROM SourceDocumentEntity d "
+            + "JOIN DocumentShareEntity s ON s.documentId = d.id "
+            + "JOIN SourceConnectionEntity c ON c.id = d.sourceId "
+            + "WHERE d.sourceId = :sourceId AND d.state = 'ACTIVE' "
+            + "AND s.revokedAt IS NULL AND s.adminBlocked = false "
+            + "AND c.type = 'GOOGLE_DRIVE' AND c.status = 'ACTIVE'")
+    Slice<SourceDocumentEntity> findActivelySharedForReconnectScheduling(@Param("sourceId") Long sourceId,
+            Pageable pageable);
 }

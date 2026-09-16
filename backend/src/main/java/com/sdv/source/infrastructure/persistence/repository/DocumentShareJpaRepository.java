@@ -2,9 +2,11 @@ package com.sdv.source.infrastructure.persistence.repository;
 
 import com.sdv.source.infrastructure.persistence.entity.DocumentShareEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourceDocumentEntity;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Slice;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -37,6 +39,25 @@ public interface DocumentShareJpaRepository extends JpaRepository<DocumentShareE
 
     /** ADMIN 범위 단건 조회 - 게시자와 무관하게 활성 공유 전체에서 찾는다({@code SharedFileAdminController}). */
     Optional<DocumentShareEntity> findByIdAndRevokedAtIsNull(Long id);
+
+    /**
+     * M11 후속 교정 - {@code IndexOrchestrator.publishGeneration}(패키지가 달라
+     * {@code @link}를 걸 수 없다, {@code com.sdv.rag.application.IndexOrchestrator})이
+     * 발행 직전 이 공유 행을 {@code SELECT ... FOR UPDATE}로 잠그기 위한 조회다 -
+     * {@code SourceDocumentJpaRepository.findByIdForUpdate}와 정확히 같은 기법이다.
+     * "checking a mutable share without protecting against concurrent changes is
+     * insufficient"(이 작업 지시사항) - 이 Lock이 없으면 발행 Transaction의
+     * (읽기 전용) 공유 확인과 그 이후의 실제 Embedding 쓰기 사이에 다른 Transaction
+     * ({@code updateShare}/{@code adminSetBlocked})이 끼어들어 이 공유를 바꿔도 발행
+     * Transaction은 그 변경을 전혀 모른 채 진행할 수 있었다. Lock 순서는 항상 부모
+     * {@code source_connections} → {@code source_documents} → 이 {@code
+     * document_shares}다(IndexOrchestrator Class Javadoc 참고) - {@code
+     * createShare}/{@code unshare}/{@code adminSetBlocked}는 이미 그 앞의
+     * {@code source_documents} 행을 먼저 잠그므로 순서가 뒤집히지 않는다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM DocumentShareEntity s WHERE s.id = :shareId")
+    Optional<DocumentShareEntity> findByIdForUpdate(@Param("shareId") Long shareId);
 
     // ------------------------------------------------------------------
     // document_share_recipients (자식 테이블) - 별도 Repository 없이 이 Repository
