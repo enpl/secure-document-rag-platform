@@ -36,6 +36,8 @@ public enum SourceContentOutcome {
     DOCUMENT_CHANGED,
     /** Google Workspace 문서 동기 Export가 10MB 상한을 넘는다. */
     EXPORT_LIMIT_EXCEEDED,
+    /** A caller-supplied live-retrieval deadline elapsed during provider I/O. */
+    TIMEOUT,
     /** Core 지원 포맷이 아니거나(PPTX/이미지 등) 기본적으로 비활성화됐다(XLSX). */
     UNSUPPORTED_FORMAT,
     /** 그 밖의 예상치 못한 실패(Network/Timeout/알 수 없는 응답 등) - 안전하게 실패로 처리한다. */

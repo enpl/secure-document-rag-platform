@@ -1,5 +1,13 @@
 # SDV MVP 우선 구현 · 보완 목록
 
+## M12 takeover integration note (2026-09-16)
+
+**M12 implementation is complete and commit-ready for the local/mock acceptance scope.** The cumulative slice carries index generation identity into `VectorCandidate`, rechecks the local allow-list after query embedding, accepts evidence only from the exact deterministic `/parse` chunk coordinate, and protects encrypted evidence with requester-conversation/document/source fences. Revoke/block/disconnect invalidation is `AFTER_COMMIT`; release performs provider verification followed by fresh SDV authorization. Original evidence TTL remains non-sliding and at most 300 seconds.
+
+The final correction maps raw-content admission rejection to `CAPACITY_EXHAUSTED` at the service boundary, keeps the single monotonic request/file deadline through the one permitted whole-attempt version retry, and enforces request-scoped Google header/body and parser upload/header/body timeouts without mutating shared client settings. `LiveContentAdmission` reserves finite concurrency/raw-byte capacity before fetch/parse and releases it on every acquired exit; it is not represented as a bound on total JVM or parser memory.
+
+2026-09-16 current evidence: five focused Java classes completed `BUILD SUCCESSFUL` (23 tests); the project venv completed the Python suite with 65 passed; one final backend regression completed `BUILD SUCCESSFUL` with 88 XML suites / 633 tests / zero failures, errors, or skips. Local mock HTTP tests cover delayed headers, stalled/trickling bodies, stalled parser upload, timeout classification, and at-most-one M12 whole-attempt retry. Live Google/OIDC/Ollama/browser acceptance remains intentionally unverified and must be revisited as soon as ordinary-USER natural-language file search and the local sLLM are connected (MVP-35); it is not an implementation defect in this slice. Do not start M13/M14 as part of M12.
+
 2026-09-13 사용자 지시로 도입. 목적은 동작하는 MVP와 프론트엔드를 빠르게 완성하면서 미완료 사항을 잊지 않는 것이다. 문서 작성은 해당 기능의 구현이나 테스트 완료를 의미하지 않는다.
 
 ## 문서 위치와 관리

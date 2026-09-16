@@ -90,3 +90,22 @@ sdv:
     max-bytes: ${SDV_SHARED_DOWNLOAD_MAX_BYTES:26214400}
     max-concurrent-downloads: ${SDV_SHARED_DOWNLOAD_MAX_CONCURRENT_DOWNLOADS:2}
     request-timeout-ms: ${SDV_SHARED_DOWNLOAD_REQUEST_TIMEOUT_MS:30000}
+  # M12 (F-BE-103/§2A.5 Mandatory Live Retrieval) - 요청 하나(다중 파일 포함)에
+  # 허용되는 유한한 상한. index-consumer와 마찬가지로 실제 sLLM/자연어 검색이
+  # 연결되기 전에는 운영 트래픽이 이 경로를 타지 않는다(격리된 테스트만 호출).
+  live-retrieval:
+    max-files-per-request: ${SDV_RAG_LIVE_MAX_FILES_PER_REQUEST:5}
+    per-file-deadline-ms: ${SDV_RAG_LIVE_PER_FILE_DEADLINE_MS:20000}
+    total-request-deadline-ms: ${SDV_RAG_LIVE_TOTAL_REQUEST_DEADLINE_MS:60000}
+    max-evidence-chars: ${SDV_RAG_LIVE_MAX_EVIDENCE_CHARS:4000}
+    max-top-k: ${SDV_RAG_LIVE_MAX_TOP_K:10}
+    max-candidate-document-scan: ${SDV_RAG_LIVE_MAX_CANDIDATE_DOCUMENT_SCAN:500}
+    max-concurrent-content-operations: ${SDV_RAG_LIVE_MAX_CONCURRENT_CONTENT_OPERATIONS:2}
+    max-in-flight-content-bytes: ${SDV_RAG_LIVE_MAX_IN_FLIGHT_CONTENT_BYTES:52428800}
+  # M12 (F-BE-206/208/§2A.6 Encrypted Ephemeral Evidence) - Hard TTL(최대 300초,
+  # 배포 환경에서 더 짧게만 설정 가능) + Process-local 암호화 Volatile Storage 용량 상한.
+  ephemeral-evidence:
+    ttl-seconds: ${SDV_RAG_EPHEMERAL_EVIDENCE_TTL_SECONDS:300}
+    max-entries: ${SDV_RAG_EPHEMERAL_EVIDENCE_MAX_ENTRIES:5000}
+    max-bytes: ${SDV_RAG_EPHEMERAL_EVIDENCE_MAX_BYTES:16777216}
+    sweep-interval-ms: ${SDV_RAG_EPHEMERAL_EVIDENCE_SWEEP_INTERVAL_MS:30000}

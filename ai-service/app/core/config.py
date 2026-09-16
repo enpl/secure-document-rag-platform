@@ -86,6 +86,10 @@ class Settings:
     ollama_base_url: str = "http://localhost:11434"
     ollama_embed_timeout_seconds: int = 60
 
+    # M12 - Vector Candidate 검색 질의(Query) 문장의 최대 문자 수(요청 본문 자체가
+    # 이미 작으므로 Multipart Envelope 상한과는 별개의 작은 상한이다).
+    max_query_chars: int = 2000
+
     # M11 - Content HMAC Key. 외부에서 주입되어야 한다(운영자 Secret) - 하드코딩된
     # 운영 Key/Unkeyed Hash 대체/조용한 미보안 기본값을 두지 않는다. None이면 /index가
     # 이 Key가 실제로 필요해지는 시점(성공적인 Chunking 이후, HMAC 계산 직전)에만
@@ -109,6 +113,7 @@ def get_settings() -> Settings:
         chunk_max_chars=_int_env("SDV_INDEX_CHUNK_MAX_CHARS", Settings.chunk_max_chars),
         chunk_overlap_chars=_int_env("SDV_INDEX_CHUNK_OVERLAP_CHARS", Settings.chunk_overlap_chars),
         max_chunks_per_document=_int_env("SDV_INDEX_MAX_CHUNKS", Settings.max_chunks_per_document),
+        max_query_chars=_int_env("SDV_QUERY_MAX_CHARS", Settings.max_query_chars),
         ollama_base_url=_str_env("OLLAMA_BASE_URL", Settings.ollama_base_url),
         ollama_embed_timeout_seconds=_int_env("SDV_INDEX_OLLAMA_TIMEOUT_SECONDS",
                 Settings.ollama_embed_timeout_seconds),

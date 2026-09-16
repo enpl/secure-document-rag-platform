@@ -224,7 +224,8 @@ public class GoogleDriveConnector implements DocumentSourceConnector {
 
     @Override
     public SourceMetadataVerificationResult verifyDownload(SourceAccessContext context, long deadlineMs) {
-        DownloadCredential credential = resolveDownloadCredential(context);
+        DownloadCredential credential = resolvePublisherBoundCredential(context,
+                com.sdv.source.domain.ShareAction.DOWNLOAD);
         if (credential.failure() != null) {
             return SourceMetadataVerificationResult.failed(metadataOutcomeFor(credential.failure()),
                     "shared download credential binding failed");
@@ -251,7 +252,8 @@ public class GoogleDriveConnector implements DocumentSourceConnector {
     @Override
     public SourceDownloadResult fetchDownload(SourceAccessContext context, String expectedSourceVersion,
             long maxBytes, long deadlineMs) {
-        DownloadCredential credential = resolveDownloadCredential(context);
+        DownloadCredential credential = resolvePublisherBoundCredential(context,
+                com.sdv.source.domain.ShareAction.DOWNLOAD);
         if (credential.failure() != null) {
             return SourceDownloadResult.failed(credential.failure(), "shared download credential binding failed");
         }
@@ -259,8 +261,65 @@ public class GoogleDriveConnector implements DocumentSourceConnector {
                 maxBytes, deadlineMs);
     }
 
-    private DownloadCredential resolveDownloadCredential(SourceAccessContext context) {
-        if (context == null || context.requestedAction() != com.sdv.source.domain.ShareAction.DOWNLOAD) {
+    /**
+     * M12 신규 - AI 검색을 위한 사전(pre-fetch) 확인({@link #verifyDownload}와 동일한
+     * 구조, {@code ShareAction.VIEW} 결합만 다르다).
+     */
+    @Override
+    public SourceMetadataVerificationResult verifyForAi(SourceAccessContext context, long deadlineMs) {
+        DownloadCredential credential = resolvePublisherBoundCredential(context,
+                com.sdv.source.domain.ShareAction.VIEW);
+        if (credential.failure() != null) {
+            return SourceMetadataVerificationResult.failed(metadataOutcomeFor(credential.failure()),
+                    "shared AI credential binding failed");
+        }
+        GoogleDriveClient.GoogleFile file;
+        try {
+            file = client.getFile(credential.accessToken(), credential.fileId(),
+                    GoogleDriveClient.Deadline.startingNow(java.time.Duration.ofMillis(deadlineMs)));
+        } catch (GoogleApiException e) {
+            return SourceMetadataVerificationResult.failed(metadataVerificationOutcomeFor(e), safeMetadataReason(e));
+        }
+        Optional<SourceMetadataVerificationOutcome> invalid = validateLiveFile(file, credential.fileId());
+        if (invalid.isPresent()) {
+            return SourceMetadataVerificationResult.failed(invalid.get(), "live metadata response failed verification");
+        }
+        if (file.capabilities() == null || !Boolean.TRUE.equals(file.capabilities().canDownload())) {
+            return SourceMetadataVerificationResult.failed(SourceMetadataVerificationOutcome.ACCESS_DENIED,
+                    "provider does not permit content access");
+        }
+        return SourceMetadataVerificationResult.verified(file.name(), file.mimeType(), file.version(),
+                parseModifiedTimeSafely(file.modifiedTime()), true);
+    }
+
+    /**
+     * M12 신규 - {@link #verifyForAi}와 동일한 Share-bound(VIEW) Credential로
+     * {@link #fetchContent}(Owner-Only)와 동일한 검증 경로({@link
+     * GoogleDriveContentAdapter#fetchVerified}, Core 포맷 화이트리스트 + 재시도
+     * 1회 포함)를 재사용한다 - 병렬 구현 없음.
+     */
+    @Override
+    public SourceContentResult fetchForAi(SourceAccessContext context, String expectedSourceVersion,
+            long deadlineMs) {
+        DownloadCredential credential = resolvePublisherBoundCredential(context,
+                com.sdv.source.domain.ShareAction.VIEW);
+        if (credential.failure() != null) {
+            return SourceContentResult.failed(credential.failure(), "shared AI credential binding failed");
+        }
+        return contentAdapter.fetchVerifiedForAi(credential.accessToken(), credential.fileId(), expectedSourceVersion,
+                deadlineMs);
+    }
+
+    /**
+     * M12 후속 - {@code resolveDownloadCredential}이 {@code ShareAction.DOWNLOAD}만
+     * 받아들이던 것을, 호출자가 기대하는 행위를 명시적으로 넘기도록 일반화했다
+     * ({@link #fetchDownload}는 여전히 {@code DOWNLOAD}만, {@link #verifyForAi}/
+     * {@link #fetchForAi}는 {@code VIEW}만 넘긴다) - AI 자격을 다운로드 권한으로
+     * 대체하지 않는다는 원칙을 Credential 결합 단계에서부터 강제한다.
+     */
+    private DownloadCredential resolvePublisherBoundCredential(SourceAccessContext context,
+            com.sdv.source.domain.ShareAction expectedAction) {
+        if (context == null || context.requestedAction() != expectedAction) {
             return DownloadCredential.failure(SourceContentOutcome.ACCESS_DENIED);
         }
         SourceConnectionEntity connection = sourceConnectionJpaRepository.findById(context.sourceId()).orElse(null);
@@ -462,7 +521,7 @@ public class GoogleDriveConnector implements DocumentSourceConnector {
             case PERMISSION_DENIED -> SourceMetadataVerificationOutcome.ACCESS_DENIED;
             case NOT_FOUND -> SourceMetadataVerificationOutcome.NOT_FOUND;
             case QUOTA_OR_RATE_LIMIT, RETRYABLE_SERVER_ERROR -> SourceMetadataVerificationOutcome.ACCESS_UNKNOWN;
-            case BAD_REQUEST, UNKNOWN -> SourceMetadataVerificationOutcome.FAILED;
+            case BAD_REQUEST, TIMEOUT, UNKNOWN -> SourceMetadataVerificationOutcome.FAILED;
         };
     }
 
@@ -665,7 +724,7 @@ public class GoogleDriveConnector implements DocumentSourceConnector {
             case QUOTA_OR_RATE_LIMIT, RETRYABLE_SERVER_ERROR ->
                     new SourceSyncException(SourceSyncException.Reason.ACCESS_UNKNOWN,
                             "could not obtain a trustworthy answer after bounded retries");
-            case UNAUTHORIZED, PERMISSION_DENIED, BAD_REQUEST, UNKNOWN ->
+            case UNAUTHORIZED, PERMISSION_DENIED, BAD_REQUEST, TIMEOUT, UNKNOWN ->
                     new SourceSyncException(SourceSyncException.Reason.FAILED, "google drive sync call failed");
         };
     }

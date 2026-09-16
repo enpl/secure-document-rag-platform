@@ -93,6 +93,17 @@ public class GoogleDriveContentAdapter {
     }
 
     /**
+     * M12 live retrieval owns the one whole-attempt version retry.  Keep the
+     * established indexing fetch contract above unchanged, but pass one shared
+     * deadline through this attempt and never retry inside this adapter.
+     */
+    public SourceContentResult fetchVerifiedForAi(String accessToken, String fileId, String expectedSourceVersion,
+            long deadlineMs) {
+        return fetchVerified(accessToken, fileId, expectedSourceVersion,
+                GoogleDriveClient.Deadline.liveStartingNow(Duration.ofMillis(Math.max(1, deadlineMs))), false);
+    }
+
+    /**
      * Separate transport for SHR-004.  It deliberately accepts provider-downloadable binary
      * files without treating them as AI/parser-eligible content.
      */
@@ -183,9 +194,15 @@ public class GoogleDriveContentAdapter {
 
     private SourceContentResult fetchVerified(String accessToken, String fileId, String expectedSourceVersion,
             boolean allowRetryOnChange) {
+        return fetchVerified(accessToken, fileId, expectedSourceVersion,
+                GoogleDriveClient.Deadline.startingNow(Duration.ofSeconds(30)), allowRetryOnChange);
+    }
+
+    private SourceContentResult fetchVerified(String accessToken, String fileId, String expectedSourceVersion,
+            GoogleDriveClient.Deadline deadline, boolean allowRetryOnChange) {
         GoogleDriveClient.GoogleFile preFetch;
         try {
-            preFetch = client.getFile(accessToken, fileId);
+            preFetch = client.getFile(accessToken, fileId, deadline);
         } catch (GoogleApiException e) {
             return SourceContentResult.failed(outcomeForMetadataFailure(e), safeReason(e));
         }
@@ -212,10 +229,11 @@ public class GoogleDriveContentAdapter {
         String resultMimeType;
         try {
             if (decision.isWorkspaceExport()) {
-                content = client.exportFile(accessToken, fileId, decision.exportMimeType(), EXPORT_SYNC_LIMIT_BYTES);
+                content = client.exportFile(accessToken, fileId, decision.exportMimeType(), EXPORT_SYNC_LIMIT_BYTES,
+                        deadline);
                 resultMimeType = decision.exportMimeType();
             } else {
-                content = client.downloadMedia(accessToken, fileId, MAX_BINARY_BYTES);
+                content = client.downloadMedia(accessToken, fileId, MAX_BINARY_BYTES, deadline);
                 resultMimeType = preFetch.mimeType();
             }
         } catch (GoogleContentSizeLimitExceededException e) {
@@ -229,7 +247,7 @@ public class GoogleDriveContentAdapter {
 
         GoogleDriveClient.GoogleFile postFetch;
         try {
-            postFetch = client.getFile(accessToken, fileId);
+            postFetch = client.getFile(accessToken, fileId, deadline);
         } catch (GoogleApiException e) {
             content = null; // 재확인에 실패했으니 검증되지 않은 Byte를 절대 반환하지 않는다.
             return SourceContentResult.failed(outcomeForMetadataFailure(e), safeReason(e));
@@ -241,7 +259,7 @@ public class GoogleDriveContentAdapter {
             SourceContentOutcome outcome = postCheck.get();
             if (outcome == SourceContentOutcome.VERSION_MISMATCH) {
                 if (allowRetryOnChange) {
-                    return fetchVerified(accessToken, fileId, expectedSourceVersion, false);
+                    return fetchVerified(accessToken, fileId, expectedSourceVersion, deadline, false);
                 }
                 return SourceContentResult.failed(SourceContentOutcome.DOCUMENT_CHANGED,
                         "version changed a second time after one retry");
@@ -283,6 +301,7 @@ public class GoogleDriveContentAdapter {
             // Quota/5xx는 재시도를 이미 GoogleDriveClient가 소진했다 - 신뢰 가능한 답을 얻지 못했다(Fail Closed).
             case QUOTA_OR_RATE_LIMIT, RETRYABLE_SERVER_ERROR -> SourceContentOutcome.ACCESS_UNKNOWN;
             // UNKNOWN에는 malformed 응답/전체 작업 Deadline 초과/Network 오류가 모두 포함된다 - 전부 안전하게 실패로 처리한다.
+            case TIMEOUT -> SourceContentOutcome.TIMEOUT;
             case BAD_REQUEST, UNKNOWN -> SourceContentOutcome.FAILED;
         };
     }

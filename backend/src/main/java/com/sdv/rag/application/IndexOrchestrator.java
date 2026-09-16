@@ -223,7 +223,7 @@ public class IndexOrchestrator {
                 }
                 // 원본 AI 서비스 사유 문자열은 절대 옮기지 않는다(임의 텍스트 - Content 안전
                 // 규칙 위반 가능성) - 고정 허용 사유 코드만 예외 메시지에 담는다.
-                case FAILED -> throw new TransientIndexingException(
+                case TIMEOUT, FAILED -> throw new TransientIndexingException(
                         "ai service reported failure: " + reasonCodeFor(indexOutcome.kind()));
             };
         } finally {
@@ -527,7 +527,7 @@ public class IndexOrchestrator {
         return switch (kind) {
             case UNSUPPORTED_FORMAT -> "AI_SERVICE_UNSUPPORTED_FORMAT";
             case NO_TEXT -> "AI_SERVICE_NO_TEXT";
-            case FAILED -> "AI_SERVICE_PROCESSING_FAILED";
+            case TIMEOUT, FAILED -> "AI_SERVICE_PROCESSING_FAILED";
             case SUCCESS -> throw new IllegalStateException("reasonCodeFor must not be called for SUCCESS");
         };
     }

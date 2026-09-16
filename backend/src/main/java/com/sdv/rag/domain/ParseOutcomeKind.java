@@ -16,6 +16,8 @@ public enum ParseOutcomeKind {
     UNSUPPORTED_FORMAT,
     /** 지원 포맷이지만 추출 가능한 텍스트가 없다(예: 이미지만 있는 PDF). */
     NO_TEXT,
+    /** The caller's bounded live-retrieval transport deadline elapsed. */
+    TIMEOUT,
     /** 손상/악성 의심/크기·구조 상한 초과/Timeout 등으로 처리에 실패했다. */
     FAILED
 }

@@ -1,6 +1,7 @@
 package com.sdv.source.infrastructure.google;
 
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
@@ -13,6 +14,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLEncoder;
+import java.net.HttpURLConnection;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -101,12 +104,21 @@ public class GoogleDriveClient {
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final Duration operationDeadline;
+    private final URI apiBaseUri;
 
+    @Autowired
     public GoogleDriveClient(@Qualifier("googleDriveRestClient") RestClient restClient, ObjectMapper objectMapper,
-            @Value("${sdv.google-drive.operation-deadline-ms:30000}") long operationDeadlineMs) {
+            @Value("${sdv.google-drive.operation-deadline-ms:30000}") long operationDeadlineMs,
+            @Value("${sdv.google-drive.api-base-url:https://www.googleapis.com}") String apiBaseUrl) {
         this.restClient = restClient;
         this.objectMapper = objectMapper;
         this.operationDeadline = Duration.ofMillis(operationDeadlineMs);
+        this.apiBaseUri = URI.create(apiBaseUrl);
+    }
+
+    /** Retained for existing isolated RestClient contract tests. */
+    public GoogleDriveClient(RestClient restClient, ObjectMapper objectMapper, long operationDeadlineMs) {
+        this(restClient, objectMapper, operationDeadlineMs, "http://localhost");
     }
 
     /** {@code files.get} - {@code supportsAllDrives=true}로 공유 드라이브 문서도 조회한다. */
@@ -115,6 +127,9 @@ public class GoogleDriveClient {
     }
 
     GoogleFile getFile(String accessToken, String fileId, Deadline deadline) {
+        if (deadline.transportBound()) {
+            return withRetry(deadline, () -> boundedFileGet(accessToken, fileId, deadline));
+        }
         return withRetry(deadline, () -> {
             try {
                 GoogleFile file = restClient.get()
@@ -276,8 +291,11 @@ public class GoogleDriveClient {
 
     private byte[] boundedGet(String uri, String accessToken, long maxBytes, Deadline deadline) {
         if (deadline.isExpired()) {
-            throw new GoogleApiException(GoogleApiException.Category.UNKNOWN,
+            throw deadline.transportBound() ? timeout() : new GoogleApiException(GoogleApiException.Category.UNKNOWN,
                     "operation deadline exceeded before content transfer");
+        }
+        if (deadline.transportBound()) {
+            return boundedGetTransport(uri, accessToken, maxBytes, deadline);
         }
         return restClient.get()
                 .uri(uri)
@@ -299,24 +317,94 @@ public class GoogleDriveClient {
                 });
     }
 
+    private GoogleFile boundedFileGet(String accessToken, String fileId, Deadline deadline) {
+        String uri = "/drive/v3/files/" + encodePathSegment(fileId) + "?fields=" + encode(FILE_FIELDS)
+                + "&supportsAllDrives=true";
+        byte[] body = boundedHttpGet(uri, accessToken, 1_000_000L, deadline);
+        try {
+            return requireValidFile(objectMapper.readValue(body, GoogleFile.class));
+        } catch (RuntimeException e) {
+            throw malformedResponse(e);
+        }
+    }
+
+    private byte[] boundedGetTransport(String uri, String accessToken, long maxBytes, Deadline deadline) {
+        return boundedHttpGet(uri, accessToken, maxBytes, deadline);
+    }
+
+    private byte[] boundedHttpGet(String pathAndQuery, String accessToken, long maxBytes, Deadline deadline) {
+        HttpURLConnection connection = null;
+        try {
+            if (deadline.isExpired()) {
+                throw timeout();
+            }
+            connection = (HttpURLConnection) apiBaseUri.resolve(pathAndQuery).toURL().openConnection();
+            connection.setRequestMethod("GET");
+            connection.setRequestProperty(HttpHeaders.AUTHORIZATION, bearer(accessToken));
+            int timeout = deadline.remainingTimeoutMillis();
+            connection.setConnectTimeout(timeout);
+            connection.setReadTimeout(timeout);
+            int status = connection.getResponseCode();
+            if (status != 200) {
+                throw translateStatus(status);
+            }
+            long declaredLength = connection.getContentLengthLong();
+            if (declaredLength > maxBytes) {
+                throw new GoogleContentSizeLimitExceededException(
+                        "content exceeded the configured byte limit before streaming");
+            }
+            try (InputStream input = connection.getInputStream()) {
+                return readBounded(input, maxBytes, declaredLength, deadline, connection);
+            }
+        } catch (java.net.SocketTimeoutException e) {
+            throw timeout();
+        } catch (IOException e) {
+            if (deadline.isExpired()) {
+                throw timeout();
+            }
+            throw new GoogleApiException(GoogleApiException.Category.UNKNOWN, "google transport failed", e);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private static String encodePathSegment(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    private static GoogleApiException timeout() {
+        return new GoogleApiException(GoogleApiException.Category.TIMEOUT, "operation deadline exceeded");
+    }
+
     private byte[] readBounded(InputStream in, long maxBytes, long declaredLength, Deadline deadline) {
+        return readBounded(in, maxBytes, declaredLength, deadline, null);
+    }
+
+    private byte[] readBounded(InputStream in, long maxBytes, long declaredLength, Deadline deadline,
+            HttpURLConnection boundedConnection) {
         int initialCapacity = declaredLength >= 0 && declaredLength <= Integer.MAX_VALUE
                 ? (int) declaredLength : 8192;
         ByteArrayOutputStream buffer = new ByteArrayOutputStream(initialCapacity);
         byte[] chunk = new byte[8192];
         long total = 0;
         try {
-            int read;
-            while ((read = in.read(chunk)) != -1) {
+            while (true) {
                 if (Thread.currentThread().isInterrupted()) {
                     throw new GoogleApiException(GoogleApiException.Category.UNKNOWN,
                             "content transfer was cancelled");
                 }
                 if (deadline.isExpired()) {
-                    // 매 Read 이후 확인한다 - 개별 Socket Read 자체는 이미 성공했더라도(Slow Trickle처럼
-                    // 상한보다 짧은 간격으로 조금씩 오는 경우), 전체 작업 상한을 넘었으면 계속 기다리지 않는다.
-                    throw new GoogleApiException(GoogleApiException.Category.UNKNOWN,
-                            "content transfer exceeded the operation deadline");
+                    throw deadline.transportBound() ? timeout() : new GoogleApiException(
+                            GoogleApiException.Category.UNKNOWN, "content transfer exceeded the operation deadline");
+                }
+                if (boundedConnection != null) {
+                    boundedConnection.setReadTimeout(deadline.remainingTimeoutMillis());
+                }
+                int read = in.read(chunk);
+                if (read == -1) {
+                    break;
                 }
                 total += read;
                 if (total > maxBytes) {
@@ -325,13 +413,19 @@ public class GoogleDriveClient {
                 }
                 buffer.write(chunk, 0, read);
             }
+        } catch (java.net.SocketTimeoutException e) {
+            throw deadline.transportBound() ? timeout()
+                    : new GoogleApiException(GoogleApiException.Category.UNKNOWN, "content transfer failed", e);
         } catch (IOException e) {
+            if (deadline.transportBound() && deadline.isExpired()) {
+                throw timeout();
+            }
             throw new GoogleApiException(GoogleApiException.Category.UNKNOWN, "content transfer failed", e);
         } finally {
             try {
                 in.close();
             } catch (IOException ignored) {
-                // Best-effort close - 이미 실패/성공 경로가 확정된 뒤이므로 추가로 할 것이 없다.
+                // Best-effort close after the result has already been determined.
             }
         }
         if (declaredLength >= 0 && total != declaredLength) {
@@ -354,8 +448,8 @@ public class GoogleDriveClient {
         while (true) {
             attempt++;
             if (deadline.isExpired()) {
-                throw new GoogleApiException(GoogleApiException.Category.UNKNOWN,
-                        "operation deadline exceeded before attempt " + attempt);
+                throw deadline.transportBound() ? timeout() : new GoogleApiException(
+                        GoogleApiException.Category.UNKNOWN, "operation deadline exceeded before attempt " + attempt);
             }
             try {
                 return call.get();
@@ -609,13 +703,19 @@ public class GoogleDriveClient {
     /** 하나의 논리적 호출(재시도+Backoff+Streaming 전체)에 걸리는 절대 시간 상한(M08 Review 교정 항목 5). */
     static final class Deadline {
         private final long deadlineNanos;
+        private final boolean transportBound;
 
-        private Deadline(long deadlineNanos) {
+        private Deadline(long deadlineNanos, boolean transportBound) {
             this.deadlineNanos = deadlineNanos;
+            this.transportBound = transportBound;
         }
 
         static Deadline startingNow(Duration timeout) {
-            return new Deadline(System.nanoTime() + timeout.toNanos());
+            return new Deadline(System.nanoTime() + timeout.toNanos(), false);
+        }
+
+        static Deadline liveStartingNow(Duration timeout) {
+            return new Deadline(System.nanoTime() + timeout.toNanos(), true);
         }
 
         boolean isExpired() {
@@ -625,6 +725,18 @@ public class GoogleDriveClient {
         Duration remaining() {
             long remainingNanos = deadlineNanos - System.nanoTime();
             return remainingNanos <= 0 ? Duration.ZERO : Duration.ofNanos(remainingNanos);
+        }
+
+        boolean transportBound() {
+            return transportBound;
+        }
+
+        int remainingTimeoutMillis() {
+            long remainingMs = remaining().toMillis();
+            if (remainingMs <= 0) {
+                throw timeout();
+            }
+            return (int) Math.min(Integer.MAX_VALUE, remainingMs);
         }
     }
 

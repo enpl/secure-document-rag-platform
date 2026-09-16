@@ -28,6 +28,16 @@ class LocationDto(BaseModel):
     endOffset: int
 
 
+class ChunkCoordinateDto(BaseModel):
+    """Transient deterministic chunk coordinate; chunk plaintext is never returned."""
+
+    chunkIndex: int
+    locatorType: str
+    locatorValue: str
+    startOffset: int
+    endOffset: int
+
+
 class ParseResponseDto(BaseModel):
     """outcome이 SUCCESS일 때만 parser*/normalized*/locations가 채워진다.
 
@@ -41,6 +51,9 @@ class ParseResponseDto(BaseModel):
     normalizationVersion: Optional[str] = None
     normalizedText: Optional[str] = None
     locations: Optional[List[LocationDto]] = None
+    chunkingVersion: Optional[str] = None
+    embeddingModel: Optional[str] = None
+    chunks: Optional[List[ChunkCoordinateDto]] = None
     reason: Optional[str] = None
 
 
@@ -57,6 +70,26 @@ class IndexChunkDto(BaseModel):
     locatorValue: str
     embedding: List[float]
     contentHmac: str
+
+
+class EmbedQueryRequestDto(BaseModel):
+    """M12 신규(F-AI-embed-query) - Vector Candidate 검색을 위한 질의(Query) 문장
+    하나를 Embedding으로 변환하는 요청. 질의 원문은 이 요청/응답 계약 밖 어디에도
+    (로그/DB/Cache) 남지 않는다 - 처리 즉시 버려지는 일시적 값이다."""
+
+    text: str
+
+
+class EmbedQueryResponseDto(BaseModel):
+    """outcome이 SUCCESS일 때만 embedding/embeddingModel/embeddingDimensions가
+    채워진다. reason은 실패일 때만 채워지며 짧고 고정된 값이어야 한다(질의 원문을
+    절대 담지 않는다)."""
+
+    outcome: str
+    embedding: Optional[List[float]] = None
+    embeddingModel: Optional[str] = None
+    embeddingDimensions: Optional[int] = None
+    reason: Optional[str] = None
 
 
 class IndexResponseDto(BaseModel):

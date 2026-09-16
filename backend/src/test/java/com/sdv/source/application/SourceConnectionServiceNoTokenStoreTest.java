@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.Optional;
 
@@ -47,12 +48,14 @@ class SourceConnectionServiceNoTokenStoreTest {
     private SourcePersistenceMapper sourcePersistenceMapper;
     @Mock
     private AuditService auditService;
+    @Mock
+    private ApplicationEventPublisher applicationEventPublisher;
 
     @Test
     void nonBlankTokenRefWithNoStoreBeanAtAllFailsClosedWithoutMutatingOrAuditing() {
         SourceConnectionService service = new SourceConnectionService(sourceConnectionJpaRepository,
                 sourceDocumentJpaRepository, sourceOAuthTokenJpaRepository, sourcePersistenceMapper, Optional.empty(),
-                auditService);
+                auditService, applicationEventPublisher);
         SourceConnectionEntity entity = new SourceConnectionEntity("GOOGLE_DRIVE", "Test Source", "ACTIVE", "FULL",
                 "owner-no-store-bean");
         entity.updateTokenRef("pre-existing-token-ref");

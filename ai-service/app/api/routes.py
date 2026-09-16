@@ -14,7 +14,17 @@ from fastapi import APIRouter, HTTPException, Request
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.core.config import get_settings
-from app.models.schemas import HealthResponseDto, IndexResponseDto, ParseResponseDto
+from app.models.schemas import (
+    OUTCOME_FAILED,
+    OUTCOME_SUCCESS,
+    EmbedQueryRequestDto,
+    EmbedQueryResponseDto,
+    HealthResponseDto,
+    IndexResponseDto,
+    ParseResponseDto,
+)
+from app.services import embedding_service
+from app.services.chunking_service import CHUNKING_VERSION, chunk_coordinates
 from app.services.parser_service import parse_document
 from app.workers.index_worker import run_index
 
@@ -47,8 +57,18 @@ async def parse(request: Request) -> ParseResponseDto:
     # 실제 Parsing(Multiprocessing Timeout/Semaphore 포함)은 Blocking 작업이다
     # - Event Loop를 막지 않도록 별도 Thread에서 실행한다(그래야 이 요청이
     # 느리게 처리되는 동안에도 /health 등 다른 요청이 계속 응답할 수 있다).
-    return await asyncio.to_thread(parse_document, content, file.filename or "", declared_mime_type or None,
+    parsed = await asyncio.to_thread(parse_document, content, file.filename or "", declared_mime_type or None,
             settings)
+    if parsed.outcome != OUTCOME_SUCCESS or parsed.normalizedText is None or parsed.locations is None:
+        return parsed
+    coordinates = chunk_coordinates(parsed.normalizedText, parsed.locations, settings)
+    if not coordinates:
+        return ParseResponseDto(outcome=OUTCOME_FAILED, reason="deterministic chunking failed")
+    return parsed.model_copy(update={
+        "chunkingVersion": CHUNKING_VERSION,
+        "embeddingModel": embedding_service.EMBEDDING_MODEL,
+        "chunks": coordinates,
+    })
 
 
 @router.post("/index", response_model=IndexResponseDto)
@@ -64,6 +84,29 @@ async def index(request: Request) -> IndexResponseDto:
     # /parse와 동일한 이유로 별도 Thread에서 실행한다 - Parsing/Chunking/Embedding
     # Provider 호출 전체가 Blocking이다.
     return await asyncio.to_thread(run_index, content, file.filename or "", declared_mime_type or None, settings)
+
+
+@router.post("/embed-query", response_model=EmbedQueryResponseDto)
+async def embed_query(payload: EmbedQueryRequestDto) -> EmbedQueryResponseDto:
+    """M12 신규(F-AI-embed-query) - Vector Candidate 검색을 위한 실제 질의
+    Embedding 경로(Placeholder Vector 없음, ``embedding_service.embed_texts``를
+    그대로 재사용한다 - 병렬 구현 없음). 질의 원문은 이 요청 처리 동안만 존재하며
+    로그/DB/Cache 어디에도 남기지 않는다."""
+
+    settings = get_settings()
+    text = payload.text
+    if not text or not text.strip():
+        return EmbedQueryResponseDto(outcome=OUTCOME_FAILED, reason="empty query text")
+    if len(text) > settings.max_query_chars:
+        return EmbedQueryResponseDto(outcome=OUTCOME_FAILED, reason="query text exceeds limit")
+    # embed_texts는 Blocking(HTTP) 호출이다 - /parse, /index와 동일한 이유로 별도 Thread에서 실행한다.
+    vectors = await asyncio.to_thread(embedding_service.embed_texts, [text], settings)
+    if vectors is None:
+        return EmbedQueryResponseDto(outcome=OUTCOME_FAILED,
+                reason="embedding provider unavailable or returned a malformed response")
+    return EmbedQueryResponseDto(outcome=OUTCOME_SUCCESS, embedding=vectors[0],
+            embeddingModel=embedding_service.EMBEDDING_MODEL,
+            embeddingDimensions=embedding_service.EMBEDDING_DIMENSIONS)
 
 
 async def _read_bounded_upload(request: Request, settings):

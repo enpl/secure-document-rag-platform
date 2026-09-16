@@ -27,7 +27,7 @@ public class ContentProcessingPolicy {
             case SUCCESS -> Optional.empty();
             case UNSUPPORTED_FORMAT -> Optional.of(DocumentIndexStatus.SKIPPED_UNSUPPORTED);
             case NO_TEXT -> Optional.of(DocumentIndexStatus.SKIPPED_NO_TEXT);
-            case FAILED -> Optional.of(DocumentIndexStatus.FAILED);
+            case TIMEOUT, FAILED -> Optional.of(DocumentIndexStatus.FAILED);
         };
     }
 }
