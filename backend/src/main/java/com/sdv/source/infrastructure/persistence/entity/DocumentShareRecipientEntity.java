@@ -28,13 +28,21 @@ public class DocumentShareRecipientEntity {
     @Column(name = "recipient_subject", nullable = false, length = 255)
     private String recipientSubject;
 
+    @Column(name = "recipient_user_id")
+    private Long recipientUserId;
+
     protected DocumentShareRecipientEntity() {
         // JPA
     }
 
     public DocumentShareRecipientEntity(Long shareId, String recipientSubject) {
+        this(shareId, recipientSubject, null);
+    }
+
+    public DocumentShareRecipientEntity(Long shareId, String recipientSubject, Long recipientUserId) {
         this.shareId = shareId;
         this.recipientSubject = recipientSubject;
+        this.recipientUserId = recipientUserId;
     }
 
     public Long getId() {
@@ -47,5 +55,9 @@ public class DocumentShareRecipientEntity {
 
     public String getRecipientSubject() {
         return recipientSubject;
+    }
+
+    public Long getRecipientUserId() {
+        return recipientUserId;
     }
 }

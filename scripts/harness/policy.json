@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "backendSuites": {
+    "05": [
+      "com.sdv.source.SelectiveSharingE2ETest",
+      "com.sdv.identity.api.IdentityAccessControllerWebTest",
+      "com.sdv.common.config.SecurityAuthorizationWebTest",
+      "com.sdv.auth.MeBootstrapIntegrationTest"
+    ],
+    "06": [
+      "com.sdv.rag.application.RagAnswerAuthorizationFenceIntegrationTest",
+      "com.sdv.source.SharedDownloadE2ETest",
+      "com.sdv.identity.UserAuthorizationInvalidationTransactionTest",
+      "com.sdv.rag.application.IndexOrchestratorShareRaceConcurrencyTest",
+      "com.sdv.rag.infrastructure.ephemeral.EncryptedEphemeralEvidenceStoreTest"
+    ],
+    "09": [
+      "com.sdv.rag.ZeroOriginalPersistenceE2ETest",
+      "com.sdv.rag.RagLiveRetrievalNonRetentionCanaryTest",
+      "com.sdv.common.logging.SensitiveLogFilterTest",
+      "com.sdv.audit.application.RagAuditRecorderTest"
+    ]
+  },
+  "browserCases": [
+    "desktop-navigation",
+    "mobile-focus-and-overlay",
+    "long-file-list-and-sticky-controls",
+    "login-bootstrap",
+    "admin-conflict-reload",
+    "view-only-no-download",
+    "inert-output-no-external-resources"
+  ]
+}

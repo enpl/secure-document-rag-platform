@@ -32,9 +32,10 @@ function adminShare(overrides: Partial<AdminShareResponse> = {}): AdminShareResp
     publisherSubject: 'publisher-a',
     sourceId: 10,
     documentId: 20,
+    audience: 'NAMED_USERS',
     classification: 'INTERNAL',
     allowedActions: ['VIEW'],
-    recipients: ['recipient-b'],
+    recipients: [{ id: 20, loginId: 'recipient-b', displayName: null }],
     adminBlocked: false,
     adminBlockReason: null,
     generation: 1,
@@ -72,7 +73,7 @@ describe('SharedMaterialsAdminPage admin management', () => {
     await waitFor(() => expect(screen.getByText('현재 게시된 공유가 없습니다.')).toBeInTheDocument())
   })
 
-  it('never exposes another owner\'s private Drive listing or lets the admin widen recipients/actions', async () => {
+  it("never exposes another owner's private Drive listing or lets the admin widen recipients/actions", async () => {
     mockedList.mockResolvedValue([adminShare()])
 
     render(<SharedMaterialsAdminPage />)
@@ -126,8 +127,6 @@ describe('SharedMaterialsAdminPage admin management', () => {
     await user.click(screen.getByRole('button', { name: '차단' }))
     await user.click(screen.getByRole('button', { name: '차단 확인' }))
 
-    await waitFor(() =>
-      expect(screen.getByText(/이미 철회됐을 수 있습니다\. 새로고침해 주세요\./)).toBeInTheDocument(),
-    )
+    await waitFor(() => expect(screen.getByText(/이미 철회됐을 수 있습니다\. 새로고침해 주세요\./)).toBeInTheDocument())
   })
 })

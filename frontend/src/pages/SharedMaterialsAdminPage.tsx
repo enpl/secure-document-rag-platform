@@ -6,9 +6,7 @@ import type { AdminShareResponse } from '../api/shares'
 import { ApiError } from '../api/client'
 
 type ListState =
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string }
-  | { kind: 'loaded'; shares: AdminShareResponse[] }
+  { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'loaded'; shares: AdminShareResponse[] }
 
 /**
  * M16C 신규(SHR-006, `docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.13) - ADMIN 전용
@@ -134,8 +132,8 @@ function AdminSharedMaterialsPage() {
     <>
       <h1>공유 자료 관리</h1>
       <p className="text-secondary">
-        게시된 공유의 정책/차단만 관리합니다. 수신자·등급·행위는 게시자만 바꿀 수 있고, 관리자는 이를 넓힐 수
-        없습니다. 다른 사람의 비공개 Drive는 이 화면에서 볼 수 없습니다.
+        게시된 공유의 정책/차단만 관리합니다. 수신자·등급·행위는 게시자만 바꿀 수 있고, 관리자는 이를 넓힐 수 없습니다.
+        다른 사람의 비공개 Drive는 이 화면에서 볼 수 없습니다.
       </p>
 
       {state.shares.length === 0 && <div className="status-banner">현재 게시된 공유가 없습니다.</div>}
@@ -150,11 +148,16 @@ function AdminSharedMaterialsPage() {
                 </span>
                 <span className="text-secondary">게시자: 인증된 SDV 사용자</span>
                 <span className="text-secondary">
-                  등급 {share.classification} · 행위 {share.allowedActions.join(', ')} · 수신자{' '}
-                  {share.recipients.length}명
+                  대상{' '}
+                  {share.audience === 'ALL_AUTHENTICATED'
+                    ? '등급을 충족하는 모든 SDV 사용자'
+                    : share.recipients.map((r) => r.loginId).join(', ')}{' '}
+                  · 등급 {share.classification} · 행위 {share.allowedActions.join(', ')}
                 </span>
                 {share.adminBlocked ? (
-                  <span className="pill pill--pending">차단됨{share.adminBlockReason ? ` - ${share.adminBlockReason}` : ''}</span>
+                  <span className="pill pill--pending">
+                    차단됨{share.adminBlockReason ? ` - ${share.adminBlockReason}` : ''}
+                  </span>
                 ) : (
                   <span className="pill pill--connected">정상 게시 중</span>
                 )}

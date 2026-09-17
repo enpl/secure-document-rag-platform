@@ -7,8 +7,23 @@ package com.sdv.policy.domain;
  * 정의한 값만 갖는다.
  */
 public enum SecurityLevel {
-    PUBLIC,
-    INTERNAL,
-    CONFIDENTIAL,
-    SECRET
+    PUBLIC(0),
+    INTERNAL(1),
+    CONFIDENTIAL(2),
+    SECRET(3);
+
+    private final int rank;
+
+    SecurityLevel(int rank) {
+        this.rank = rank;
+    }
+
+    /** Explicit policy rank. Enum declaration order/ordinal is never authorization evidence. */
+    public int rank() {
+        return rank;
+    }
+
+    public boolean covers(SecurityLevel requested) {
+        return requested != null && rank >= requested.rank;
+    }
 }

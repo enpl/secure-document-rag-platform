@@ -71,7 +71,7 @@ public class SourceConsistencyGuard {
      */
     public LiveIdentity verifyBefore(UserContext requester, Long documentId, long deadlineMs) {
         if (deadlineMs <= 0) throw new LiveRetrievalException(LiveRetrievalException.Reason.REQUEST_TIMEOUT);
-        Snapshot snapshot = readFreshSnapshot(requester.subject(), documentId);
+        Snapshot snapshot = readFreshSnapshot(requester, documentId);
         authorize(requester, snapshot.context());
         DocumentSourceConnector connector = sourceConnectorRegistry.getConnector(snapshot.sourceType())
                 .orElseThrow(() -> new LiveRetrievalException(LiveRetrievalException.Reason.NOT_AVAILABLE));
@@ -105,14 +105,18 @@ public class SourceConsistencyGuard {
         if (!before.expectedSourceVersion().equals(live.sourceVersion())) {
             throw new LiveRetrievalException(LiveRetrievalException.Reason.DOCUMENT_CHANGED);
         }
-        Snapshot current = readFreshSnapshot(before.requester().subject(), before.snapshot().context().documentId());
+        Snapshot current = readFreshSnapshot(before.requester(), before.snapshot().context().documentId());
         if (!sameBinding(before.snapshot(), current)) {
             throw new LiveRetrievalException(LiveRetrievalException.Reason.NOT_AUTHORIZED);
         }
         authorize(before.requester(), current.context());
     }
 
-    private Snapshot readFreshSnapshot(String requesterSubject, Long documentId) {
+    private Snapshot readFreshSnapshot(UserContext requester, Long documentId) {
+        long authorizationRevision = requester.issuer() == null ? -1L
+                : effectivePermissionService.currentSharedAuthorization(requester)
+                        .map(com.sdv.identity.domain.UserAuthorizationSnapshot::authorizationRevision)
+                        .orElseThrow(() -> new LiveRetrievalException(LiveRetrievalException.Reason.NOT_AUTHORIZED));
         Snapshot snapshot = freshRead.execute(status -> {
             DocumentShareEntity share = documentShareJpaRepository.findByDocumentIdAndRevokedAtIsNull(documentId)
                     .orElse(null);
@@ -127,9 +131,9 @@ public class SourceConsistencyGuard {
                 return null;
             }
             try {
-                SourceAccessContext context = new SourceAccessContext(requesterSubject, share.getPublisherSubject(),
+                SourceAccessContext context = new SourceAccessContext(requester.subject(), share.getPublisherSubject(),
                         share.getSourceId(), share.getDocumentId(), share.getId(), ShareAction.VIEW,
-                        share.getGeneration(), connection.getConnectionEpoch());
+                        share.getGeneration(), connection.getConnectionEpoch(), authorizationRevision);
                 return new Snapshot(context, SourceType.valueOf(connection.getType()));
             } catch (IllegalArgumentException ignored) {
                 return null;

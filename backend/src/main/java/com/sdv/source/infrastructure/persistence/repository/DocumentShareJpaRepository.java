@@ -69,6 +69,9 @@ public interface DocumentShareJpaRepository extends JpaRepository<DocumentShareE
     @Query("SELECT r.recipientSubject FROM DocumentShareRecipientEntity r WHERE r.shareId = :shareId")
     List<String> findRecipientSubjects(@Param("shareId") Long shareId);
 
+    @Query("SELECT COUNT(r) FROM DocumentShareRecipientEntity r WHERE r.shareId = :shareId")
+    long countRecipients(@Param("shareId") Long shareId);
+
     /** 소유자 갱신(PATCH) 시 기존 수신자 행을 전부 지우고 새 목록으로 다시 쓴다 - Bulk Delete만 이 메서드가 하고, 삽입은 호출자가 Entity로 저장한다. */
     @org.springframework.data.jpa.repository.Modifying
     @Query("DELETE FROM DocumentShareRecipientEntity r WHERE r.shareId = :shareId")
@@ -76,8 +79,9 @@ public interface DocumentShareJpaRepository extends JpaRepository<DocumentShareE
 
     /** 이 요청자(Subject)가 지금 이 문서에 대해 갖는 활성 공유가 있는지 - 위조된 shareId로 접근을 넓힐 수 없음을 검증하는 Test 등에 쓴다. */
     @Query("SELECT (COUNT(s) > 0) FROM DocumentShareEntity s "
-            + "JOIN DocumentShareRecipientEntity r ON r.shareId = s.id "
-            + "WHERE s.documentId = :documentId AND r.recipientSubject = :recipientSubject "
+            + "WHERE s.documentId = :documentId "
+            + "AND (s.audience = 'ALL_AUTHENTICATED' OR EXISTS (SELECT r.id FROM DocumentShareRecipientEntity r "
+            + "WHERE r.shareId = s.id AND r.recipientSubject = :recipientSubject)) "
             + "AND s.revokedAt IS NULL AND s.adminBlocked = false")
     boolean existsActiveGrantForRecipient(@Param("documentId") Long documentId,
             @Param("recipientSubject") String recipientSubject);
@@ -99,9 +103,12 @@ public interface DocumentShareJpaRepository extends JpaRepository<DocumentShareE
             + "DocumentShareJpaRepository$SharedDiscoveryCandidate(d, s, c.ownerSubject, c.connectionEpoch) "
             + "FROM SourceDocumentEntity d "
             + "JOIN DocumentShareEntity s ON s.documentId = d.id "
-            + "JOIN DocumentShareRecipientEntity r ON r.shareId = s.id "
             + "JOIN SourceConnectionEntity c ON c.id = d.sourceId "
-            + "WHERE r.recipientSubject = :recipientSubject AND s.revokedAt IS NULL AND s.adminBlocked = false "
+            + "WHERE (s.audience = 'ALL_AUTHENTICATED' OR EXISTS (SELECT r.id FROM DocumentShareRecipientEntity r "
+            + "WHERE r.shareId = s.id AND r.recipientSubject = :recipientSubject)) "
+            + "AND s.revokedAt IS NULL AND s.adminBlocked = false "
+            + "AND (CASE s.classification WHEN 'PUBLIC' THEN 0 WHEN 'INTERNAL' THEN 1 "
+            + "WHEN 'CONFIDENTIAL' THEN 2 WHEN 'SECRET' THEN 3 ELSE 999 END) <= :maximumClearanceRank "
             + "AND c.type = 'GOOGLE_DRIVE' AND c.status = 'ACTIVE' AND d.state = 'ACTIVE' "
             + "AND (:hasSourceId = false OR d.sourceId = :sourceId) "
             + "AND (:hasMimeType = false OR d.mimeType = :mimeType) "
@@ -109,12 +116,22 @@ public interface DocumentShareJpaRepository extends JpaRepository<DocumentShareE
             + "AND (:hasModifiedFrom = false OR d.modifiedAt >= :modifiedFrom) "
             + "AND (:hasModifiedTo = false OR d.modifiedAt <= :modifiedTo)")
     Slice<SharedDiscoveryCandidate> searchSharedDiscoverable(@Param("recipientSubject") String recipientSubject,
+            @Param("maximumClearanceRank") int maximumClearanceRank,
             @Param("hasSourceId") boolean hasSourceId, @Param("sourceId") Long sourceId,
             @Param("hasMimeType") boolean hasMimeType, @Param("mimeType") String mimeType,
             @Param("hasNamePattern") boolean hasNamePattern, @Param("namePattern") String namePattern,
             @Param("hasModifiedFrom") boolean hasModifiedFrom, @Param("modifiedFrom") Instant modifiedFrom,
             @Param("hasModifiedTo") boolean hasModifiedTo, @Param("modifiedTo") Instant modifiedTo,
             Pageable pageable);
+
+    /** Compatibility for legacy unit callers; production authenticated paths use the explicit clearance rank. */
+    default Slice<SharedDiscoveryCandidate> searchSharedDiscoverable(String recipientSubject,
+            boolean hasSourceId, Long sourceId, boolean hasMimeType, String mimeType,
+            boolean hasNamePattern, String namePattern, boolean hasModifiedFrom, Instant modifiedFrom,
+            boolean hasModifiedTo, Instant modifiedTo, Pageable pageable) {
+        return searchSharedDiscoverable(recipientSubject, 3, hasSourceId, sourceId, hasMimeType, mimeType,
+                hasNamePattern, namePattern, hasModifiedFrom, modifiedFrom, hasModifiedTo, modifiedTo, pageable);
+    }
 
     /**
      * {@link #searchSharedDiscoverable}의 한 행 - 후보 문서, 그 문서를 노출 대상으로

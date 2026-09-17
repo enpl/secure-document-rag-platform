@@ -2,6 +2,8 @@ package com.sdv.rag;
 
 import com.sdv.common.model.Role;
 import com.sdv.common.model.UserContext;
+import com.sdv.identity.application.IdentityRegistryService;
+import com.sdv.identity.api.dto.AdminUserResponse;
 import com.sdv.policy.infrastructure.persistence.entity.AiUsagePolicyEntity;
 import com.sdv.policy.infrastructure.persistence.repository.AiUsagePolicyJpaRepository;
 import com.sdv.rag.application.LiveEvidenceRetrievalService;
@@ -76,6 +78,7 @@ import static org.mockito.Mockito.when;
 class RagLiveRetrievalE2ETest {
 
     private static final long BOUND_SECONDS = 10;
+    private static final String ISSUER = "http://localhost:8180/realms/sdv";
 
     @Autowired
     private RagRetrievalService ragRetrievalService;
@@ -91,6 +94,8 @@ class RagLiveRetrievalE2ETest {
     private DocumentShareJpaRepository documentShareJpaRepository;
     @Autowired
     private AiUsagePolicyJpaRepository aiUsagePolicyJpaRepository;
+    @Autowired
+    private IdentityRegistryService identities;
 
     @MockitoSpyBean
     private GoogleDriveConnector googleDriveConnector;
@@ -367,6 +372,7 @@ class RagLiveRetrievalE2ETest {
     }
 
     private Fixture createFixtureWithClassification(String publisher, String recipient, String classification) {
+        ensureRequester(recipient);
         SourceConnectionEntity connection = new SourceConnectionEntity("GOOGLE_DRIVE", "Test Source", "ACTIVE",
                 "FULL", publisher);
         // EffectivePermissionService.evaluateSharedAccess는 검증된 Provider Identity가
@@ -412,8 +418,17 @@ class RagLiveRetrievalE2ETest {
                 "1", text, List.of(new ExtractedLocation(LocatorType.PAGE, "1", 0, text.length()))));
     }
 
+    private void ensureRequester(String subject) {
+        if (identities.currentAuthorization(ISSUER, subject).isPresent()) return;
+        identities.observeValidatedLogin(ISSUER, subject, subject, subject);
+        String query = subject.substring(0, Math.min(subject.length(), 50));
+        AdminUserResponse row = identities.adminSearch(query, 0, 50).items().stream()
+                .filter(candidate -> candidate.loginId().equals(subject)).findFirst().orElseThrow();
+        identities.updateAccess("admin-test", row.id(), row.version(), "SECRET", true);
+    }
+
     private static UserContext userContext(String subject) {
-        return new UserContext(subject, subject + "@example.com", Set.of(Role.USER), Set.of());
+        return new UserContext(subject, subject + "@example.com", Set.of(Role.USER), Set.of(), ISSUER, subject);
     }
 
     private record Fixture(String publisher, String recipient, Long sourceId, Long documentId, Long shareId) {

@@ -74,8 +74,8 @@ class RuntimeRoleGrantCallbackTest {
                 .locations("classpath:db/migration")
                 .load();
         MigrateResult firstResult = migrationOnly.migrate();
-        // M11이 V012를 추가했다 - V001~V012 = 12개.
-        assertThat(firstResult.migrationsExecuted).isEqualTo(12);
+        // Clearance/audience 계약이 V013을 추가했다 - V001~V013 = 13개.
+        assertThat(firstResult.migrationsExecuted).isEqualTo(13);
 
         // 2. sdv 역할 생성 (기존 DB에 대한 수동 Reconciliation 단계).
         try (Connection root = rootConnection(); Statement st = root.createStatement()) {

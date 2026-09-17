@@ -24,9 +24,7 @@ import { navigateToGoogleAuthorization } from './googleAuthorizationNavigation'
 const PICKER_PAGE_SIZE = 50
 
 type ConnectionsState =
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string }
-  | { kind: 'loaded'; sources: SourceResponse[] }
+  { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'loaded'; sources: SourceResponse[] }
 
 type PickerState =
   | { kind: 'idle' }
@@ -35,9 +33,7 @@ type PickerState =
   | { kind: 'loaded'; items: SourceFileResponse[]; hasMore: boolean }
 
 type SharesState =
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string }
-  | { kind: 'loaded'; shares: ShareResponse[] }
+  { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'loaded'; shares: ShareResponse[] }
 
 type DialogState = { mode: 'create'; files: ShareTarget[] } | { mode: 'edit'; share: ShareResponse } | null
 
@@ -410,15 +406,14 @@ export function MyDrivePage() {
   }
 
   const browsingSource =
-    connections.kind === 'loaded' ? connections.sources.find((s) => s.id === browsingSourceId) ?? null : null
+    connections.kind === 'loaded' ? (connections.sources.find((s) => s.id === browsingSourceId) ?? null) : null
 
   return (
     <>
       <h1>내 Drive</h1>
       <p className="text-secondary">
-        내 Google Drive를 연결하고, 원하는 파일만 골라 지정한 사람에게 공유합니다. 연결/동기화/탐색은 그 자체로는
-        아무 파일도 다른 사람에게 공개하지 않습니다 - 실제 공유는 아래에서 파일을 고르고 명시적으로 확인해야만
-        일어납니다.
+        내 Google Drive를 연결하고, 원하는 파일만 골라 지정한 사람에게 공유합니다. 연결/동기화/탐색은 그 자체로는 아무
+        파일도 다른 사람에게 공개하지 않습니다 - 실제 공유는 아래에서 파일을 고르고 명시적으로 확인해야만 일어납니다.
       </p>
 
       <ShareIdCard subject={subject} />
@@ -680,8 +675,8 @@ function ConnectionRow({
         <StatusPill source={source} />
         {isActive && source.credentialPresent && (
           <span className="text-secondary">
-            연결됨 표시는 저장된 자격증명이 있다는 뜻일 뿐, 지금 이 순간 Google에서 실제로 쓸 수 있다는 증명은
-            아닙니다 - 동기화나 공유 확인 시 다시 검증됩니다.
+            연결됨 표시는 저장된 자격증명이 있다는 뜻일 뿐, 지금 이 순간 Google에서 실제로 쓸 수 있다는 증명은 아닙니다
+            - 동기화나 공유 확인 시 다시 검증됩니다.
           </span>
         )}
         {error && <span className="status-banner status-banner--error">{error}</span>}
@@ -691,8 +686,8 @@ function ConnectionRow({
           <>
             <span className="text-secondary">
               연결 해제된 상태입니다. 공유 설정은 그대로 보존되며, 처음 연결했던 것과 동일한 Google 계정으로
-              재인증해야만 다시 연결됩니다(다른 계정이면 거부됩니다) - 재인증에 성공해도 각 파일이 실제로 다시
-              사용 가능한지는 파일별로 다시 확인됩니다.
+              재인증해야만 다시 연결됩니다(다른 계정이면 거부됩니다) - 재인증에 성공해도 각 파일이 실제로 다시 사용
+              가능한지는 파일별로 다시 확인됩니다.
             </span>
             <button type="button" className="btn btn--primary" onClick={onConnect} disabled={connecting}>
               {connecting ? '연결 중...' : 'Google 재연결'}
@@ -723,7 +718,12 @@ function ConnectionRow({
                 {browsing ? '탐색 중' : '파일 보기'}
               </button>
             )}
-            <button type="button" className="btn btn--danger" onClick={onAskDisconnect} disabled={disconnecting || syncing}>
+            <button
+              type="button"
+              className="btn btn--danger"
+              onClick={onAskDisconnect}
+              disabled={disconnecting || syncing}
+            >
               연결 해제
             </button>
           </>
@@ -792,12 +792,14 @@ function FilePicker({
         </button>
       </div>
       <p className="text-secondary">
-        폴더 구조 없이 평면 목록으로 보여줍니다. 여기서 체크만 해서는 아무것도 공유되지 않으며, 공유는 별도 확인
-        단계가 필요합니다.
+        폴더 구조 없이 평면 목록으로 보여줍니다. 여기서 체크만 해서는 아무것도 공유되지 않으며, 공유는 별도 확인 단계가
+        필요합니다.
       </p>
 
       <form className="file-picker__toolbar" onSubmit={onSubmitQuery}>
-        <label className="form-label" htmlFor="owner-file-query">동기화된 파일 이름 검색</label>
+        <label className="form-label" htmlFor="owner-file-query">
+          동기화된 파일 이름 검색
+        </label>
         <div className="form-row">
           <input
             id="owner-file-query"
@@ -807,9 +809,13 @@ function FilePicker({
             maxLength={200}
             placeholder="파일 이름 일부"
           />
-          <button type="submit" className="btn btn--primary">파일 검색</button>
+          <button type="submit" className="btn btn--primary">
+            파일 검색
+          </button>
           {(queryDraft || committedQuery) && (
-            <button type="button" className="btn" onClick={onClearQuery}>검색 지우기</button>
+            <button type="button" className="btn" onClick={onClearQuery}>
+              검색 지우기
+            </button>
           )}
         </div>
         {committedQuery && <span className="text-secondary">“{committedQuery}” 검색 결과</span>}
@@ -820,7 +826,9 @@ function FilePicker({
       ) : picker.kind === 'error' ? (
         <div className="status-banner status-banner--error">
           <p>{picker.message}</p>
-          <button type="button" className="btn" onClick={onRetry}>같은 조건으로 다시 시도</button>
+          <button type="button" className="btn" onClick={onRetry}>
+            같은 조건으로 다시 시도
+          </button>
         </div>
       ) : picker.items.length === 0 ? (
         <div className="status-banner">
@@ -839,22 +847,24 @@ function FilePicker({
               </tr>
             </thead>
             <tbody>
-          {picker.items.map((file) => (
-              <tr key={file.documentId}>
-                <td data-label="선택">
-                  <input
-                  type="checkbox"
-                  checked={selected.has(file.documentId)}
-                  onChange={() => onToggle(file)}
-                  aria-label={`${file.name} 선택`}
-                  />
-                </td>
-                <td data-label="파일 이름" className="file-table__name">{file.name}</td>
-                <td data-label="형식">{file.mimeType}</td>
-                <td data-label="색인 상태">{describePickerIndexStatus(file.indexStatus)}</td>
-                <td data-label="수정 시각">{formatPickerModifiedAt(file.modifiedAt)}</td>
-              </tr>
-          ))}
+              {picker.items.map((file) => (
+                <tr key={file.documentId}>
+                  <td data-label="선택">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(file.documentId)}
+                      onChange={() => onToggle(file)}
+                      aria-label={`${file.name} 선택`}
+                    />
+                  </td>
+                  <td data-label="파일 이름" className="file-table__name">
+                    {file.name}
+                  </td>
+                  <td data-label="형식">{file.mimeType}</td>
+                  <td data-label="색인 상태">{describePickerIndexStatus(file.indexStatus)}</td>
+                  <td data-label="수정 시각">{formatPickerModifiedAt(file.modifiedAt)}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -864,13 +874,10 @@ function FilePicker({
         <button type="button" className="btn" onClick={onPrevious} disabled={page === 0}>
           이전
         </button>
-        <span className="text-secondary" aria-live="polite">{page + 1}페이지</span>
-        <button
-          type="button"
-          className="btn"
-          onClick={onNext}
-          disabled={picker.kind !== 'loaded' || !picker.hasMore}
-        >
+        <span className="text-secondary" aria-live="polite">
+          {page + 1}페이지
+        </span>
+        <button type="button" className="btn" onClick={onNext} disabled={picker.kind !== 'loaded' || !picker.hasMore}>
           다음
         </button>
       </div>
@@ -916,7 +923,11 @@ function ShareRow({
       <div className="source-row__meta">
         <span className="source-row__name">{fileLabel}</span>
         <span className="text-secondary">
-          등급 {share.classification} · 행위 {share.allowedActions.join(', ')} · 수신자 {share.recipients.length}명
+          대상{' '}
+          {share.audience === 'ALL_AUTHENTICATED'
+            ? '등급을 충족하는 모든 SDV 사용자'
+            : share.recipients.map((r) => r.loginId).join(', ')}{' '}
+          · 등급 {share.classification} · 행위 {share.allowedActions.join(', ')}
         </span>
         {!share.active && <span className="pill pill--disabled">철회됨</span>}
         {share.active && share.adminBlocked && (
@@ -963,17 +974,14 @@ function describeAuthorizationReturn(
   if (context.hint === 'failed') {
     return {
       kind: 'failed',
-      message: 'Google 연결에 실패했거나 취소되었습니다. 기존 연결 정보는 변경하지 않았습니다. 다시 시도할 수 있습니다.',
+      message:
+        'Google 연결에 실패했거나 취소되었습니다. 기존 연결 정보는 변경하지 않았습니다. 다시 시도할 수 있습니다.',
     }
   }
 
   if (context.attempt !== null) {
     const current = sources.find((source) => source.id === context.attempt?.sourceId)
-    if (
-      !context.attempt.credentialPresentBefore &&
-      current?.status === 'ACTIVE' &&
-      current.credentialPresent
-    ) {
+    if (!context.attempt.credentialPresentBefore && current?.status === 'ACTIVE' && current.credentialPresent) {
       return {
         kind: 'confirmed',
         message: 'Google 연결 정보가 SDV에 저장되었습니다. 실제 Google 접근 가능 여부는 동기화할 때 다시 확인합니다.',
@@ -986,9 +994,7 @@ function describeAuthorizationReturn(
     }
   }
 
-  const hasStoredConnection = sources.some(
-    (source) => source.status === 'ACTIVE' && source.credentialPresent,
-  )
+  const hasStoredConnection = sources.some((source) => source.status === 'ACTIVE' && source.credentialPresent)
   if (context.hint === 'success' && hasStoredConnection) {
     return {
       kind: 'incomplete',

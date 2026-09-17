@@ -9,7 +9,7 @@ import java.util.Set;
  * {@code active}는 {@code revokedAt == null}을 그대로 노출한 것 - 철회된 공유도
  * 이력으로 계속 목록에 남는다({@code GET /api/shares}).
  */
-public record ShareResponse(Long id, Long sourceId, Long documentId, String classification,
-        Set<String> allowedActions, Set<String> recipients, boolean adminBlocked, String adminBlockReason,
+public record ShareResponse(Long id, Long sourceId, Long documentId, String audience, String classification,
+        Set<String> allowedActions, java.util.List<ShareRecipientResponse> recipients, boolean adminBlocked, String adminBlockReason,
         long generation, boolean active, Instant createdAt, Instant updatedAt, Instant revokedAt) {
 }

@@ -8,8 +8,10 @@ import com.sdv.ai.application.PromptComposer;
 import com.sdv.ai.application.PromptSecurityService;
 import com.sdv.common.model.UserContext;
 import com.sdv.common.security.CurrentUserProvider;
+import com.sdv.identity.domain.UserAuthorizationSnapshot;
 import com.sdv.policy.application.EffectivePermissionService;
 import com.sdv.policy.domain.PolicyDecision;
+import com.sdv.policy.domain.SecurityLevel;
 import com.sdv.rag.api.RagQueryController;
 import com.sdv.rag.application.CitationAssembler;
 import com.sdv.rag.application.FileMetadataDiscoveryService;
@@ -83,7 +85,8 @@ class GroundedAnswerOllamaHttpIntegrationTest {
                     URI.create("http://127.0.0.1:" + server.getAddress().getPort()), HttpClient.newHttpClient());
             PolicyEnforcedLlmGateway gateway = new PolicyEnforcedLlmGateway(adapter, properties);
             RagRetrievalService retrieval = mock(RagRetrievalService.class);
-            UserContext user = new UserContext("user-b", "b@example.test", Set.of(), Set.of());
+            UserContext user = new UserContext("user-b", "b@example.test", Set.of(), Set.of(),
+                    "https://issuer.test/realms/sdv", "sdv-user-b");
             LiveRetrievalResult live = live();
             when(retrieval.openEvidenceConversation(any())).thenReturn("server-conversation");
             when(retrieval.retrieveCandidatesForDocuments(any(), anyString(), anyList(), anyInt(), anyLong()))
@@ -95,10 +98,14 @@ class GroundedAnswerOllamaHttpIntegrationTest {
             when(retrieval.validateEvidenceForResponse(any(), anyString(), any(), any())).thenReturn(true);
             EffectivePermissionService permissions = mock(EffectivePermissionService.class);
             when(permissions.evaluateSharedAccess(any(), any(), any())).thenReturn(PolicyDecision.allow());
+            when(permissions.currentSharedAuthorization(user)).thenReturn(java.util.Optional.of(
+                    new UserAuthorizationSnapshot(2L, user.issuer(), user.subject(), user.loginId(),
+                            SecurityLevel.SECRET, 7L)));
             RagAnswerService answers = new RagAnswerService(
                     new AssistantRouter(new PromptSecurityService(), gateway), new NaturalLanguageFileQueryParser(),
                     mock(FileMetadataDiscoveryService.class), retrieval, new PromptComposer(properties, mapper),
-                    gateway, new CitationAssembler(permissions), properties);
+                    gateway, new CitationAssembler(permissions), properties,
+                    com.sdv.audit.application.RagAuditRecorder.noop(), permissions);
             CurrentUserProvider users = mock(CurrentUserProvider.class);
             when(users.getCurrentUser()).thenReturn(user);
             RagQueryController controller = new RagQueryController(mock(FileMetadataDiscoveryService.class), users,

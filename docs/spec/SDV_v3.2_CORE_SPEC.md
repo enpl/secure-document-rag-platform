@@ -31,6 +31,7 @@ It does not replace the original Excel master specification. Where this Markdown
 
 Latest explicit user decisions control approved revisions. Applied migrations constrain implementation history, not product-spec precedence. When planning, implementing, reviewing, or refactoring SDV, use the following precedence.
 
+<!-- prettier-ignore -->
 1. Latest user-provided v3.2 Excel master — currently the v1.5 approved workbook named in §1
 2. `docs/spec/SDV_v3.2_CORE_SPEC.md`
 3. `docs/spec/SDV_v3.2_FILE_MANIFEST.md`
@@ -57,7 +58,7 @@ and report it before implementation.
 
 # 2A. v1.5 Architecture — Personal Sources, Selective Sharing and No Original Retention
 
-Revision date: 2026-09-15. These are approved target contracts, NOT claims that the B-model implementation exists. They replace the former requirement that the consuming user must personally possess native Google file permission.
+Revision date: 2026-09-17. These are approved contracts, not claims of live acceptance. The clearance/audience amendments in §2A.2, §2A.5, §2A.6, §2A.11 and §2A.13 replace the former named-recipient-only rule. They also retain the rule that the consuming user need not personally possess native Google file permission.
 
 ## 2A.1 Source and Retention
 
@@ -67,13 +68,13 @@ MVP stores no original copies. Old Local Vault and writer IDs remain retired. A 
 
 ## 2A.2 Data That May Be Persisted
 
-Metadata/ACL catalog; explicit file-share intent, named recipients, security classification, action grants and generations; encrypted OAuth tokens with externally supplied key; content-free embeddings, generalized locators, source version, keyed digest/HMAC, parser/model versions; content-free audit and operational state. Embeddings remain sensitive customer data and require isolation, access control and deletion.
+Metadata/ACL catalog; explicit file-share intent, audience (`ALL_AUTHENTICATED` or `NAMED_USERS`), optional named recipients, security classification, action grants and generations; an SDV identity projection with current ADMIN-assigned maximum readable classification and authorization revision; encrypted OAuth tokens with externally supplied key; content-free embeddings, generalized locators, source version, keyed digest/HMAC, parser/model versions; content-free audit and operational state. Embeddings remain sensitive customer data and require isolation, access control and deletion.
 
 ## 2A.3 Data That Must Not Be Persisted
 
 No durable originals/exports, full extracted text, plaintext chunks, evidence, question/answer/prompt bodies, even encrypted. No content-bearing logs, events, DLQ, retries, caches, backups or dumps. Transient bounded memory is not a durable store; erase on completion/error/cancellation.
 
-V006__zero_original_persistence.sql and M07A are historical completed corrections, not NEXT work. V001–V009 files exist in the inspected checkout; never rewrite applied migrations. This document update did not inspect a runtime database or rerun product tests.
+V006__zero_original_persistence.sql and M07A are historical completed corrections, not NEXT work. V001–V013 files exist in the inspected checkout; never rewrite applied migrations. V013 is verified only through isolated migration/Testcontainers tests in this slice, not against the live testbed database.
 
 ## 2A.4 Metadata Search vs. Content Search
 
@@ -84,8 +85,9 @@ Content search: authorized published shares with usable version-consistent index
 ## 2A.5 Mandatory Live Retrieval
 
 For FIND_CONTENT/SUMMARIZE/COMPARE/GROUNDED_ANALYSIS:
+
 1. Authenticate requester B with OIDC; resolve the exact share/file/source/publisher A and provider account on the server.
-2. Validate B's named-recipient grant, requested action, classification/overlay, publication, admin block, source availability and current share/connection generations. Never trust client-supplied ownership.
+2. Validate B's explicit share audience, current persisted clearance/revision, requested action, classification/overlay, publication, admin block, source availability and current share/connection generations. `ALL_AUTHENTICATED` still requires an authenticated, active SDV identity with sufficient assigned clearance; `NAMED_USERS` additionally requires stable recipient membership. Never trust client-supplied ownership, login ID, role or clearance.
 3. Use only A's verified file-bound delegated credential. B need not have native Google rights. Neither arbitrary owner credentials nor broad admin/service-account credentials are an authorization shortcut. Do not expose A's credential to B. MVP does not require domain-wide delegation or changing Google ACLs.
 4. Revalidate A's current provider permission, download/export capability, non-trashed state and version before fetching. UNKNOWN/error is denial, not permission.
 5. Bounded transient fetch; isolated parser for supported content only; select minimum evidence.
@@ -97,7 +99,7 @@ Requester, publisher, credential owner, provider identity, source, file, share, 
 
 ## 2A.6 Encrypted Ephemeral Evidence
 
-Selected evidence may be kept only in encrypted volatile storage for the same actor/conversation/share+connection generations/source version. Hard TTL <=300 seconds from original creation; reads/copies/retries never extend or restart it. Check current SDV grant and publisher source access/version on every reuse. Evict on expiry, conversation close, cancellation, errors, revoke, admin block, disconnect or version change. No durable volume/backups/snapshots; after expiry fetch again. No full-document cache.
+Selected evidence may be kept only in encrypted volatile storage for the same actor/conversation/requester-authorization revision/share+connection generations/source version. Hard TTL <=300 seconds from original creation; reads/copies/retries never extend or restart it. Check current SDV audience/clearance/action and publisher source access/version on every reuse. Evict the affected requester on a committed clearance/status change, and evict on expiry, conversation close, cancellation, errors, revoke, admin block, disconnect or version change. No durable volume/backups/snapshots; after expiry fetch again. No full-document cache.
 
 ## 2A.7 File-Format Scope and Download
 
@@ -119,21 +121,27 @@ Future provider connectors remain source adapters in the default no-original mod
 
 ## 2A.11 Index and Authorization
 
-Index only explicitly shared, eligible files; connection or catalog sync alone is not publication/AI consent. Persist vectors/locators/version/HMAC/model/parser metadata without bodies. Filter the requester's authorized share IDs before vector search; no empty-filter global fallback. At completion, fence index writes by source/file/share/connection generations and source version so old work cannot restore revoked results. Preserve existing SourceDocumentState ACTIVE/DELETED and DocumentIndexStatus PENDING/INDEXED/SKIPPED_UNSUPPORTED/SKIPPED_NO_TEXT/FAILED/STALE.
+Index only explicitly shared, eligible files; connection or catalog sync alone is not publication/AI consent. Indexing is publisher-bound and must not impersonate an arbitrary eligible reader. A well-formed `ALL_AUTHENTICATED` share can be indexed with zero recipient rows, while private/unpublished or malformed legacy shares cannot become readable through the index. Persist vectors/locators/version/HMAC/model/parser metadata without bodies. Filter the requester's authorized share IDs, audience and current clearance before vector search; no empty-filter global fallback. At completion, fence index writes by source/file/share/connection generations and source version so old work cannot restore revoked results. Preserve existing SourceDocumentState ACTIVE/DELETED and DocumentIndexStatus PENDING/INDEXED/SKIPPED_UNSUPPORTED/SKIPPED_NO_TEXT/FAILED/STALE.
 
 ## 2A.12 Development Snapshot and Order
 
-Inspected branch feat/m16b-file-discovery-ui, HEAD 7b0debab99f3f043f73117d03fd11a17d16cc1e2.
-M01–M08 including M07A: existing baseline; M07 retired.
-M09A catalog/outbox: completed slice, not full Kafka ingestion. Consumer eventId ledger/retry/DLQ/IndexOrchestrator integration and publisher activation gate remain.
-M10: completed owner-bound metadata-discovery slice, not B-model shared discovery.
-M16A/OIDC testbed and M16B sync/discovery UI: reported completed bounded slices. M16B frontend tests 53/5 files, lint/build are prior agent reports, not rerun here; live browser/Google M16B checks remain unverified.
-Next: user reviews/integrates current M16B; M10B personal sources/sharing/reconnect; M10C authorized download; M16C sharing UI; remaining M09 consumers with M11 ingestion; M12 live retrieval; M13/14 natural-language routing and grounded answers; M15/16 integration; M17/18 real-user MVP gate.
+Inspected implementation branch `feat/mvp-clearance-sharing`, HEAD `6684c6f97c3956997bc364bf812e16a648a543d3` before this uncommitted slice.
+M01–M16 and the controlled M17 launcher/resume corrections have accumulated local/mock evidence recorded in the deferred register and execution handoffs. This section does not convert that evidence into live acceptance.
+The current clearance/default-audience/login-ID slice adds V013 and connected authorization/UI paths. Isolated backend/frontend regressions are recorded in the current handoff; live browser, Keycloak population, Google, Kafka, indexing, model answer and citation acceptance remain unverified.
+Next: user review/commit/integration, initial clearance assignment through the ADMIN UI after each required user has completed one validated SDV login, then consolidated live authorization/index/grounded-answer acceptance. The controlled testbed launcher remains baseline OFF unless explicitly enabled by the user.
 MVP-28 CSS improvement is the first task after MVP, preserving pale-blue sidebar/white main and obtaining visual approval.
 
 ## 2A.13 Sharing and Administrator Contract
 
-MVP uses file-level explicit named SDV user recipients; no implicit folder inheritance, group expansion or publish-all on connect. Confirm file, recipients, security level and action grants. Empty recipients never mean public/all users. PUBLIC/INTERNAL/CONFIDENTIAL/SECRET are the four canonical classifications; PUBLIC is not an internet-public audience. Missing/unmapped classification means safe denial (AI_DENIED), not a fifth enum.
+MVP uses file-level explicit publication with an explicit audience. `ALL_AUTHENTICATED` is the default and requires zero recipient rows; it means all authenticated, active SDV users whose ADMIN-assigned maximum readable classification covers the share. `NAMED_USERS` is an optional narrowing audience and requires one or more confirmed stable identities; being named never overrides insufficient clearance. Missing audience is never interpreted as all users, and inconsistent audience/recipient combinations fail closed. There is no implicit folder inheritance, Google `ANYONE` link, group expansion, or publish-all on connect. Confirm files, audience, security level and action grants; switching from named to all users is an explicit visible scope expansion.
+
+`PUBLIC < INTERNAL < CONFIDENTIAL < SECRET` is an explicit rank order, not enum ordinal or alphabetical order. A user's maximum readable classification is nullable persisted authorization state managed only by ADMIN. Unset, malformed, disabled or unknown identity state denies shared-content access, including PUBLIC. ADMIN role is management authority, not a content bypass. Clearance changes increment a monotonic authorization revision used with share/connection generations and source version to fence cached evidence, in-flight model output and final downloads, including downgrade-then-upgrade ABA. Data already delivered before a committed revocation cannot be recalled.
+
+After each validated OIDC login/account change, the authenticated application shell calls `GET /api/me`. That endpoint materializes or refreshes the safe local issuer+subject projection from server-validated claims and reports `READY`, `CLEARANCE_UNSET`, `DISABLED`, or `REGISTRY_UNAVAILABLE`. It never grants clearance, reactivates a disabled identity, or resets ADMIN-managed revision/state. The directory therefore contains users known through a successful SDV login/bootstrap, not every never-seen realm account; a missing/invalid login label is an explicit bootstrap failure, not a fabricated directory user.
+
+Metadata discovery binds the entire response to the requester authorization snapshot captured before candidate/provider work and checks the same issuer+subject, active clearance and monotonic revision again immediately before release. A committed downgrade, reset, disable or downgrade-then-upgrade ABA discards every already-collected row/link. Assistant `FIND_FILE` maps the same failure to a content-free authorization result, and content answers recheck the response-wide snapshot after generation and again after final audit work so answer, generated analysis and citations are discarded together. Download performs its existing bounded pre/post/provider/final checks before setting success headers or writing bytes. These point-in-time release fences do not claim network-byte atomicity or recall data delivered before the final check.
+
+ADMIN access editing binds each local draft to the exact server `version` that supplied every editable field. A reload/newer snapshot replaces the whole draft; it never combines stale clearance/active values with a newer expected version. Per-row writes are single-flight, stale list/write responses are ignored across newer operations and account changes, and failed/uncertain writes never show saved state.
 
 Administrator manages SDV-published metadata, labels, policies, blocks and audit only. ADMIN does not reveal another user's private Drive or tokens and does not automatically grant AI/download. A publisher cannot clear an administrative block. Administrative policy may restrict but cannot silently expand the publisher's audience/action consent.
 
@@ -152,7 +160,7 @@ SDV is an Enterprise Secure RAG Gateway.
 Its main purpose is to:
 
 - connect existing enterprise document Sources,
-- preserve the publisher's Source authority while enforcing explicit SDV recipient grants,
+- preserve the publisher's Source authority while enforcing explicit SDV audience, clearance and action grants,
 - apply additional SDV security policies,
 - perform permission-aware Retrieval,
 - send only permitted context to an LLM,
@@ -947,21 +955,22 @@ must not be merged into one mapper.
 
 # 17. Permission Model
 
-Source permissions refer to the verified PUBLISHER's authority over the exact original, not a requirement that the recipient already has native Google rights. SDV share recipients/actions/classification/overlay are the REQUESTER's authority. An owner-private metadata picker is a distinct scope, not public discovery or AI permission.
+Source permissions refer to the verified PUBLISHER's authority over the exact original, not a requirement that the requester already has native Google rights. SDV share audience, current requester clearance/revision, actions, classification and overlay are the REQUESTER's authority. An owner-private metadata picker is a distinct scope, not public discovery or AI permission.
 A stale/unknown publisher permission, unavailable connection, unpublished/blocked share, wrong provider identity or generation mismatch fails closed. ADMIN cannot bypass these rules to access content.
 
 # 18. Effective Permission
 
 ```text
 Authenticated requester
-AND explicit published share + named recipient + requested action
-AND classification / SDV overlay / no administrative block
+AND explicit published share + audience eligibility + requested action
+AND current persisted requester clearance/revision covers classification
+AND SDV overlay / no administrative block
 AND publisher's verified source authority
 AND current connection / file / share generations and version
 AND (for AI) AI usage policy + supported verified evidence
 ```
 
-SecurityLevel is PUBLIC/INTERNAL/CONFIDENTIAL/SECRET. PUBLIC does not imply any audience. Unknown classification is safe denial, not an invented fifth enum.
+SecurityLevel is PUBLIC/INTERNAL/CONFIDENTIAL/SECRET with explicit ranks. PUBLIC is not internet-public and still requires authentication, active SDV identity, an assigned applicable clearance, an explicit share audience and every other authorization condition. Unknown classification or clearance is safe denial, not an invented fifth enum.
 
 # 19. Security Invariants
 
@@ -969,7 +978,7 @@ These rules cannot be bypassed for implementation convenience.
 
 ## INV-SRC-001
 
-SDV must not expand a publisher's denied Source permission into ALLOW. Recipient content access additionally requires an explicit SDV share/action grant. B need not possess native Google permission; only server-bound A delegation is permitted.
+SDV must not expand a publisher's denied Source permission into ALLOW. Requester content access additionally requires explicit SDV audience eligibility, current sufficient clearance and the requested action. B need not possess native Google permission; only server-bound A delegation is permitted.
 
 ## INV-SRC-002
 
@@ -1535,13 +1544,17 @@ V002/V005 originally introduced content-bearing storage. M07A/V006 is the comple
 
 Content-free vector/locator/version/HMAC/parser/model records. SourceConnection, publication and generation checks must gate eligibility and final writes. Index readiness is independent of source lifecycle and share intent.
 
-## document_shares (v1.5 planned, not yet migrated)
+## document_shares
 
-Publisher subject, source/file binding, classification, action grants, published flag, admin block and generation. Connection availability is separate. Persist settings through pause; explicit unshare removes active grants without allowing reconnect revival.
+Publisher subject, source/file binding, explicit audience, classification, action grants, published flag, admin block and generation. Connection availability is separate. V013 adds the audience discriminator and safely backfills existing shares as `NAMED_USERS`; it never widens legacy empty or malformed rows. Persist settings through pause; explicit unshare removes active grants without allowing reconnect revival.
 
-## document_share_recipients (v1.5 planned)
+## document_share_recipients
 
-Named SDV subject IDs bound to one share; enforce uniqueness and tenant/account scoping where present. Empty recipients never mean all users. Owner mutation requires current generation; administrative restrictions cannot expand owner consent.
+Named-audience recipients bind to stable SDV registry identities while preserving legacy subject data for safe migration. A named audience requires confirmed, current, unambiguous recipients; login IDs are lookup/display labels and never become authority by themselves. An all-authenticated audience has zero recipient rows. Missing legacy audience is backfilled only to named, so empty/malformed legacy rows remain nonpublic and fail closed. Owner mutation requires current generation; administrative restrictions cannot expand owner consent.
+
+## sdv_users
+
+Minimal local projection populated after successful validated SDV login. Stable issuer+subject is authority; normalized login ID and display name are lookup labels. The projection covers users already known to SDV, not never-seen identity-provider accounts. Maximum readable classification is nullable and never auto-granted. ADMIN access changes use optimistic versioning, increment an authorization revision, audit content-free old/new state, and publish requester-scoped evidence invalidation only after commit.
 
 ## Migration identity drift: F-INF-018
 
@@ -1635,6 +1648,13 @@ Entity direct responses are forbidden.
 - `GET /api/admin/shares` — SDV 공유 자료 관리; 비공개 Drive·Token 제외; 관리 권한은 읽기/다운로드 우회 아님.
 - `PATCH /api/admin/shares/{shareId}` — SDV 공유 자료 관리; 비공개 Drive·Token 제외; 관리 권한은 읽기/다운로드 우회 아님.
 - `GET /api/shares` — 본인이 게시한 공유 설정 목록; 본인 게시자 범위; 중단 상태의 설정도 관리 가능.
+- `GET /api/directory/users?q={loginId}` — authenticated SDV users search the bounded, active, unambiguous local login projection; minimal ID/login/display fields only, no clearance or provider data.
+- `GET /api/admin/users` / `GET /api/admin/users/{id}` — ADMIN-only bounded user/access listing and detail.
+- `PATCH /api/admin/users/{id}/access` — ADMIN-only clearance/reset/status update with required expected version; conflict is explicit and a committed change increments authorization revision.
+
+Share create/update requests must include `audience`. `ALL_AUTHENTICATED` requires no `recipientUserIds`; `NAMED_USERS` requires confirmed registry IDs. Missing audience, raw unfinished login text, unknown IDs, ambiguous current login IDs, all-user plus recipients and named plus no recipients are validation errors, never an implicit widening. Old clients that omit audience do not receive all-user semantics.
+
+`GET /api/me` is also the authenticated registry bootstrap/readiness boundary. Its `registryStatus` is operational readiness for the local SDV identity projection; it is not authorization proof supplied by the browser and it does not replace current persisted clearance checks on shared-content operations.
 
 Existing metadata discovery is `GET /api/rag/files`; extend it with requester share authorization, not an alternate /api/search/files endpoint. Typed search alone is not natural-language intent routing. Return DTOs, never persistence entities.
 

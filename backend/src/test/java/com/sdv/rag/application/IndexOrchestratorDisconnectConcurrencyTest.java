@@ -118,7 +118,8 @@ class IndexOrchestratorDisconnectConcurrencyTest {
         sourceDocumentJpaRepository.saveAndFlush(document);
         long documentId = document.getId();
         documentShareJpaRepository.saveAndFlush(
-                new DocumentShareEntity(owner, sourceId, documentId, "INTERNAL", "VIEW", Instant.now()));
+                new DocumentShareEntity(owner, sourceId, documentId, "ALL_AUTHENTICATED", "INTERNAL", "VIEW",
+                        Instant.now()));
 
         CountDownLatch contentFetchStarted = new CountDownLatch(1);
         CountDownLatch disconnectCommitted = new CountDownLatch(1);

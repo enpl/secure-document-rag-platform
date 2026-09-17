@@ -17,7 +17,8 @@ public class CitationAssembler {
 
     public RagCitation assemble(UserContext requester, EvidenceProvenance p) {
         SourceAccessContext download = new SourceAccessContext(requester.subject(), p.publisherSubject(), p.sourceId(),
-                p.documentId(), p.shareId(), ShareAction.DOWNLOAD, p.shareGeneration(), p.connectionGeneration());
+                p.documentId(), p.shareId(), ShareAction.DOWNLOAD, p.shareGeneration(), p.connectionGeneration(),
+                p.requesterAuthorizationRevision());
         String downloadUrl = permissions.evaluateSharedAccess(requester, download, null).isAllowed()
                 ? "/api/shares/" + p.shareId() + "/download" : null;
         return new RagCitation(p.documentId(), p.locatorType().name(), p.locatorValue(), p.sourceVersion(),

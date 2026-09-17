@@ -5,6 +5,8 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.sdv.common.model.Role;
 import com.sdv.common.model.UserContext;
+import com.sdv.identity.application.IdentityRegistryService;
+import com.sdv.identity.api.dto.AdminUserResponse;
 import com.sdv.policy.infrastructure.persistence.entity.AiUsagePolicyEntity;
 import com.sdv.policy.infrastructure.persistence.repository.AiUsagePolicyJpaRepository;
 import com.sdv.rag.application.LiveEvidenceRetrievalService;
@@ -67,6 +69,7 @@ import static org.mockito.Mockito.when;
         "sdv.keycloak.audience=sdv-backend"
 })
 class RagLiveRetrievalNonRetentionCanaryTest {
+    private static final String ISSUER = "http://localhost:8180/realms/sdv";
 
     @Autowired
     private LiveEvidenceRetrievalService liveEvidenceRetrievalService;
@@ -82,6 +85,8 @@ class RagLiveRetrievalNonRetentionCanaryTest {
     private DocumentEmbeddingJpaRepository documentEmbeddingJpaRepository;
     @Autowired
     private AiUsagePolicyJpaRepository aiUsagePolicyJpaRepository;
+    @Autowired
+    private IdentityRegistryService identities;
 
     @MockitoSpyBean
     private GoogleDriveConnector googleDriveConnector;
@@ -185,6 +190,7 @@ class RagLiveRetrievalNonRetentionCanaryTest {
      * 검증한다.</p>
      */
     private Fixture createFixture(String publisher, String recipient) {
+        ensureRequester(recipient);
         SourceConnectionEntity connection = new SourceConnectionEntity("GOOGLE_DRIVE", "Test Source", "ACTIVE",
                 "FULL", publisher);
         connection.adoptProviderAccountId("verified-account-" + publisher);
@@ -205,9 +211,19 @@ class RagLiveRetrievalNonRetentionCanaryTest {
         return (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
     }
 
+    private void ensureRequester(String subject) {
+        if (identities.currentAuthorization(ISSUER, subject).isPresent()) return;
+        identities.observeValidatedLogin(ISSUER, subject, subject, subject);
+        String query = subject.substring(0, Math.min(subject.length(), 50));
+        AdminUserResponse row = identities.adminSearch(query, 0, 50).items().stream()
+                .filter(candidate -> candidate.loginId().equals(subject)).findFirst().orElseThrow();
+        identities.updateAccess("admin-test", row.id(), row.version(), "SECRET", true);
+    }
+
     private record Fixture(String recipient, Long documentId) {
         UserContext recipientContext() {
-            return new UserContext(recipient, recipient + "@example.com", Set.of(Role.USER), Set.of());
+            return new UserContext(recipient, recipient + "@example.com", Set.of(Role.USER), Set.of(), ISSUER,
+                    recipient);
         }
     }
 }

@@ -86,3 +86,10 @@ __pycache__/
 # Local AI handoff reports
 .claude-handoff/
 docs/workmd
+
+# scripts/harness verify-change.ps1 report areas (docs/harness/GATE_MATRIX.md) -
+# .harness/reports/ is written by the harness itself, one subdirectory per
+# run id, never overwritten/reused. .harness/imported-reports/ holds only
+# user-copied historical evidence; the harness never writes to it.
+.harness/reports/
+.harness/imported-reports/

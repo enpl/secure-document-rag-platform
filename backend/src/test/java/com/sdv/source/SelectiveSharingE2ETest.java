@@ -3,6 +3,9 @@ package com.sdv.source;
 import com.sdv.common.exception.NotFoundException;
 import com.sdv.common.model.Role;
 import com.sdv.common.model.UserContext;
+import com.sdv.identity.application.IdentityRegistryService;
+import com.sdv.identity.application.IdentityAccessException;
+import com.sdv.identity.api.dto.AdminUserResponse;
 import com.sdv.policy.application.EffectivePermissionService;
 import com.sdv.rag.api.dto.RagFileSearchQuery;
 import com.sdv.rag.api.dto.RagFileSearchResponse;
@@ -87,6 +90,8 @@ import static org.mockito.Mockito.when;
 })
 class SelectiveSharingE2ETest {
 
+    private static final String ISSUER = "http://localhost:8180/realms/sdv";
+
     @Autowired
     private SourceConnectionService sourceConnectionService;
     @Autowired
@@ -109,6 +114,8 @@ class SelectiveSharingE2ETest {
     private SecurityFindingJpaRepository securityFindingJpaRepository;
     @Autowired
     private SecurityFindingService securityFindingService;
+    @Autowired
+    private IdentityRegistryService identityRegistryService;
 
     private DocumentSourceConnector connectorMock;
     private FileMetadataDiscoveryService fileMetadataDiscoveryService;
@@ -142,6 +149,113 @@ class SelectiveSharingE2ETest {
         assertThatThrownBy(() -> sourceConnectionService.listFiles(sourceId, b, 0, 50))
                 .as("a non-owner must not be able to browse another user's private picker")
                 .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    void allAudienceUsesCurrentClearanceAndAuthorizationRevisionFencesAbaChanges() {
+        String suffix = unique();
+        String a = "publisher-clearance-" + suffix;
+        String b = "sdv-user-b-" + suffix;
+        String c = "sdv-user-c-" + suffix;
+        String admin = "sdv-admin-" + suffix;
+        AdminUserResponse bUser = registerAndAssign(admin, b, "INTERNAL", true);
+        registerAndAssign(admin, c, "PUBLIC", true);
+        registerAndAssign(admin, admin, null, true);
+
+        long sourceId = createActiveSource(a);
+        Doc shared = createDocument(sourceId, "All-internal.pdf", "application/pdf", "v1");
+        createDocument(sourceId, "Private.pdf", "application/pdf", "v1");
+        DocumentShare share = sourceSharingService.createShare(a, sourceId, shared.documentId(),
+                "ALL_AUTHENTICATED", "INTERNAL", Set.of("VIEW"), List.of());
+        stubVerified(sourceId, shared.sourceDocumentId(), "All-internal.pdf", "application/pdf", "v1");
+
+        assertThat(discoverWithIdentity(b, Role.USER, sourceId).items()).hasSize(1);
+        assertThat(discoverWithIdentity(c, Role.USER, sourceId).items()).isEmpty();
+        assertThat(discoverWithIdentity(admin, Role.ADMIN, sourceId).items())
+                .as("ADMIN role without clearance is not a content bypass").isEmpty();
+
+        long connectionEpoch = sourceConnectionJpaRepository.findById(sourceId).orElseThrow().getConnectionEpoch();
+        SourceAccessContext beforeDowngrade = new SourceAccessContext(b + "-subject", a, sourceId, shared.documentId(),
+                share.getId(), ShareAction.VIEW, share.getGeneration(), connectionEpoch,
+                bUser.authorizationRevision());
+
+        AdminUserResponse downgraded = identityRegistryService.updateAccess(admin, bUser.id(), bUser.version(),
+                "PUBLIC", true);
+        AdminUserResponse upgraded = identityRegistryService.updateAccess(admin, downgraded.id(), downgraded.version(),
+                "INTERNAL", true);
+
+        assertThat(upgraded.authorizationRevision()).isGreaterThan(bUser.authorizationRevision());
+        assertThat(effectivePermissionService.evaluateSharedAccess(
+                identifiedUser(b, Role.USER), beforeDowngrade, null).isAllowed())
+                .as("downgrade then upgrade must not revive an older authorization snapshot").isFalse();
+        assertThat(discoverWithIdentity(b, Role.USER, sourceId).items()).hasSize(1);
+    }
+
+    @Test
+    void namedAudienceRequiresBothStableSelectionAndSufficientClearance() {
+        String suffix = unique();
+        String a = "publisher-named-" + suffix;
+        String b = "sdv-user-b-" + suffix;
+        String c = "sdv-user-c-" + suffix;
+        String admin = "sdv-admin-" + suffix;
+        registerAndAssign(admin, b, "INTERNAL", true);
+        registerAndAssign(admin, c, "INTERNAL", true);
+        long sourceId = createActiveSource(a);
+        Doc doc = createDocument(sourceId, "Named.pdf", "application/pdf", "v1");
+        var recipients = identityRegistryService.resolveRecipients(ISSUER,
+                Set.of(identityRegistryService.adminSearch(b, 0, 20).items().getFirst().id()));
+        sourceSharingService.createShare(a, sourceId, doc.documentId(), "NAMED_USERS", "INTERNAL",
+                Set.of("VIEW"), recipients);
+        stubVerified(sourceId, doc.sourceDocumentId(), "Named.pdf", "application/pdf", "v1");
+
+        assertThat(discoverWithIdentity(b, Role.USER, sourceId).items()).hasSize(1);
+        assertThat(discoverWithIdentity(c, Role.USER, sourceId).items()).isEmpty();
+    }
+
+    @Test
+    void loginDirectoryTreatsWildcardsLiterallyAndFailsClosedForAmbiguousOrDisabledIdentities() {
+        String suffix = unique();
+        String literalLogin = "sdv%_user-" + suffix;
+        String collisionLogin = "collision-" + suffix;
+        identityRegistryService.observeValidatedLogin(ISSUER, "literal-subject-" + suffix,
+                literalLogin, "Literal User");
+        identityRegistryService.observeValidatedLogin(ISSUER, "plain-subject-" + suffix,
+                "sdvXYuser-" + suffix, "Plain User");
+
+        assertThat(identityRegistryService.searchDirectory(ISSUER, "%_user-" + suffix))
+                .extracting(candidate -> candidate.loginId())
+                .containsExactly(literalLogin);
+        assertThat(identityRegistryService.searchDirectory(ISSUER, literalLogin.toUpperCase()))
+                .extracting(candidate -> candidate.loginId())
+                .containsExactly(literalLogin);
+
+        identityRegistryService.observeValidatedLogin(ISSUER, "collision-one-" + suffix,
+                collisionLogin, "First");
+        identityRegistryService.observeValidatedLogin(ISSUER, "collision-two-" + suffix,
+                collisionLogin.toUpperCase(), "Second");
+        AdminUserResponse first = identityRegistryService.adminSearch(collisionLogin, 0, 20).items().stream()
+                .filter(candidate -> candidate.loginId().equals(collisionLogin)).findFirst().orElseThrow();
+        assertThat(identityRegistryService.searchDirectory(ISSUER, collisionLogin)).isEmpty();
+        assertThatThrownBy(() -> identityRegistryService.resolveRecipients(ISSUER, Set.of(first.id())))
+                .isInstanceOf(IdentityAccessException.class);
+
+        identityRegistryService.observeValidatedLogin(ISSUER, "collision-one-" + suffix,
+                "renamed-" + suffix, "First Renamed");
+        assertThat(identityRegistryService.resolveRecipients(ISSUER, Set.of(first.id())))
+                .singleElement().satisfies(recipient -> {
+                    assertThat(recipient.subject()).isEqualTo("collision-one-" + suffix);
+                    assertThat(recipient.loginId()).isEqualTo("renamed-" + suffix);
+                });
+        assertThat(identityRegistryService.searchDirectory(ISSUER, collisionLogin))
+                .extracting(candidate -> candidate.loginId())
+                .containsExactly(collisionLogin.toUpperCase());
+
+        AdminUserResponse renamed = identityRegistryService.adminSearch("renamed-" + suffix, 0, 20)
+                .items().getFirst();
+        identityRegistryService.updateAccess("admin-" + suffix, renamed.id(), renamed.version(), null, false);
+        assertThat(identityRegistryService.searchDirectory(ISSUER, "renamed-" + suffix)).isEmpty();
+        assertThatThrownBy(() -> identityRegistryService.resolveRecipients(ISSUER, Set.of(renamed.id())))
+                .isInstanceOf(IdentityAccessException.class);
     }
 
     // ------------------------------------------------------------------
@@ -226,10 +340,15 @@ class SelectiveSharingE2ETest {
         // 다른 문서의 접근을 넓힐 수 없다).
         long otherConnectionEpoch = sourceConnectionJpaRepository.findById(sourceIdOther).orElseThrow()
                 .getConnectionEpoch();
+        ensureLegacyRequester(b);
+        long authorizationRevision = identityRegistryService.currentAuthorization(ISSUER, b).orElseThrow()
+                .authorizationRevision();
         SourceAccessContext forgedContext = new SourceAccessContext(b, other, sourceIdOther, docOther.documentId(),
-                shareOnA.getId(), ShareAction.VIEW, shareOnA.getGeneration(), otherConnectionEpoch);
+                shareOnA.getId(), ShareAction.VIEW, shareOnA.getGeneration(), otherConnectionEpoch,
+                authorizationRevision);
 
-        boolean allowed = effectivePermissionService.evaluateSharedAccess(userContext(b), forgedContext, null)
+        UserContext requester = new UserContext(b, b + "@example.com", Set.of(Role.USER), Set.of(), ISSUER, b);
+        boolean allowed = effectivePermissionService.evaluateSharedAccess(requester, forgedContext, null)
                 .isAllowed();
 
         assertThat(allowed).as("a shareId that does not actually bind to this document/source must be rejected")
@@ -636,13 +755,38 @@ class SelectiveSharingE2ETest {
     }
 
     private RagFileSearchResponse discover(String subject, Long sourceId) {
+        ensureLegacyRequester(subject);
         RagFileSearchQuery query = new RagFileSearchQuery(null, null, sourceId, null, null,
                 RagFileSortKey.MODIFIED_AT_DESC, 0, 20);
-        return fileMetadataDiscoveryService.search(userContext(subject), query);
+        return fileMetadataDiscoveryService.search(new UserContext(subject, subject + "@example.com",
+                Set.of(Role.USER), Set.of(), ISSUER, subject), query);
     }
 
-    private static UserContext userContext(String subject) {
-        return new UserContext(subject, subject + "@example.com", Set.of(Role.USER), Set.of());
+    private RagFileSearchResponse discoverWithIdentity(String subject, Role role, Long sourceId) {
+        RagFileSearchQuery query = new RagFileSearchQuery(null, null, sourceId, null, null,
+                RagFileSortKey.MODIFIED_AT_DESC, 0, 20);
+        return fileMetadataDiscoveryService.search(identifiedUser(subject, role), query);
+    }
+
+    private AdminUserResponse registerAndAssign(String actor, String loginId, String level, boolean active) {
+        identityRegistryService.observeValidatedLogin(ISSUER, loginId + "-subject", loginId, loginId);
+        AdminUserResponse user = identityRegistryService.adminSearch(loginId, 0, 20).items().stream()
+                .filter(candidate -> candidate.loginId().equals(loginId)).findFirst().orElseThrow();
+        return identityRegistryService.updateAccess(actor, user.id(), user.version(), level, active);
+    }
+
+    private static UserContext identifiedUser(String loginId, Role role) {
+        return new UserContext(loginId + "-subject", loginId + "@example.com", Set.of(role), Set.of(), ISSUER,
+                loginId);
+    }
+
+    private void ensureLegacyRequester(String subject) {
+        if (identityRegistryService.currentAuthorization(ISSUER, subject).isPresent()) return;
+        identityRegistryService.observeValidatedLogin(ISSUER, subject, subject, subject);
+        String query = subject.substring(0, Math.min(subject.length(), 50));
+        AdminUserResponse row = identityRegistryService.adminSearch(query, 0, 50).items().stream()
+                .filter(candidate -> candidate.loginId().equals(subject)).findFirst().orElseThrow();
+        identityRegistryService.updateAccess("admin-test", row.id(), row.version(), "SECRET", true);
     }
 
     private static String unique() {

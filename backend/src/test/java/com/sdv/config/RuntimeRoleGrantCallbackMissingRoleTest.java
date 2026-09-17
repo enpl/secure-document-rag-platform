@@ -76,9 +76,9 @@ class RuntimeRoleGrantCallbackMissingRoleTest {
                 assertThat(rs.getBoolean("success")).isTrue();
                 versions.add(rs.getString("version"));
             }
-            // M11이 V012를 추가했다.
+            // Clearance/audience 계약이 V013을 추가했다.
             assertThat(versions).containsExactly("001", "002", "003", "004", "005", "006", "007", "008", "009",
-                    "010", "011", "012");
+                    "010", "011", "012", "013");
 
             assertThat(st.executeQuery(
                             "SELECT count(*) FROM pg_roles WHERE rolname = 'sdv'").next())

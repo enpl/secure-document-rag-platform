@@ -12,6 +12,9 @@ import {
   updateShare,
 } from '../../api/shares'
 import type { Classification, ShareAction, ShareResponse } from '../../api/shares'
+import type { ShareAudience } from '../../api/shares'
+import { searchDirectory } from '../../api/users'
+import type { DirectoryUser } from '../../api/users'
 
 /** One file this dialog can publish - identity only, never a filename guessed/derived from anything else. */
 export interface ShareTarget {
@@ -55,10 +58,11 @@ const ACTION_LABELS: Record<ShareAction, string> = {
 }
 
 /**
- * M16C 신규 - 공유 생성(여러 파일 한 번에)과 공유 수정(기존 공유 하나)을 함께
- * 다루는 대화상자. "PUBLIC"이라는 등급을 골라도 자동으로 모든 사람에게
- * 공개되는 것이 아니다 - 아래에 명시적으로 적은 수신자만 대상이다(등급은
- * Overlay/AI 정책 판단 기준일 뿐, 대상 범위가 아니다).
+ * 공유 생성(여러 파일 한 번에)과 공유 수정(기존 공유 하나)을 함께 다루는
+ * 대화상자. 기본 audience는 ALL_AUTHENTICATED지만 익명/인터넷 공개가 아니다.
+ * 로그인한 active SDV 사용자도 ADMIN이 지정한 현재 최대 열람 등급과 행위,
+ * Overlay, 게시자 원본 권한을 모두 통과해야 한다. NAMED_USERS는 서버가 찾은
+ * 안정 identity를 선택해 이 범위를 더 좁힐 때만 사용한다.
  *
  * <h2>여러 파일 = 여러 개의 독립된 요청</h2>
  * <p>"생성" 모드에서 파일을 여러 개 고르면, 이 대화상자는 그 파일 수만큼
@@ -76,11 +80,17 @@ export function ShareSettingsDialog(props: ShareSettingsDialogProps) {
   const firstFieldRef = useRef<HTMLSelectElement>(null)
 
   const initialShare = props.mode === 'edit' ? props.share : null
+  const [audience, setAudience] = useState<ShareAudience>(initialShare?.audience ?? 'ALL_AUTHENTICATED')
   const [classification, setClassification] = useState<Classification>(initialShare?.classification ?? 'INTERNAL')
   const [actions, setActions] = useState<Set<ShareAction>>(
     new Set<ShareAction>(initialShare?.allowedActions ?? ['VIEW']),
   )
-  const [recipientsText, setRecipientsText] = useState(initialShare?.recipients.join('\n') ?? '')
+  const [selectedRecipients, setSelectedRecipients] = useState<DirectoryUser[]>(
+    initialShare?.recipients.filter((recipient): recipient is DirectoryUser => recipient.id !== null) ?? [],
+  )
+  const [recipientQuery, setRecipientQuery] = useState('')
+  const [recipientCandidates, setRecipientCandidates] = useState<DirectoryUser[]>([])
+  const [directoryState, setDirectoryState] = useState<'idle' | 'loading' | 'error'>('idle')
   const [validationError, setValidationError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -175,21 +185,45 @@ export function ShareSettingsDialog(props: ShareSettingsDialogProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Mount 시 한 번만 등록한다(onClose 참조 변경으로 다시 등록할 필요 없음, submittingRef는 항상 최신값을 읽는다).
   }, [])
 
-  function parseRecipients(): string[] | null {
-    const parts = recipientsText
-      .split(/[\n,]+/)
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0)
-    const unique = Array.from(new Set(parts))
-    if (unique.length === 0) {
-      setValidationError('수신자를 한 명 이상 입력해 주세요(정확한 SDV 공유 ID).')
+  useEffect(() => {
+    if (audience !== 'NAMED_USERS' || recipientQuery.trim().length < 2) {
+      setRecipientCandidates([])
+      setDirectoryState('idle')
+      return
+    }
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      setDirectoryState('loading')
+      searchDirectory(apiClient, recipientQuery.trim(), controller.signal)
+        .then((items) => {
+          setRecipientCandidates(
+            items.filter((item) => !selectedRecipients.some((selected) => selected.id === item.id)),
+          )
+          setDirectoryState('idle')
+        })
+        .catch((error: unknown) => {
+          if (error instanceof DOMException && error.name === 'AbortError') return
+          setRecipientCandidates([])
+          setDirectoryState('error')
+        })
+    }, 250)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [apiClient, audience, recipientQuery, selectedRecipients])
+
+  function selectedRecipientIds(): number[] | null {
+    if (audience === 'ALL_AUTHENTICATED') return []
+    if (selectedRecipients.length === 0) {
+      setValidationError('특정 사용자 모드에서는 검색 결과에서 한 명 이상 선택해 주세요.')
       return null
     }
-    if (unique.length > MAX_RECIPIENTS) {
+    if (selectedRecipients.length > MAX_RECIPIENTS) {
       setValidationError(`수신자는 최대 ${MAX_RECIPIENTS}명까지 지정할 수 있습니다.`)
       return null
     }
-    return unique
+    return selectedRecipients.map((recipient) => recipient.id)
   }
 
   function toggleAction(action: ShareAction) {
@@ -210,7 +244,7 @@ export function ShareSettingsDialog(props: ShareSettingsDialogProps) {
       return
     }
     setValidationError(null)
-    const recipients = parseRecipients()
+    const recipients = selectedRecipientIds()
     if (!recipients) {
       return
     }
@@ -242,7 +276,7 @@ export function ShareSettingsDialog(props: ShareSettingsDialogProps) {
 
   async function runCreate(
     files: ShareTarget[],
-    recipients: string[],
+    recipients: number[],
     expectedSubject: string | null,
     signal: AbortSignal,
   ) {
@@ -268,7 +302,7 @@ export function ShareSettingsDialog(props: ShareSettingsDialogProps) {
 
   async function attemptCreate(
     file: ShareTarget,
-    recipients: string[],
+    recipients: number[],
     expectedSubject: string | null,
     signal: AbortSignal,
   ) {
@@ -280,7 +314,8 @@ export function ShareSettingsDialog(props: ShareSettingsDialogProps) {
           documentId: file.documentId,
           classification,
           actions: Array.from(actions),
-          recipients,
+          audience,
+          recipientUserIds: recipients,
         },
         signal,
       )
@@ -307,7 +342,7 @@ export function ShareSettingsDialog(props: ShareSettingsDialogProps) {
     if (props.mode !== 'create' || inFlightRef.current) {
       return
     }
-    const recipients = parseRecipients()
+    const recipients = selectedRecipientIds()
     if (!recipients) {
       return
     }
@@ -364,7 +399,7 @@ export function ShareSettingsDialog(props: ShareSettingsDialogProps) {
     }
   }
 
-  async function runUpdate(recipients: string[], expectedSubject: string | null, signal: AbortSignal) {
+  async function runUpdate(recipients: number[], expectedSubject: string | null, signal: AbortSignal) {
     if (props.mode !== 'edit' || !editShare) {
       return
     }
@@ -375,9 +410,10 @@ export function ShareSettingsDialog(props: ShareSettingsDialogProps) {
         editShare.id,
         {
           expectedGeneration: editShare.generation,
+          audience,
           classification,
           actions: Array.from(actions),
-          recipients,
+          recipientUserIds: recipients,
         },
         signal,
       )
@@ -414,8 +450,9 @@ export function ShareSettingsDialog(props: ShareSettingsDialogProps) {
       }
       setEditShare(fresh)
       setClassification(fresh.classification)
+      setAudience(fresh.audience)
       setActions(new Set(fresh.allowedActions))
-      setRecipientsText(fresh.recipients.join('\n'))
+      setSelectedRecipients(fresh.recipients.filter((recipient): recipient is DirectoryUser => recipient.id !== null))
     } catch (error) {
       if (isCancellation(error)) {
         return
@@ -431,36 +468,53 @@ export function ShareSettingsDialog(props: ShareSettingsDialogProps) {
 
   return (
     <div className="dialog-overlay" role="presentation">
-      <div
-        ref={dialogRef}
-        className="dialog card"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="share-dialog-title"
-      >
+      <div ref={dialogRef} className="dialog card" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
         <h2 id="share-dialog-title" style={{ marginTop: 0 }}>
           {title}
         </h2>
 
         {props.mode === 'create' && (
           <p className="text-secondary">
-            선택한 파일 {props.files.length}개에 아래와 같이 공유합니다. 파일마다 독립적으로 처리되며, 일부만
-            성공할 수 있습니다.
+            선택한 파일 {props.files.length}개에 아래와 같이 공유합니다. 파일마다 독립적으로 처리되며, 일부만 성공할 수
+            있습니다.
           </p>
         )}
-        {props.mode === 'edit' && (
-          <p className="text-secondary">대상 파일: {props.fileLabel}</p>
-        )}
+        {props.mode === 'edit' && <p className="text-secondary">대상 파일: {props.fileLabel}</p>}
         {props.mode === 'edit' && editShare?.adminBlocked && (
           <div className="status-banner status-banner--error">
             관리자가 이 공유를 차단했습니다{editShare.adminBlockReason ? ` (사유: ${editShare.adminBlockReason})` : ''}.
-            게시자는 이 차단을 직접 해제할 수 없습니다 - 아래에서 등급/행위/수신자를 바꿔도 차단 자체는 풀리지
-            않습니다.
+            게시자는 이 차단을 직접 해제할 수 없습니다 - 아래에서 등급/행위/수신자를 바꿔도 차단 자체는 풀리지 않습니다.
           </div>
         )}
         {editNotice && <div className="status-banner">{editNotice}</div>}
 
         <form onSubmit={handleSubmit}>
+          <fieldset className="share-audience" disabled={submitting}>
+            <legend className="form-label">공유 대상</legend>
+            <label>
+              <input
+                type="radio"
+                name="share-audience"
+                value="ALL_AUTHENTICATED"
+                checked={audience === 'ALL_AUTHENTICATED'}
+                onChange={() => setAudience('ALL_AUTHENTICATED')}
+              />{' '}
+              파일 등급을 읽을 수 있는 모든 SDV 사용자
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="share-audience"
+                value="NAMED_USERS"
+                checked={audience === 'NAMED_USERS'}
+                onChange={() => setAudience('NAMED_USERS')}
+              />{' '}
+              특정 사용자만
+            </label>
+          </fieldset>
+          <p className="text-secondary">
+            모든 대상도 로그인과 현재 보안 등급, 허용 행위, 게시자의 원본 권한을 모두 통과해야 합니다.
+          </p>
           <label className="form-label" htmlFor="share-classification">
             보안 등급
           </label>
@@ -496,20 +550,67 @@ export function ShareSettingsDialog(props: ShareSettingsDialogProps) {
             ))}
           </div>
 
-          <label className="form-label" htmlFor="share-recipients">
-            수신자 (내 SDV 공유 ID, 한 줄에 하나 또는 쉼표로 구분, 최대 {MAX_RECIPIENTS}명)
-          </label>
-          <div className="form-row">
-            <textarea
-              id="share-recipients"
-              className="input"
-              rows={3}
-              value={recipientsText}
-              onChange={(event) => setRecipientsText(event.target.value)}
-              placeholder="예: a1b2c3d4-... (수신자에게 '내 SDV 공유 ID'를 물어보세요 - 이메일이 아닙니다)"
-              disabled={submitting}
-            />
-          </div>
+          {audience === 'NAMED_USERS' && (
+            <div className="recipient-picker">
+              <label className="form-label" htmlFor="share-recipient-search">
+                사용자 찾기 (로그인 ID, 최대 {MAX_RECIPIENTS}명)
+              </label>
+              <input
+                id="share-recipient-search"
+                className="input"
+                value={recipientQuery}
+                onChange={(event) => setRecipientQuery(event.target.value)}
+                placeholder="예: sdv-user-b"
+                autoComplete="off"
+                disabled={submitting}
+                aria-controls="share-recipient-options"
+              />
+              <div className="recipient-chips" aria-label="선택한 사용자">
+                {selectedRecipients.map((recipient) => (
+                  <span className="recipient-chip" key={recipient.id}>
+                    {recipient.loginId}
+                    <button
+                      type="button"
+                      aria-label={`${recipient.loginId} 선택 제거`}
+                      onClick={() =>
+                        setSelectedRecipients((current) => current.filter((item) => item.id !== recipient.id))
+                      }
+                      disabled={submitting}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+              {directoryState === 'loading' && <div className="text-secondary">사용자를 찾는 중...</div>}
+              {directoryState === 'error' && (
+                <div className="status-banner status-banner--error">
+                  사용자 검색에 실패했습니다. 다시 입력해 주세요.
+                </div>
+              )}
+              {recipientQuery.trim().length >= 2 && directoryState === 'idle' && (
+                <ul id="share-recipient-options" className="recipient-options" role="listbox">
+                  {recipientCandidates.map((candidate) => (
+                    <li key={candidate.id}>
+                      <button
+                        type="button"
+                        role="option"
+                        className="recipient-option"
+                        onClick={() => {
+                          setSelectedRecipients((current) => [...current, candidate])
+                          setRecipientQuery('')
+                        }}
+                      >
+                        <strong>{candidate.loginId}</strong>
+                        {candidate.displayName && <span>{candidate.displayName}</span>}
+                      </button>
+                    </li>
+                  ))}
+                  {recipientCandidates.length === 0 && <li className="text-secondary">일치하는 사용자가 없습니다.</li>}
+                </ul>
+              )}
+            </div>
+          )}
 
           {validationError && <div className="status-banner status-banner--error form-row">{validationError}</div>}
           {props.mode === 'edit' && editError && (
@@ -556,11 +657,7 @@ export function ShareSettingsDialog(props: ShareSettingsDialogProps) {
 
 function ResultRow({ file, status }: { file: ShareTarget; status?: PerFileStatus }) {
   if (!status || status.kind === 'pending') {
-    return (
-      <span>
-        {file.name} - 처리 중...
-      </span>
-    )
+    return <span>{file.name} - 처리 중...</span>
   }
   if (status.kind === 'success') {
     return <span>{file.name} - 공유 완료</span>

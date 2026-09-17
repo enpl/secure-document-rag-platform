@@ -60,11 +60,26 @@ function asAuth(partial: Partial<AuthState>): AuthState {
 }
 
 function connectedSource(overrides: Partial<SourceResponse> = {}): SourceResponse {
-  return { id: 1, type: 'GOOGLE_DRIVE', name: '내 드라이브', status: 'ACTIVE', lastSyncAt: null, credentialPresent: true, ...overrides }
+  return {
+    id: 1,
+    type: 'GOOGLE_DRIVE',
+    name: '내 드라이브',
+    status: 'ACTIVE',
+    lastSyncAt: null,
+    credentialPresent: true,
+    ...overrides,
+  }
 }
 
 function pickerFile(overrides: Partial<SourceFileResponse> = {}): SourceFileResponse {
-  return { documentId: 100, name: '보고서.pdf', mimeType: 'application/pdf', modifiedAt: null, indexStatus: 'PENDING', ...overrides }
+  return {
+    documentId: 100,
+    name: '보고서.pdf',
+    mimeType: 'application/pdf',
+    modifiedAt: null,
+    indexStatus: 'PENDING',
+    ...overrides,
+  }
 }
 
 function filesPage(overrides: Partial<SourceFilesPageResponse> = {}): SourceFilesPageResponse {
@@ -76,9 +91,10 @@ function shareResponse(overrides: Partial<ShareResponse> = {}): ShareResponse {
     id: 5,
     sourceId: 1,
     documentId: 100,
+    audience: 'NAMED_USERS',
     classification: 'INTERNAL',
     allowedActions: ['VIEW'],
-    recipients: ['recipient-b'],
+    recipients: [{ id: 20, loginId: 'recipient-b', displayName: null }],
     adminBlocked: false,
     adminBlockReason: null,
     generation: 1,
@@ -119,7 +135,9 @@ describe('MyDrivePage access (M16C)', () => {
 
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('등록된 연결이 없습니다. 위에서 먼저 등록해 주세요.')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('등록된 연결이 없습니다. 위에서 먼저 등록해 주세요.')).toBeInTheDocument(),
+    )
     expect(mockedListSources).toHaveBeenCalledTimes(1)
   })
 
@@ -159,9 +177,7 @@ describe('MyDrivePage connection management', () => {
     // SourcesPage.test.tsx와 같은 이유로 실제 이동 자체는 검증하지 않는다.
     await userEvent.setup().click(screen.getByRole('button', { name: 'Google 연결' }))
 
-    await waitFor(() =>
-      expect(mockedAuthorize).toHaveBeenCalledWith(expect.anything(), 1, expect.any(AbortSignal)),
-    )
+    await waitFor(() => expect(mockedAuthorize).toHaveBeenCalledWith(expect.anything(), 1, expect.any(AbortSignal)))
   })
 
   it('runs a manual sync through the reused SourceSyncPanel and refreshes the connection list', async () => {
@@ -187,9 +203,9 @@ describe('MyDrivePage connection management', () => {
   })
 
   it('disconnects only after a two-step confirmation and preserves the shares list untouched', async () => {
-    mockedListSources.mockResolvedValueOnce([connectedSource()]).mockResolvedValueOnce([
-      connectedSource({ status: 'DISABLED', credentialPresent: false }),
-    ])
+    mockedListSources
+      .mockResolvedValueOnce([connectedSource()])
+      .mockResolvedValueOnce([connectedSource({ status: 'DISABLED', credentialPresent: false })])
     mockedListShares.mockResolvedValue([shareResponse()])
     mockedDisconnect.mockResolvedValue(undefined)
 
@@ -223,9 +239,7 @@ describe('MyDrivePage connection management', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Google 재연결' }))
 
     // 같은 sourceId(1)로 기존 authorizeGoogleSource API를 그대로 재사용한다 - 새 Source를 만들지 않는다.
-    await waitFor(() =>
-      expect(mockedAuthorize).toHaveBeenCalledWith(expect.anything(), 1, expect.any(AbortSignal)),
-    )
+    await waitFor(() => expect(mockedAuthorize).toHaveBeenCalledWith(expect.anything(), 1, expect.any(AbortSignal)))
     expect(mockedCreateSource).not.toHaveBeenCalled()
     // 공유 설정은 그대로 보존된다 - 재연결 시도 자체가 공유 목록을 건드리지 않는다.
     expect(mockedListShares).toHaveBeenCalledTimes(1)
@@ -263,7 +277,9 @@ describe('MyDrivePage connection management', () => {
     ['NETWORK_ERROR', '서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.'],
   ])('clears the busy state and keeps %s distinct when authorize is rejected', async (code, message) => {
     mockedListSources.mockResolvedValue([connectedSource({ credentialPresent: false })])
-    mockedAuthorize.mockRejectedValue(new ApiError(code === 'NETWORK_ERROR' ? 0 : 503, { code, message: 'x', traceId: null }))
+    mockedAuthorize.mockRejectedValue(
+      new ApiError(code === 'NETWORK_ERROR' ? 0 : 503, { code, message: 'x', traceId: null }),
+    )
 
     renderPage()
     await waitFor(() => expect(screen.getByText('내 드라이브')).toBeInTheDocument())
@@ -326,7 +342,9 @@ describe('MyDrivePage connection management', () => {
 
     renderPageWithCallback('success')
 
-    await waitFor(() => expect(screen.getByText(/현재 SDV에 저장된 Google 연결 정보를 확인했습니다/)).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText(/현재 SDV에 저장된 Google 연결 정보를 확인했습니다/)).toBeInTheDocument(),
+    )
     expect(screen.getByText(/이번 요청이 새로 성공했다는 증거가 아니며/)).toBeInTheDocument()
   })
 
@@ -347,9 +365,12 @@ describe('MyDrivePage connection management', () => {
 
   it('deduplicates overlapping pageshow recovery events while the owner-state lookup is pending', async () => {
     let resolveRecovery!: (value: SourceResponse[]) => void
-    mockedListSources
-      .mockResolvedValueOnce([connectedSource({ credentialPresent: false })])
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveRecovery = resolve }))
+    mockedListSources.mockResolvedValueOnce([connectedSource({ credentialPresent: false })]).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRecovery = resolve
+        }),
+    )
     mockedAuthorize.mockResolvedValue({ authorizationUrl: 'https://accounts.google.com/mock' })
 
     renderPage()
@@ -391,7 +412,10 @@ describe('MyDrivePage connection management', () => {
     mockedListSources.mockResolvedValue([connectedSource({ credentialPresent: false })])
     let resolveAuthorize!: (value: { authorizationUrl: string }) => void
     mockedAuthorize.mockImplementation(
-      () => new Promise((resolve) => { resolveAuthorize = resolve }),
+      () =>
+        new Promise((resolve) => {
+          resolveAuthorize = resolve
+        }),
     )
 
     const view = renderPage()
@@ -410,7 +434,10 @@ describe('MyDrivePage connection management', () => {
     mockedListSources.mockResolvedValue([connectedSource({ credentialPresent: false })])
     let resolveAuthorize!: (value: { authorizationUrl: string }) => void
     mockedAuthorize.mockImplementation(
-      () => new Promise((resolve) => { resolveAuthorize = resolve }),
+      () =>
+        new Promise((resolve) => {
+          resolveAuthorize = resolve
+        }),
     )
 
     const view = render(
@@ -449,7 +476,9 @@ describe('MyDrivePage private file picker never publishes on its own', () => {
   it('searches the synchronized owner catalog, resets to page zero, and preserves prior selections', async () => {
     mockedListSources.mockResolvedValue([connectedSource()])
     mockedListFiles
-      .mockResolvedValueOnce(filesPage({ items: [pickerFile({ documentId: 1, name: '첫 페이지.txt' })], hasMore: true }))
+      .mockResolvedValueOnce(
+        filesPage({ items: [pickerFile({ documentId: 1, name: '첫 페이지.txt' })], hasMore: true }),
+      )
       .mockResolvedValueOnce(filesPage({ items: [pickerFile({ documentId: 2, name: '둘째 페이지.txt' })] }))
       .mockResolvedValueOnce(filesPage({ items: [pickerFile({ documentId: 3, name: '분기 보고서.txt' })] }))
 
@@ -467,7 +496,12 @@ describe('MyDrivePage private file picker never publishes on its own', () => {
 
     await waitFor(() =>
       expect(mockedListFiles).toHaveBeenLastCalledWith(
-        expect.anything(), 1, 0, 50, '분기 보고서', expect.any(AbortSignal),
+        expect.anything(),
+        1,
+        0,
+        50,
+        '분기 보고서',
+        expect.any(AbortSignal),
       ),
     )
     expect(screen.getByText('선택한 파일 1개')).toBeInTheDocument()
@@ -530,9 +564,9 @@ describe('MyDrivePage private file picker never publishes on its own', () => {
     await waitFor(() => expect(screen.getByText('내 드라이브')).toBeInTheDocument())
     await userEvent.setup().click(screen.getByRole('button', { name: '파일 보기' }))
 
-    await waitFor(() => expect(mockedListFiles).toHaveBeenCalledWith(
-      expect.anything(), 1, 0, 50, '', expect.any(AbortSignal),
-    ))
+    await waitFor(() =>
+      expect(mockedListFiles).toHaveBeenCalledWith(expect.anything(), 1, 0, 50, '', expect.any(AbortSignal)),
+    )
     await waitFor(() => expect(screen.getByLabelText('보고서.pdf 선택')).toBeInTheDocument())
     expect(screen.getByRole('columnheader', { name: '파일 이름' })).toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: '형식' })).toBeInTheDocument()
@@ -558,9 +592,9 @@ describe('MyDrivePage private file picker never publishes on its own', () => {
     mockedListFiles.mockResolvedValueOnce(filesPage({ items: [pickerFile({ documentId: 101, name: '두번째.pdf' })] }))
     await userEvent.setup().click(screen.getByRole('button', { name: '다음' }))
 
-    await waitFor(() => expect(mockedListFiles).toHaveBeenLastCalledWith(
-      expect.anything(), 1, 1, 50, '', expect.any(AbortSignal),
-    ))
+    await waitFor(() =>
+      expect(mockedListFiles).toHaveBeenLastCalledWith(expect.anything(), 1, 1, 50, '', expect.any(AbortSignal)),
+    )
     await waitFor(() => expect(screen.getByText('두번째.pdf')).toBeInTheDocument())
     expect(screen.getByText(/폴더 구조 없이 평면 목록으로/)).toBeInTheDocument()
   })
@@ -568,7 +602,9 @@ describe('MyDrivePage private file picker never publishes on its own', () => {
   it('opens the share dialog with exactly the checked files once the user explicitly confirms', async () => {
     mockedListSources.mockResolvedValue([connectedSource()])
     mockedListFiles.mockResolvedValue(
-      filesPage({ items: [pickerFile({ documentId: 1, name: 'A.pdf' }), pickerFile({ documentId: 2, name: 'B.pdf' })] }),
+      filesPage({
+        items: [pickerFile({ documentId: 1, name: 'A.pdf' }), pickerFile({ documentId: 2, name: 'B.pdf' })],
+      }),
     )
 
     renderPage()

@@ -7,10 +7,12 @@ import com.sdv.event.domain.IndexRequestedEvent;
 import com.sdv.event.infrastructure.persistence.entity.OutboxEventEntity;
 import com.sdv.event.infrastructure.persistence.repository.OutboxEventJpaRepository;
 import com.sdv.policy.domain.SecurityLevel;
+import com.sdv.identity.application.IdentityRegistryService.ResolvedRecipient;
 import com.sdv.source.domain.DocumentShare;
 import com.sdv.source.domain.DocumentAccessMetadataChangedEvent;
 import com.sdv.source.domain.ShareAccessRevokedEvent;
 import com.sdv.source.domain.ShareAction;
+import com.sdv.source.domain.ShareAudience;
 import com.sdv.source.domain.SourceConnection;
 import com.sdv.source.infrastructure.persistence.entity.DocumentShareEntity;
 import com.sdv.source.infrastructure.persistence.entity.DocumentShareRecipientEntity;
@@ -122,9 +124,20 @@ public class SourceSharingService {
     @Transactional
     public DocumentShare createShare(String publisherSubject, Long sourceId, Long documentId,
             String classificationRaw, Set<String> actionsRaw, Set<String> recipientsRaw) {
+        List<ResolvedRecipient> recipients = normalizeRecipients(recipientsRaw).stream()
+                .map(subject -> new ResolvedRecipient(null, subject, null, null)).toList();
+        return createShare(publisherSubject, sourceId, documentId, ShareAudience.NAMED_USERS.name(),
+                classificationRaw, actionsRaw, recipients);
+    }
+
+    @Transactional
+    public DocumentShare createShare(String publisherSubject, Long sourceId, Long documentId,
+            String audienceRaw, String classificationRaw, Set<String> actionsRaw,
+            List<ResolvedRecipient> resolvedRecipients) {
+        ShareAudience audience = parseAudience(audienceRaw);
         SecurityLevel classification = parseClassification(classificationRaw);
         Set<ShareAction> actions = parseActions(actionsRaw);
-        Set<String> recipients = normalizeRecipients(recipientsRaw);
+        List<ResolvedRecipient> recipients = validateAudienceRecipients(audience, resolvedRecipients);
 
         SourceDocumentEntity document = requireOwnedActiveDocument(publisherSubject, sourceId, documentId);
         requireOwnedActiveGoogleDriveSource(publisherSubject, sourceId);
@@ -138,7 +151,7 @@ public class SourceSharingService {
 
         Instant now = clock.instant();
         DocumentShareEntity entity = new DocumentShareEntity(publisherSubject, sourceId, document.getId(),
-                classification.name(), joinActions(actions), now);
+                audience.name(), classification.name(), joinActions(actions), now);
         documentShareRestrictionJpaRepository.findBySourceIdAndDocumentId(sourceId, document.getId())
                 .filter(DocumentShareRestrictionEntity::isBlocked)
                 .ifPresent(restriction -> entity.applyAdminBlock(true, restriction.getBlockedReason(), now));
@@ -152,7 +165,7 @@ public class SourceSharingService {
 
         auditService.record(publisherSubject, "SHARE_PUBLISHED", "share:" + saved.getId(), SUCCESS, OK, Map.of());
         applicationEventPublisher.publishEvent(new DocumentAccessMetadataChangedEvent(saved.getDocumentId()));
-        return toDomain(saved, recipients);
+        return toDomain(saved, recipientSubjects(recipients));
     }
 
     /** {@code GET /api/shares} - 내가 게시한 모든 공유(철회 이력 포함) 목록. */
@@ -188,9 +201,20 @@ public class SourceSharingService {
     @Transactional
     public DocumentShare updateShare(String publisherSubject, Long shareId, long expectedGeneration,
             String classificationRaw, Set<String> actionsRaw, Set<String> recipientsRaw) {
+        List<ResolvedRecipient> recipients = normalizeRecipients(recipientsRaw).stream()
+                .map(subject -> new ResolvedRecipient(null, subject, null, null)).toList();
+        return updateShare(publisherSubject, shareId, expectedGeneration, ShareAudience.NAMED_USERS.name(),
+                classificationRaw, actionsRaw, recipients);
+    }
+
+    @Transactional
+    public DocumentShare updateShare(String publisherSubject, Long shareId, long expectedGeneration,
+            String audienceRaw, String classificationRaw, Set<String> actionsRaw,
+            List<ResolvedRecipient> resolvedRecipients) {
+        ShareAudience audience = parseAudience(audienceRaw);
         SecurityLevel classification = parseClassification(classificationRaw);
         Set<ShareAction> actions = parseActions(actionsRaw);
-        Set<String> recipients = normalizeRecipients(recipientsRaw);
+        List<ResolvedRecipient> recipients = validateAudienceRecipients(audience, resolvedRecipients);
 
         DocumentShareEntity share = requireActiveOwnShare(publisherSubject, shareId);
         if (share.getGeneration() != expectedGeneration) {
@@ -198,7 +222,7 @@ public class SourceSharingService {
                     "The share has changed since it was last read - reload and retry.");
         }
 
-        share.applyOwnerUpdate(classification.name(), joinActions(actions), clock.instant());
+        share.applyOwnerUpdate(audience.name(), classification.name(), joinActions(actions), clock.instant());
         documentShareJpaRepository.deleteRecipients(shareId);
         saveRecipients(shareId, recipients);
         try {
@@ -218,7 +242,7 @@ public class SourceSharingService {
 
         auditService.record(publisherSubject, "SHARE_UPDATED", "share:" + shareId, SUCCESS, OK, Map.of());
         applicationEventPublisher.publishEvent(new DocumentAccessMetadataChangedEvent(share.getDocumentId()));
-        return toDomain(share, recipients);
+        return toDomain(share, recipientSubjects(recipients));
     }
 
     /**
@@ -391,6 +415,35 @@ public class SourceSharingService {
         }
     }
 
+    private static ShareAudience parseAudience(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new InvalidShareRequestException("audience is required");
+        }
+        try {
+            return ShareAudience.valueOf(raw.trim());
+        } catch (IllegalArgumentException failure) {
+            throw new InvalidShareRequestException("audience must be ALL_AUTHENTICATED or NAMED_USERS");
+        }
+    }
+
+    private static List<ResolvedRecipient> validateAudienceRecipients(ShareAudience audience,
+            List<ResolvedRecipient> recipients) {
+        List<ResolvedRecipient> safe = recipients == null ? List.of() : List.copyOf(recipients);
+        if (audience == ShareAudience.ALL_AUTHENTICATED && !safe.isEmpty()) {
+            throw new InvalidShareRequestException("all-authenticated audience cannot include recipients");
+        }
+        if (audience == ShareAudience.NAMED_USERS && safe.isEmpty()) {
+            throw new InvalidShareRequestException("named audience requires recipients");
+        }
+        if (safe.size() > MAX_RECIPIENTS) {
+            throw new InvalidShareRequestException("too many recipients (max " + MAX_RECIPIENTS + ")");
+        }
+        if (safe.stream().anyMatch(r -> r == null || r.subject() == null || r.subject().isBlank())) {
+            throw new InvalidShareRequestException("invalid recipient");
+        }
+        return safe;
+    }
+
     private static Set<ShareAction> parseActions(Set<String> raw) {
         if (raw == null || raw.isEmpty()) {
             throw new InvalidShareRequestException("at least one action must be granted");
@@ -436,12 +489,18 @@ public class SourceSharingService {
         return normalized;
     }
 
-    private void saveRecipients(Long shareId, Set<String> recipients) {
+    private void saveRecipients(Long shareId, List<ResolvedRecipient> recipients) {
         List<DocumentShareRecipientEntity> rows = new ArrayList<>(recipients.size());
-        for (String recipient : recipients) {
-            rows.add(new DocumentShareRecipientEntity(shareId, recipient));
+        for (ResolvedRecipient recipient : recipients) {
+            rows.add(new DocumentShareRecipientEntity(shareId, recipient.subject(), recipient.id()));
         }
         documentShareRecipientJpaRepository.saveAll(rows);
+    }
+
+    private static Set<String> recipientSubjects(List<ResolvedRecipient> recipients) {
+        Set<String> result = new LinkedHashSet<>();
+        recipients.forEach(recipient -> result.add(recipient.subject()));
+        return Set.copyOf(result);
     }
 
     private Set<String> recipientsOf(Long shareId) {
@@ -491,7 +550,7 @@ public class SourceSharingService {
 
     private static DocumentShare toDomain(DocumentShareEntity entity, Set<String> recipients) {
         return new DocumentShare(entity.getId(), entity.getPublisherSubject(), entity.getSourceId(),
-                entity.getDocumentId(), SecurityLevel.valueOf(entity.getClassification()),
+                entity.getDocumentId(), ShareAudience.valueOf(entity.getAudience()), SecurityLevel.valueOf(entity.getClassification()),
                 parseStoredActions(entity.getAllowedActions()), recipients, entity.isAdminBlocked(),
                 entity.getAdminBlockReason(), entity.getGeneration(), entity.getCreatedAt(), entity.getUpdatedAt(),
                 entity.getRevokedAt());

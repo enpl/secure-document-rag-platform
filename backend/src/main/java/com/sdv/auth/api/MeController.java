@@ -2,6 +2,8 @@ package com.sdv.auth.api;
 
 import com.sdv.auth.api.dto.MeResponse;
 import com.sdv.common.security.CurrentUserProvider;
+import com.sdv.common.model.UserContext;
+import com.sdv.identity.application.IdentityRegistryService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -18,13 +20,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class MeController {
 
     private final CurrentUserProvider currentUserProvider;
+    private final IdentityRegistryService identityRegistryService;
 
-    public MeController(CurrentUserProvider currentUserProvider) {
+    public MeController(CurrentUserProvider currentUserProvider, IdentityRegistryService identityRegistryService) {
         this.currentUserProvider = currentUserProvider;
+        this.identityRegistryService = identityRegistryService;
     }
 
     @GetMapping("/api/me")
     public MeResponse getMe() {
-        return MeResponse.from(currentUserProvider.getCurrentUser());
+        UserContext user = currentUserProvider.getCurrentUser();
+        return MeResponse.from(user, identityRegistryService.registryStatus(user.issuer(), user.subject()).name());
     }
 }

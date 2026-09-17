@@ -2,6 +2,8 @@ package com.sdv.common.security;
 
 import com.sdv.common.model.Role;
 import com.sdv.common.model.UserContext;
+import com.sdv.identity.application.IdentityRegistryService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -27,6 +29,17 @@ import java.util.Set;
 @Component
 public class CurrentUserProvider {
 
+    private final IdentityRegistryService identityRegistryService;
+
+    public CurrentUserProvider() {
+        this.identityRegistryService = null;
+    }
+
+    @Autowired
+    public CurrentUserProvider(IdentityRegistryService identityRegistryService) {
+        this.identityRegistryService = identityRegistryService;
+    }
+
     public UserContext getCurrentUser() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || !authentication.isAuthenticated()) {
@@ -42,11 +55,16 @@ public class CurrentUserProvider {
             throw new IllegalStateException("JWT is missing a non-blank subject");
         }
 
+        String issuer = jwt.getIssuer() == null ? null : jwt.getIssuer().toString();
+        String loginId = jwt.getClaimAsString("preferred_username");
+        if (identityRegistryService != null && issuer != null && loginId != null) {
+            identityRegistryService.observeValidatedLogin(issuer, subject, loginId, jwt.getClaimAsString("name"));
+        }
         return new UserContext(
                 subject,
                 jwt.getClaimAsString("email"),
                 extractRoles(jwtAuthentication),
-                extractGroups(jwt));
+                extractGroups(jwt), issuer, loginId);
     }
 
     private Set<Role> extractRoles(Authentication authentication) {

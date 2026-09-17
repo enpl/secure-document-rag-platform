@@ -2,9 +2,14 @@ package com.sdv.source.api;
 
 import com.sdv.common.dto.ApiErrorResponse;
 import com.sdv.common.security.CurrentUserProvider;
+import com.sdv.common.model.UserContext;
+import com.sdv.identity.application.IdentityAccessException;
+import com.sdv.identity.application.IdentityRegistryService;
+import com.sdv.identity.api.dto.DirectoryUserResponse;
 import com.sdv.common.trace.TraceIdFilter;
 import com.sdv.source.api.dto.CreateShareRequest;
 import com.sdv.source.api.dto.ShareResponse;
+import com.sdv.source.api.dto.ShareRecipientResponse;
 import com.sdv.source.api.dto.UpdateShareRequest;
 import com.sdv.source.application.InvalidShareRequestException;
 import com.sdv.source.application.ShareGenerationConflictException;
@@ -45,34 +50,39 @@ public class SourceShareController {
 
     private final SourceSharingService sourceSharingService;
     private final CurrentUserProvider currentUserProvider;
+    private final IdentityRegistryService identities;
 
-    public SourceShareController(SourceSharingService sourceSharingService, CurrentUserProvider currentUserProvider) {
+    public SourceShareController(SourceSharingService sourceSharingService, CurrentUserProvider currentUserProvider,
+            IdentityRegistryService identities) {
         this.sourceSharingService = sourceSharingService;
         this.currentUserProvider = currentUserProvider;
+        this.identities = identities;
     }
 
     @GetMapping
     public List<ShareResponse> list() {
-        String publisherSubject = currentUserProvider.getCurrentUser().subject();
-        return sourceSharingService.listOwn(publisherSubject).stream().map(SourceShareController::toResponse)
+        UserContext publisher = currentUserProvider.getCurrentUser();
+        return sourceSharingService.listOwn(publisher.subject()).stream().map(share -> toResponse(share, publisher.issuer()))
                 .toList();
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ShareResponse create(@Valid @RequestBody CreateShareRequest request) {
-        String publisherSubject = currentUserProvider.getCurrentUser().subject();
-        DocumentShare share = sourceSharingService.createShare(publisherSubject, request.sourceId(),
-                request.documentId(), request.classification(), request.actions(), request.recipients());
-        return toResponse(share);
+        UserContext publisher = currentUserProvider.getCurrentUser();
+        var recipients = resolveRecipients(publisher, request.audience(), request.recipientUserIds());
+        DocumentShare share = sourceSharingService.createShare(publisher.subject(), request.sourceId(),
+                request.documentId(), request.audience(), request.classification(), request.actions(), recipients);
+        return toResponse(share, publisher.issuer());
     }
 
     @PatchMapping("/{shareId}")
     public ShareResponse update(@PathVariable Long shareId, @Valid @RequestBody UpdateShareRequest request) {
-        String publisherSubject = currentUserProvider.getCurrentUser().subject();
-        DocumentShare share = sourceSharingService.updateShare(publisherSubject, shareId,
-                request.expectedGeneration(), request.classification(), request.actions(), request.recipients());
-        return toResponse(share);
+        UserContext publisher = currentUserProvider.getCurrentUser();
+        var recipients = resolveRecipients(publisher, request.audience(), request.recipientUserIds());
+        DocumentShare share = sourceSharingService.updateShare(publisher.subject(), shareId,
+                request.expectedGeneration(), request.audience(), request.classification(), request.actions(), recipients);
+        return toResponse(share, publisher.issuer());
     }
 
     @DeleteMapping("/{shareId}")
@@ -87,6 +97,11 @@ public class SourceShareController {
         return respond(HttpStatus.BAD_REQUEST, VALIDATION_ERROR_CODE, "Request validation failed.");
     }
 
+    @ExceptionHandler(IdentityAccessException.class)
+    public ResponseEntity<ApiErrorResponse> handleInvalidRecipient(IdentityAccessException ex) {
+        return respond(HttpStatus.BAD_REQUEST, VALIDATION_ERROR_CODE, "Selected recipient is unavailable.");
+    }
+
     @ExceptionHandler(ShareGenerationConflictException.class)
     public ResponseEntity<ApiErrorResponse> handleGenerationConflict(ShareGenerationConflictException ex) {
         return respond(HttpStatus.CONFLICT, SHARE_CONFLICT_CODE,
@@ -98,11 +113,29 @@ public class SourceShareController {
         return ResponseEntity.status(status).body(body);
     }
 
-    private static ShareResponse toResponse(DocumentShare share) {
+    private java.util.List<IdentityRegistryService.ResolvedRecipient> resolveRecipients(UserContext publisher,
+            String audience, Set<Long> ids) {
+        Set<Long> safe = ids == null ? Set.of() : ids;
+        if ("NAMED_USERS".equals(audience)) {
+            return identities.resolveRecipients(publisher.issuer(), safe);
+        }
+        if (!safe.isEmpty()) {
+            throw new InvalidShareRequestException("recipients are not allowed for this audience");
+        }
+        return java.util.List.of();
+    }
+
+    private ShareResponse toResponse(DocumentShare share, String issuer) {
         Set<String> actionNames = share.getAllowedActions().stream().map(ShareAction::name)
                 .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
+        var labels = identities.labelsBySubjects(issuer, share.getRecipients());
+        java.util.List<ShareRecipientResponse> recipients = share.getRecipients().stream().sorted().map(subject -> {
+            DirectoryUserResponse label = labels.get(subject);
+            return label == null ? new ShareRecipientResponse(null, "기존 수신자", null)
+                    : new ShareRecipientResponse(label.id(), label.loginId(), label.displayName());
+        }).toList();
         return new ShareResponse(share.getId(), share.getSourceId(), share.getDocumentId(),
-                share.getClassification().name(), actionNames, share.getRecipients(), share.isAdminBlocked(),
+                share.getAudience().name(), share.getClassification().name(), actionNames, recipients, share.isAdminBlocked(),
                 share.getAdminBlockReason(), share.getGeneration(), share.isActive(), share.getCreatedAt(),
                 share.getUpdatedAt(), share.getRevokedAt());
     }

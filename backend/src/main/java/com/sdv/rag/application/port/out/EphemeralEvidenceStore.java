@@ -78,4 +78,8 @@ public interface EphemeralEvidenceStore {
     /** Disconnect invalidation is source-wide, rather than document-specific. */
     default void evictBySource(Long sourceId) {
     }
+
+    /** Clearance/account changes invalidate only this requester's volatile evidence. */
+    default void evictByRequester(String requesterSubject) {
+    }
 }

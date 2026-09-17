@@ -202,7 +202,8 @@ public class LiveEvidenceRetrievalService {
 
         EvidenceKey key = new EvidenceKey(requester.subject(), conversationId, before.context().sourceId(),
                 documentId, before.context().shareId(), before.context().shareGeneration(),
-                before.context().connectionGeneration(), before.expectedSourceVersion());
+                before.context().connectionGeneration(), before.context().requesterAuthorizationRevision(),
+                before.expectedSourceVersion());
         EvidenceHandle handle;
         try {
             handle = ephemeralEvidenceStore.putEncryptedFenced(key, selection.text().getBytes(StandardCharsets.UTF_8),

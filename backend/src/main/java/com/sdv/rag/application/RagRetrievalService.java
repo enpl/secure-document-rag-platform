@@ -287,7 +287,8 @@ public class RagRetrievalService {
         }
         EvidenceKey currentBinding = new EvidenceKey(requester.subject(), conversationId,
                 fresh.context().sourceId(), documentId, fresh.context().shareId(), fresh.context().shareGeneration(),
-                fresh.context().connectionGeneration(), fresh.expectedSourceVersion());
+                fresh.context().connectionGeneration(), fresh.context().requesterAuthorizationRevision(),
+                fresh.expectedSourceVersion());
         long sourceFence = ephemeralEvidenceStore.captureSourceFence(fresh.context().sourceId());
         long conversationFence = ephemeralEvidenceStore.captureConversationFence(requester.subject(), conversationId);
         Optional<byte[]> bytes = ephemeralEvidenceStore.getIfAuthorizedAndCurrentFenced(handle, currentBinding,
@@ -297,7 +298,7 @@ public class RagRetrievalService {
                         : EvidenceReleaseStatus.EXPIRED);
         EvidenceProvenance provenance = new EvidenceProvenance(documentId, fresh.context().sourceId(),
                 fresh.context().publisherSubject(), fresh.context().shareId(), fresh.context().shareGeneration(), fresh.context().connectionGeneration(),
-                fresh.expectedSourceVersion(), locatorType, locatorValue, handle.createdAt(), handle.expiresAt(),
+                fresh.context().requesterAuthorizationRevision(), fresh.expectedSourceVersion(), locatorType, locatorValue, handle.createdAt(), handle.expiresAt(),
                 Instant.now());
         byte[] plaintext = bytes.get();
         try {
@@ -324,12 +325,13 @@ public class RagRetrievalService {
         }
         SourceAccessContext context = new SourceAccessContext(requester.subject(), provenance.publisherSubject(),
                 provenance.sourceId(), provenance.documentId(), provenance.shareId(), ShareAction.VIEW,
-                provenance.shareGeneration(), provenance.connectionGeneration());
+                provenance.shareGeneration(), provenance.connectionGeneration(),
+                provenance.requesterAuthorizationRevision());
         if (effectivePermissionService.evaluateSharedAccess(requester, context, AiRequestContext.local()).isDenied()
                 || !conversationLifecycle.isActive(lease)) return false;
         EvidenceKey binding = new EvidenceKey(requester.subject(), conversationId, provenance.sourceId(),
                 provenance.documentId(), provenance.shareId(), provenance.shareGeneration(),
-                provenance.connectionGeneration(), provenance.sourceVersion());
+                provenance.connectionGeneration(), provenance.requesterAuthorizationRevision(), provenance.sourceVersion());
         long sourceFence = ephemeralEvidenceStore.captureSourceFence(provenance.sourceId());
         long conversationFence = ephemeralEvidenceStore.captureConversationFence(requester.subject(), conversationId);
         Optional<byte[]> current = ephemeralEvidenceStore.getIfAuthorizedAndCurrentFenced(evidence.evidenceHandle(),
@@ -366,13 +368,18 @@ public class RagRetrievalService {
      */
     private Map<Long, SourceAccessContext> resolveAllowedDocuments(UserContext requester) {
         Map<Long, SourceAccessContext> allowed = new LinkedHashMap<>();
+        java.util.Optional<com.sdv.identity.domain.UserAuthorizationSnapshot> authorization =
+                effectivePermissionService.currentSharedAuthorization(requester);
+        if (authorization.isEmpty()) return allowed;
+        int clearanceRank = authorization.get().maximumClassification().rank();
+        long authorizationRevision = authorization.get().authorizationRevision();
         int scanned = 0;
         int page = 0;
         while (scanned < properties.maxCandidateDocumentScan()) {
             Pageable pageable = PageRequest.of(page, 100, Sort.by(Sort.Direction.ASC, "id"));
             Slice<SharedDiscoveryCandidate> slice = documentShareJpaRepository.searchSharedDiscoverable(
-                    requester.subject(), false, NO_SOURCE_ID_SENTINEL, false, NO_FILTER_SENTINEL, false,
-                    NO_FILTER_SENTINEL, false, Instant.EPOCH, false, Instant.EPOCH, pageable);
+                    requester.subject(), clearanceRank, false, NO_SOURCE_ID_SENTINEL, false, NO_FILTER_SENTINEL,
+                    false, NO_FILTER_SENTINEL, false, Instant.EPOCH, false, Instant.EPOCH, pageable);
             List<SharedDiscoveryCandidate> batch = slice.getContent();
             if (batch.isEmpty()) {
                 break;
@@ -389,7 +396,7 @@ public class RagRetrievalService {
                 SourceAccessContext context = new SourceAccessContext(requester.subject(),
                         candidate.publisherSubject(), document.getSourceId(), document.getId(),
                         candidate.share().getId(), ShareAction.VIEW, candidate.share().getGeneration(),
-                        candidate.connectionEpoch());
+                        candidate.connectionEpoch(), authorizationRevision);
                 if (effectivePermissionService.evaluateSharedAccess(requester, context, AiRequestContext.local())
                         .isAllowed()) {
                     allowed.put(document.getId(), context);

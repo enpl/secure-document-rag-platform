@@ -17,6 +17,7 @@ import com.sdv.source.infrastructure.persistence.entity.DocumentShareEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourceDocumentEntity;
 import com.sdv.source.infrastructure.persistence.repository.DocumentShareJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.DocumentShareJpaRepository.SharedDiscoveryCandidate;
+import com.sdv.identity.domain.UserAuthorizationSnapshot;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -149,6 +150,14 @@ public class FileMetadataDiscoveryService {
     }
 
     public RagFileSearchResponse search(UserContext user, RagFileSearchQuery query) {
+        java.util.Optional<UserAuthorizationSnapshot> admitted =
+                effectivePermissionService.currentSharedAuthorization(user);
+        if (admitted.isEmpty()) {
+            return new RagFileSearchResponse(java.util.List.of(), Boolean.FALSE, false);
+        }
+        UserAuthorizationSnapshot authorization = admitted.get();
+        int clearanceRank = authorization.maximumClassification().rank();
+        long authorizationRevision = authorization.authorizationRevision();
         Instant deadline = clock.instant().plusMillis(properties.liveCheckBudgetMs());
         Optional<DocumentSourceConnector> connector = sourceConnectorRegistry.getConnector(SourceType.GOOGLE_DRIVE);
 
@@ -174,7 +183,7 @@ public class FileMetadataDiscoveryService {
             }
 
             Pageable pageable = PageRequest.of(page, query.size(), buildSort(query.sort()));
-            Slice<SharedDiscoveryCandidate> slice = fetchCandidates(user, query, pageable);
+            Slice<SharedDiscoveryCandidate> slice = fetchCandidates(user, clearanceRank, query, pageable);
             List<SharedDiscoveryCandidate> batch = slice.getContent();
             if (batch.isEmpty()) {
                 stop = StopReason.RAW_END;
@@ -202,7 +211,7 @@ public class FileMetadataDiscoveryService {
                 SourceAccessContext accessContext = new SourceAccessContext(user.subject(),
                         candidate.publisherSubject(), document.getSourceId(), document.getId(),
                         candidate.share().getId(), ShareAction.VIEW, candidate.share().getGeneration(),
-                        candidate.connectionEpoch());
+                        candidate.connectionEpoch(), authorizationRevision);
 
                 // 공유 기반 Prefilter - B의 SDV 인가(수신자/행위/등급/게시/차단/게시자 문서 상태)만
                 // 확인한다. A(게시자)의 Provider 접근 자체는 아직 확인하지 않았다(§2A.4).
@@ -267,7 +276,13 @@ public class FileMetadataDiscoveryService {
             page++;
         }
 
-        return buildResponse(items, stop);
+        RagFileSearchResponse response = buildResponse(items, stop);
+        UserAuthorizationSnapshot current = effectivePermissionService.currentSharedAuthorization(user)
+                .orElseThrow(RequesterAuthorizationChangedException::new);
+        if (!authorization.equals(current)) {
+            throw new RequesterAuthorizationChangedException();
+        }
+        return response;
     }
 
     /**
@@ -305,9 +320,9 @@ public class FileMetadataDiscoveryService {
      * "including the owner's common discovery") - 비공개 선택기({@code
      * SourceUserController#files})는 완전히 별도 경로다.
      */
-    private Slice<SharedDiscoveryCandidate> fetchCandidates(UserContext user, RagFileSearchQuery query,
+    private Slice<SharedDiscoveryCandidate> fetchCandidates(UserContext user, int clearanceRank, RagFileSearchQuery query,
             Pageable pageable) {
-        return documentShareJpaRepository.searchSharedDiscoverable(user.subject(),
+        return documentShareJpaRepository.searchSharedDiscoverable(user.subject(), clearanceRank,
                 query.sourceId() != null, query.sourceId() != null ? query.sourceId() : NO_SOURCE_ID_SENTINEL,
                 query.mimeType() != null, query.mimeType() != null ? query.mimeType() : NO_FILTER_SENTINEL,
                 query.q() != null, query.q() != null ? toLikePattern(query.q()) : NO_FILTER_SENTINEL,

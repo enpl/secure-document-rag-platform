@@ -17,6 +17,7 @@ import com.sdv.source.domain.SourceContentResult;
 import com.sdv.source.domain.SourceMetadataVerificationOutcome;
 import com.sdv.source.domain.SourceMetadataVerificationResult;
 import com.sdv.source.domain.SourceType;
+import com.sdv.source.domain.ShareAudience;
 import com.sdv.source.infrastructure.persistence.entity.DocumentShareEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourceConnectionEntity;
 import com.sdv.source.infrastructure.persistence.entity.SourceDocumentEntity;
@@ -481,7 +482,7 @@ public class IndexOrchestrator {
         }
         DocumentShareEntity share = documentShareJpaRepository.findByDocumentIdAndRevokedAtIsNull(documentId)
                 .orElse(null);
-        if (share == null || share.isAdminBlocked()) {
+        if (share == null || share.isAdminBlocked() || !hasConsistentAudience(share)) {
             return null;
         }
         SourceConnectionEntity connection = sourceConnectionJpaRepository.findById(document.getSourceId())
@@ -500,6 +501,18 @@ public class IndexOrchestrator {
             return null;
         }
         return new Eligibility(document, connection, share);
+    }
+
+    private boolean hasConsistentAudience(DocumentShareEntity share) {
+        try {
+            long recipientCount = documentShareJpaRepository.countRecipients(share.getId());
+            return switch (ShareAudience.valueOf(share.getAudience())) {
+                case ALL_AUTHENTICATED -> recipientCount == 0;
+                case NAMED_USERS -> recipientCount > 0;
+            };
+        } catch (IllegalArgumentException malformedAudience) {
+            return false;
+        }
     }
 
     private static boolean isPreClassifiedUnsupported(String mimeType) {

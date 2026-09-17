@@ -3,6 +3,7 @@ package com.sdv.rag.infrastructure.ephemeral;
 import com.sdv.rag.application.port.out.EphemeralEvidenceStore;
 import com.sdv.source.domain.ShareAccessRevokedEvent;
 import com.sdv.source.domain.SourceConnectionAccessRevokedEvent;
+import com.sdv.identity.domain.UserAuthorizationChangedEvent;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.stereotype.Component;
@@ -32,5 +33,10 @@ public class EphemeralEvidenceInvalidationListener {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onSourceDisconnected(SourceConnectionAccessRevokedEvent event) {
         ephemeralEvidenceStore.evictBySource(event.sourceId());
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onUserAuthorizationChanged(UserAuthorizationChangedEvent event) {
+        ephemeralEvidenceStore.evictByRequester(event.subject());
     }
 }

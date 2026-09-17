@@ -74,40 +74,40 @@ If a separate persistence Port/Adapter is proposed later, it requires an explici
 
 # 4. Backend Bootstrap / Common
 
-| ID | Canonical Path | Type | Responsibility | Core Content | Feature |
-|---|---|---|---|---|---|
-| F-BE-001 | `backend/src/main/java/com/sdv/SecureDocumentVaultApplication.java` | Java Application | Spring Boot entry point | `main()` | INS-001 |
-| F-BE-002 | `backend/src/main/java/com/sdv/common/config/SecurityConfig.java` | Config | OIDC/JWT protection and ADMIN API separation | SecurityFilterChain, JwtDecoder | AUT-001, AUT-003 |
-| F-BE-003 | `backend/src/main/java/com/sdv/common/config/KafkaConfig.java` | Config | Kafka producer/consumer common config | producerFactory, consumerFactory | SYN-005~007 |
-| F-BE-004 | `backend/src/main/java/com/sdv/common/config/JacksonConfig.java` | Config | JSON serialization rules | ObjectMapper configuration | INS-001 |
-| F-BE-005 | `backend/src/main/java/com/sdv/common/config/WebConfig.java` | Config | CORS/time/common web rules | WebMvcConfigurer | INS-001 |
-| F-BE-006 | `backend/src/main/java/com/sdv/common/security/CurrentUserProvider.java` | Component | Trusted UserContext from JWT | `getCurrentUser()` | AUT-002 |
-| F-BE-007 | `backend/src/main/java/com/sdv/common/security/JwtAuthenticationConverter.java` | Component | Keycloak role/group claim conversion | `convert()` | AUT-001, AUT-002 |
-| F-BE-008 | `backend/src/main/java/com/sdv/common/model/UserContext.java` | Record/VO | Immutable requester SDV / publisher Source data | subject, email, roles, groups | AUT-002, AUT-004 |
-| F-BE-009 | `backend/src/main/java/com/sdv/common/model/Role.java` | Enum | Application roles | USER, ADMIN | AUT-003 |
-| F-BE-010 | `backend/src/main/java/com/sdv/common/exception/GlobalExceptionHandler.java` | Advice | Standard API errors | `handle*()` | POL-008, INS-003 |
-| F-BE-011 | `backend/src/main/java/com/sdv/common/dto/ApiErrorResponse.java` | DTO | Standard error response | code, message, traceId | POL-008 |
-| F-BE-012 | `backend/src/main/java/com/sdv/common/trace/TraceIdFilter.java` | Filter | HTTP traceId generation/propagation | `doFilterInternal()` | OPS-001 |
-| F-BE-013 | `backend/src/main/java/com/sdv/common/logging/SensitiveLogFilter.java` | Utility | Sensitive log masking | `mask()` | AUD-004, OPS-002 |
-| F-BE-128 | `backend/src/main/java/com/sdv/common/config/SecretProperties.java` | ConfigurationProperties | OAuth/Vault secret references | validated properties | INS-002, SRC-003, VAU-003 |
+| ID       | Canonical Path                                                                  | Type                    | Responsibility                                  | Core Content                     | Feature                   |
+| -------- | ------------------------------------------------------------------------------- | ----------------------- | ----------------------------------------------- | -------------------------------- | ------------------------- |
+| F-BE-001 | `backend/src/main/java/com/sdv/SecureDocumentVaultApplication.java`             | Java Application        | Spring Boot entry point                         | `main()`                         | INS-001                   |
+| F-BE-002 | `backend/src/main/java/com/sdv/common/config/SecurityConfig.java`               | Config                  | OIDC/JWT protection and ADMIN API separation    | SecurityFilterChain, JwtDecoder  | AUT-001, AUT-003          |
+| F-BE-003 | `backend/src/main/java/com/sdv/common/config/KafkaConfig.java`                  | Config                  | Kafka producer/consumer common config           | producerFactory, consumerFactory | SYN-005~007               |
+| F-BE-004 | `backend/src/main/java/com/sdv/common/config/JacksonConfig.java`                | Config                  | JSON serialization rules                        | ObjectMapper configuration       | INS-001                   |
+| F-BE-005 | `backend/src/main/java/com/sdv/common/config/WebConfig.java`                    | Config                  | CORS/time/common web rules                      | WebMvcConfigurer                 | INS-001                   |
+| F-BE-006 | `backend/src/main/java/com/sdv/common/security/CurrentUserProvider.java`        | Component               | Trusted UserContext from JWT                    | `getCurrentUser()`               | AUT-002                   |
+| F-BE-007 | `backend/src/main/java/com/sdv/common/security/JwtAuthenticationConverter.java` | Component               | Keycloak role/group claim conversion            | `convert()`                      | AUT-001, AUT-002          |
+| F-BE-008 | `backend/src/main/java/com/sdv/common/model/UserContext.java`                   | Record/VO               | Immutable requester SDV / publisher Source data | subject, email, roles, groups    | AUT-002, AUT-004          |
+| F-BE-009 | `backend/src/main/java/com/sdv/common/model/Role.java`                          | Enum                    | Application roles                               | USER, ADMIN                      | AUT-003                   |
+| F-BE-010 | `backend/src/main/java/com/sdv/common/exception/GlobalExceptionHandler.java`    | Advice                  | Standard API errors                             | `handle*()`                      | POL-008, INS-003          |
+| F-BE-011 | `backend/src/main/java/com/sdv/common/dto/ApiErrorResponse.java`                | DTO                     | Standard error response                         | code, message, traceId           | POL-008                   |
+| F-BE-012 | `backend/src/main/java/com/sdv/common/trace/TraceIdFilter.java`                 | Filter                  | HTTP traceId generation/propagation             | `doFilterInternal()`             | OPS-001                   |
+| F-BE-013 | `backend/src/main/java/com/sdv/common/logging/SensitiveLogFilter.java`          | Utility                 | Sensitive log masking                           | `mask()`                         | AUD-004, OPS-002          |
+| F-BE-128 | `backend/src/main/java/com/sdv/common/config/SecretProperties.java`             | ConfigurationProperties | OAuth/Vault secret references                   | validated properties             | INS-002, SRC-003, VAU-003 |
 
 ---
 
 # 5. Admin / Health
 
-| ID | Canonical Path | Type | Responsibility | Core Content | Feature |
-|---|---|---|---|---|---|
-| F-BE-014 | `backend/src/main/java/com/sdv/admin/api/AdminHealthController.java` | Controller | Admin dependency health API | `getHealth()` | INS-003, OPS-006 |
-| F-BE-015 | `backend/src/main/java/com/sdv/admin/application/DependencyHealthService.java` | Service | DB/Kafka/Keycloak/AI/Source health aggregation | `checkAll()` | INS-003, OPS-006 |
+| ID       | Canonical Path                                                                 | Type       | Responsibility                                 | Core Content  | Feature          |
+| -------- | ------------------------------------------------------------------------------ | ---------- | ---------------------------------------------- | ------------- | ---------------- |
+| F-BE-014 | `backend/src/main/java/com/sdv/admin/api/AdminHealthController.java`           | Controller | Admin dependency health API                    | `getHealth()` | INS-003, OPS-006 |
+| F-BE-015 | `backend/src/main/java/com/sdv/admin/application/DependencyHealthService.java` | Service    | DB/Kafka/Keycloak/AI/Source health aggregation | `checkAll()`  | INS-003, OPS-006 |
 
 ---
 
 # 6. Authentication
 
-| ID | Canonical Path | Type | Responsibility | Core Content | Feature |
-|---|---|---|---|---|---|
-| F-BE-016 | `backend/src/main/java/com/sdv/auth/api/MeController.java` | Controller | Current user API | `getMe()` | AUT-002 |
-| F-BE-017 | `backend/src/main/java/com/sdv/auth/api/dto/MeResponse.java` | DTO | Current user response | `from(UserContext)` | AUT-002 |
+| ID       | Canonical Path                                               | Type       | Responsibility                                                    | Core Content               | Feature          |
+| -------- | ------------------------------------------------------------ | ---------- | ----------------------------------------------------------------- | -------------------------- | ---------------- |
+| F-BE-016 | `backend/src/main/java/com/sdv/auth/api/MeController.java`   | Controller | Current user API and validated-login registry bootstrap/readiness | `getMe()`                  | AUT-002, POL-002 |
+| F-BE-017 | `backend/src/main/java/com/sdv/auth/api/dto/MeResponse.java` | DTO        | Current user response plus content-free registry readiness status | `from(UserContext,String)` | AUT-002, POL-002 |
 
 ---
 
@@ -1115,39 +1115,39 @@ AUT-004, SRC-005
 
 > **EXCLUDED / RETIRED at v1.4 (`CORE_SPEC.md` §2A.1, §11).** Every file ID in this section (`F-BE-048`–`F-BE-061`) is preserved below unmodified, for historical/traceability purposes only. None of these files describe an active Core capability, and none of these IDs may be reused for a different file or purpose. Do not implement, extend, or reactivate any file in this table.
 
-| ID | Path | Type | Responsibility | Content | Feature |
-|---|---|---|---|---|---|
-| F-BE-048 | `backend/src/main/java/com/sdv/vault/domain/VaultCollection.java` | Domain | Single-level collection | id, name, owner | VAU-001 |
-| F-BE-049 | `backend/src/main/java/com/sdv/vault/api/VaultCollectionController.java` | Controller | Collection create/list | list, create | VAU-001 |
-| F-BE-050 | `backend/src/main/java/com/sdv/vault/api/VaultDocumentController.java` | Controller | Upload/fetch/delete | upload, content, delete | VAU-002,005,006 |
-| F-BE-051 | `backend/src/main/java/com/sdv/vault/application/VaultCollectionService.java` | Service | Collection Use Case | create, list | VAU-001 |
-| F-BE-052 | `backend/src/main/java/com/sdv/vault/application/VaultDocumentService.java` | Service | Vault document Use Case | upload, fetch, delete | VAU-002,005,006 |
-| F-BE-053 | `backend/src/main/java/com/sdv/vault/application/VaultCryptoService.java` | Service | AES-256-GCM | encrypt, decrypt | VAU-003 |
-| F-BE-054 | `backend/src/main/java/com/sdv/vault/application/FileIntegrityService.java` | Service | SHA-256 integrity | hash, verify | VAU-004 |
-| F-BE-055 | `backend/src/main/java/com/sdv/vault/infrastructure/VaultStorageAdapter.java` | Adapter | Encrypted file I/O | store, open, delete | VAU-003,005,006 |
-| F-BE-056 | `backend/src/main/java/com/sdv/vault/infrastructure/LocalVaultConnector.java` | Adapter | Vault as DocumentSourceConnector | connector methods | SRC-007 |
-| F-BE-057 | `backend/src/main/java/com/sdv/vault/infrastructure/persistence/entity/VaultCollectionEntity.java` | Entity | collection table | id, name, owner | VAU-001 |
-| F-BE-058 | `backend/src/main/java/com/sdv/vault/infrastructure/persistence/entity/VaultObjectEntity.java` | Entity | vault object metadata | storageKey, hash, keyVersion | VAU-002~004 |
-| F-BE-059 | `backend/src/main/java/com/sdv/vault/infrastructure/persistence/repository/VaultCollectionJpaRepository.java` | Repository | collection persistence | findAllByOwner | VAU-001 |
-| F-BE-060 | `backend/src/main/java/com/sdv/vault/infrastructure/persistence/repository/VaultObjectJpaRepository.java` | Repository | object metadata | findBySourceDocumentId | VAU-002,006 |
-| F-BE-061 | `backend/src/main/java/com/sdv/vault/api/mapper/VaultApiMapper.java` | Mapper | Vault DTO conversion | toResponse, toCommand | VAU-001,002 |
+| ID       | Path                                                                                                          | Type       | Responsibility                   | Content                      | Feature         |
+| -------- | ------------------------------------------------------------------------------------------------------------- | ---------- | -------------------------------- | ---------------------------- | --------------- |
+| F-BE-048 | `backend/src/main/java/com/sdv/vault/domain/VaultCollection.java`                                             | Domain     | Single-level collection          | id, name, owner              | VAU-001         |
+| F-BE-049 | `backend/src/main/java/com/sdv/vault/api/VaultCollectionController.java`                                      | Controller | Collection create/list           | list, create                 | VAU-001         |
+| F-BE-050 | `backend/src/main/java/com/sdv/vault/api/VaultDocumentController.java`                                        | Controller | Upload/fetch/delete              | upload, content, delete      | VAU-002,005,006 |
+| F-BE-051 | `backend/src/main/java/com/sdv/vault/application/VaultCollectionService.java`                                 | Service    | Collection Use Case              | create, list                 | VAU-001         |
+| F-BE-052 | `backend/src/main/java/com/sdv/vault/application/VaultDocumentService.java`                                   | Service    | Vault document Use Case          | upload, fetch, delete        | VAU-002,005,006 |
+| F-BE-053 | `backend/src/main/java/com/sdv/vault/application/VaultCryptoService.java`                                     | Service    | AES-256-GCM                      | encrypt, decrypt             | VAU-003         |
+| F-BE-054 | `backend/src/main/java/com/sdv/vault/application/FileIntegrityService.java`                                   | Service    | SHA-256 integrity                | hash, verify                 | VAU-004         |
+| F-BE-055 | `backend/src/main/java/com/sdv/vault/infrastructure/VaultStorageAdapter.java`                                 | Adapter    | Encrypted file I/O               | store, open, delete          | VAU-003,005,006 |
+| F-BE-056 | `backend/src/main/java/com/sdv/vault/infrastructure/LocalVaultConnector.java`                                 | Adapter    | Vault as DocumentSourceConnector | connector methods            | SRC-007         |
+| F-BE-057 | `backend/src/main/java/com/sdv/vault/infrastructure/persistence/entity/VaultCollectionEntity.java`            | Entity     | collection table                 | id, name, owner              | VAU-001         |
+| F-BE-058 | `backend/src/main/java/com/sdv/vault/infrastructure/persistence/entity/VaultObjectEntity.java`                | Entity     | vault object metadata            | storageKey, hash, keyVersion | VAU-002~004     |
+| F-BE-059 | `backend/src/main/java/com/sdv/vault/infrastructure/persistence/repository/VaultCollectionJpaRepository.java` | Repository | collection persistence           | findAllByOwner               | VAU-001         |
+| F-BE-060 | `backend/src/main/java/com/sdv/vault/infrastructure/persistence/repository/VaultObjectJpaRepository.java`     | Repository | object metadata                  | findBySourceDocumentId       | VAU-002,006     |
+| F-BE-061 | `backend/src/main/java/com/sdv/vault/api/mapper/VaultApiMapper.java`                                          | Mapper     | Vault DTO conversion             | toResponse, toCommand        | VAU-001,002     |
 
 ---
 
 # 16. Sync
 
-| ID | Path | Type | Responsibility | Core Method | Feature |
-|---|---|---|---|---|---|
-| F-BE-062 | `backend/src/main/java/com/sdv/sync/api/SourceSyncController.java` | Controller | Initial/manual Sync API | sync, resync | SYN-001,008 |
-| F-BE-063 | `backend/src/main/java/com/sdv/sync/application/SourceSyncService.java` | Service | Initial Sync orchestration | startInitialSync | SYN-001 |
-| F-BE-064 | `backend/src/main/java/com/sdv/sync/application/IncrementalSyncService.java` | Service | Cursor-based incremental Sync | syncChanges | SYN-002 |
-| F-BE-065 | `backend/src/main/java/com/sdv/sync/application/PermissionSyncService.java` | Service | ACL sync/replacement | syncPermissions | SYN-003 |
-| F-BE-066 | `backend/src/main/java/com/sdv/sync/application/SourceDeletionService.java` | Service | Source deletion propagation | handleDeleted | SYN-004 |
-| F-BE-067 | `backend/src/main/java/com/sdv/sync/application/AbstractSourceSyncJob.java` | Abstract Class | Common Sync workflow | loadCursor→fetchChanges→persist→publish | SYN-001,002 |
-| F-BE-136 | `backend/src/main/java/com/sdv/sync/infrastructure/persistence/entity/SyncRunEntity.java` | Entity | sync_runs mapping | mode,total,success,failed,status | SYN-001 |
-| F-BE-137 | `backend/src/main/java/com/sdv/sync/infrastructure/persistence/repository/SyncRunJpaRepository.java` | Repository | Sync history | findBySourceId | SYN-001,008 |
-| F-BE-196 | `backend/src/main/java/com/sdv/sync/application/job/GoogleDriveSyncJob.java` | Service | Google Drive initial/incremental Sync template; cursor commit occurs atomically with metadata, permission, and Outbox state | fetchChanges, mapMetadata, mapPermissions | SYN-001,002,003; SRC-004 |
-| F-BE-197 | `backend/src/main/java/com/sdv/sync/application/job/LocalVaultSyncJob.java` | Service | **EXCLUDED / RETIRED at v1.4** — historical Local Vault Sync Job; `GoogleDriveSyncJob` is the Core implementation | fetchChanges, mapMetadata, mapPermissions | SYN-001,002,003; SRC-007 |
+| ID       | Path                                                                                                 | Type           | Responsibility                                                                                                              | Core Method                               | Feature                  |
+| -------- | ---------------------------------------------------------------------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | ------------------------ |
+| F-BE-062 | `backend/src/main/java/com/sdv/sync/api/SourceSyncController.java`                                   | Controller     | Initial/manual Sync API                                                                                                     | sync, resync                              | SYN-001,008              |
+| F-BE-063 | `backend/src/main/java/com/sdv/sync/application/SourceSyncService.java`                              | Service        | Initial Sync orchestration                                                                                                  | startInitialSync                          | SYN-001                  |
+| F-BE-064 | `backend/src/main/java/com/sdv/sync/application/IncrementalSyncService.java`                         | Service        | Cursor-based incremental Sync                                                                                               | syncChanges                               | SYN-002                  |
+| F-BE-065 | `backend/src/main/java/com/sdv/sync/application/PermissionSyncService.java`                          | Service        | ACL sync/replacement                                                                                                        | syncPermissions                           | SYN-003                  |
+| F-BE-066 | `backend/src/main/java/com/sdv/sync/application/SourceDeletionService.java`                          | Service        | Source deletion propagation                                                                                                 | handleDeleted                             | SYN-004                  |
+| F-BE-067 | `backend/src/main/java/com/sdv/sync/application/AbstractSourceSyncJob.java`                          | Abstract Class | Common Sync workflow                                                                                                        | loadCursor→fetchChanges→persist→publish   | SYN-001,002              |
+| F-BE-136 | `backend/src/main/java/com/sdv/sync/infrastructure/persistence/entity/SyncRunEntity.java`            | Entity         | sync_runs mapping                                                                                                           | mode,total,success,failed,status          | SYN-001                  |
+| F-BE-137 | `backend/src/main/java/com/sdv/sync/infrastructure/persistence/repository/SyncRunJpaRepository.java` | Repository     | Sync history                                                                                                                | findBySourceId                            | SYN-001,008              |
+| F-BE-196 | `backend/src/main/java/com/sdv/sync/application/job/GoogleDriveSyncJob.java`                         | Service        | Google Drive initial/incremental Sync template; cursor commit occurs atomically with metadata, permission, and Outbox state | fetchChanges, mapMetadata, mapPermissions | SYN-001,002,003; SRC-004 |
+| F-BE-197 | `backend/src/main/java/com/sdv/sync/application/job/LocalVaultSyncJob.java`                          | Service        | **EXCLUDED / RETIRED at v1.4** — historical Local Vault Sync Job; `GoogleDriveSyncJob` is the Core implementation           | fetchChanges, mapMetadata, mapPermissions | SYN-001,002,003; SRC-007 |
 
 `AbstractSourceSyncJob` is allowed because the workflow invariant is explicit.
 
@@ -1159,19 +1159,19 @@ Do not generalize this permission to unrelated inheritance hierarchies.
 
 # 17. Event / Kafka / Outbox
 
-| ID | Path | Type | Responsibility |
-|---|---|---|---|
-| F-BE-068 | `backend/src/main/java/com/sdv/event/domain/DomainEvent.java` | Interface | Common event contract |
-| F-BE-069 | `backend/src/main/java/com/sdv/event/domain/SourceDocumentChangedEvent.java` | Record | Source document change |
-| F-BE-070 | `backend/src/main/java/com/sdv/event/domain/SourcePermissionChangedEvent.java` | Record | ACL change |
-| F-BE-071 | `backend/src/main/java/com/sdv/event/domain/SourceDocumentDeletedEvent.java` | Record | document deletion |
-| F-BE-072 | `backend/src/main/java/com/sdv/event/domain/IndexRequestedEvent.java` | Record | index request |
-| F-BE-073 | `backend/src/main/java/com/sdv/event/infrastructure/persistence/entity/OutboxEventEntity.java` | Entity | outbox_events mapping |
-| F-BE-138 | `backend/src/main/java/com/sdv/event/infrastructure/persistence/repository/OutboxEventJpaRepository.java` | Repository | find unpublished Outbox |
-| F-BE-074 | `backend/src/main/java/com/sdv/event/infrastructure/OutboxEventPublisher.java` | Scheduler/Service | Publish pending Outbox to Kafka |
-| F-BE-075 | `backend/src/main/java/com/sdv/event/infrastructure/PermissionChangedConsumer.java` | Kafka Consumer | Permission change processing |
-| F-BE-076 | `backend/src/main/java/com/sdv/event/config/KafkaRetryConfig.java` | Config | Retry/DLQ policy |
-| F-BE-077 | `backend/src/main/java/com/sdv/event/infrastructure/DlqHandler.java` | Consumer | DLQ diagnostics/state |
+| ID       | Path                                                                                                      | Type              | Responsibility                  |
+| -------- | --------------------------------------------------------------------------------------------------------- | ----------------- | ------------------------------- |
+| F-BE-068 | `backend/src/main/java/com/sdv/event/domain/DomainEvent.java`                                             | Interface         | Common event contract           |
+| F-BE-069 | `backend/src/main/java/com/sdv/event/domain/SourceDocumentChangedEvent.java`                              | Record            | Source document change          |
+| F-BE-070 | `backend/src/main/java/com/sdv/event/domain/SourcePermissionChangedEvent.java`                            | Record            | ACL change                      |
+| F-BE-071 | `backend/src/main/java/com/sdv/event/domain/SourceDocumentDeletedEvent.java`                              | Record            | document deletion               |
+| F-BE-072 | `backend/src/main/java/com/sdv/event/domain/IndexRequestedEvent.java`                                     | Record            | index request                   |
+| F-BE-073 | `backend/src/main/java/com/sdv/event/infrastructure/persistence/entity/OutboxEventEntity.java`            | Entity            | outbox_events mapping           |
+| F-BE-138 | `backend/src/main/java/com/sdv/event/infrastructure/persistence/repository/OutboxEventJpaRepository.java` | Repository        | find unpublished Outbox         |
+| F-BE-074 | `backend/src/main/java/com/sdv/event/infrastructure/OutboxEventPublisher.java`                            | Scheduler/Service | Publish pending Outbox to Kafka |
+| F-BE-075 | `backend/src/main/java/com/sdv/event/infrastructure/PermissionChangedConsumer.java`                       | Kafka Consumer    | Permission change processing    |
+| F-BE-076 | `backend/src/main/java/com/sdv/event/config/KafkaRetryConfig.java`                                        | Config            | Retry/DLQ policy                |
+| F-BE-077 | `backend/src/main/java/com/sdv/event/infrastructure/DlqHandler.java`                                      | Consumer          | DLQ diagnostics/state           |
 
 Event payload must contain minimal identifiers/version/trace information.
 
@@ -1181,17 +1181,17 @@ No raw token/document/prompt.
 
 # 18. Policy Domain / Application
 
-| ID | Path | Type | Responsibility | Feature |
-|---|---|---|---|---|
-| F-BE-078 | `backend/src/main/java/com/sdv/policy/domainSecurityLevel.java` | Java Enum/VO | 보안등급과 미분류 상태 | POL-002 |
-| F-BE-079 | `backend/src/main/java/com/sdv/policy/domain/PolicyDecision.java` | Record/VO | ALLOW/DENY + reason | POL-004,008 |
-| F-BE-080 | `backend/src/main/java/com/sdv/policy/domain/PolicyReasonCode.java` | Enum | machine-readable reason | POL-008 |
-| F-BE-081 | `backend/src/main/java/com/sdv/policy/applicationEffectivePermissionService.java` | Java Service | 수신자 공유 권한+게시자 위임 Source+Overlay+문서 상태+행위 정책 판정 | POL-004 |
-| F-BE-082 | `backend/src/main/java/com/sdv/policy/application/OverlayPolicyService.java` | Service | additional restriction policy | POL-003 |
-| F-BE-083 | `backend/src/main/java/com/sdv/policy/application/AiUsagePolicyService.java` | Service | AI provider permission | POL-005,AI-003 |
-| F-BE-084 | `backend/src/main/java/com/sdv/policy/application/LabelMappingService.java` | Service | Source label→SecurityLevel | POL-006 |
-| F-BE-085 | `backend/src/main/java/com/sdv/policy/application/PermissionFreshnessPolicy.java` | Service | stale ACL decision | POL-007 |
-| F-BE-132 | `backend/src/main/java/com/sdv/policy/application/SecurityLabelService.java` | Service | security label get/set | POL-002,006 |
+| ID       | Path                                                                               | Type         | Responsibility                                                                                | Feature        |
+| -------- | ---------------------------------------------------------------------------------- | ------------ | --------------------------------------------------------------------------------------------- | -------------- |
+| F-BE-078 | `backend/src/main/java/com/sdv/policy/domain/SecurityLevel.java`                   | Java Enum/VO | PUBLIC→SECRET 명시적 순위와 등급 포함 판정; 미설정은 별도 nullable 사용자 권한 상태           | POL-002        |
+| F-BE-079 | `backend/src/main/java/com/sdv/policy/domain/PolicyDecision.java`                  | Record/VO    | ALLOW/DENY + reason                                                                           | POL-004,008    |
+| F-BE-080 | `backend/src/main/java/com/sdv/policy/domain/PolicyReasonCode.java`                | Enum         | machine-readable reason                                                                       | POL-008        |
+| F-BE-081 | `backend/src/main/java/com/sdv/policy/application/EffectivePermissionService.java` | Java Service | 명시적 audience+현재 사용자 clearance/revision+행위+게시자 위임 Source+Overlay+문서/세대 판정 | POL-004        |
+| F-BE-082 | `backend/src/main/java/com/sdv/policy/application/OverlayPolicyService.java`       | Service      | additional restriction policy                                                                 | POL-003        |
+| F-BE-083 | `backend/src/main/java/com/sdv/policy/application/AiUsagePolicyService.java`       | Service      | AI provider permission                                                                        | POL-005,AI-003 |
+| F-BE-084 | `backend/src/main/java/com/sdv/policy/application/LabelMappingService.java`        | Service      | Source label→SecurityLevel                                                                    | POL-006        |
+| F-BE-085 | `backend/src/main/java/com/sdv/policy/application/PermissionFreshnessPolicy.java`  | Service      | stale ACL decision                                                                            | POL-007        |
+| F-BE-132 | `backend/src/main/java/com/sdv/policy/application/SecurityLabelService.java`       | Service      | security label get/set                                                                        | POL-002,006    |
 
 SecurityLevel official values:
 
@@ -1206,18 +1206,18 @@ SECRET
 
 # 19. Policy API / Persistence
 
-| ID | Path | Responsibility |
-|---|---|---|
-| F-BE-086 | `backend/src/main/java/com/sdv/policy/api/OverlayPolicyController.java` | Overlay policy administration |
-| F-BE-087 | `backend/src/main/java/com/sdv/policy/api/AiUsagePolicyController.java` | AI policy administration |
-| F-BE-133 | `backend/src/main/java/com/sdv/policy/api/PolicyAdminController.java` | Security level / label mapping admin |
-| F-BE-089 | `backend/src/main/java/com/sdv/policy/infrastructure/persistence/entity/DocumentSecurityLabelEntity.java` | security label mapping |
-| F-BE-090 | `backend/src/main/java/com/sdv/policy/infrastructure/persistence/entity/OverlayPolicyEntity.java` | overlay_policies |
-| F-BE-091 | `backend/src/main/java/com/sdv/policy/infrastructure/persistence/entity/AiUsagePolicyEntity.java` | ai_usage_policies |
-| F-BE-092 | `backend/src/main/java/com/sdv/policy/infrastructure/persistence/repository/OverlayPolicyJpaRepository.java` | Overlay persistence |
-| F-BE-093 | `backend/src/main/java/com/sdv/policy/infrastructure/persistence/repository/AiUsagePolicyJpaRepository.java` | AI policy persistence |
-| F-BE-134 | `backend/src/main/java/com/sdv/policy/infrastructure/persistence/repository/SecurityLabelJpaRepository.java` | Security label lookup |
-| F-BE-094 | `backend/src/main/java/com/sdv/policy/api/mapper/PolicyApiMapper.java` | policy DTO conversion |
+| ID       | Path                                                                                                         | Responsibility                       |
+| -------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------ |
+| F-BE-086 | `backend/src/main/java/com/sdv/policy/api/OverlayPolicyController.java`                                      | Overlay policy administration        |
+| F-BE-087 | `backend/src/main/java/com/sdv/policy/api/AiUsagePolicyController.java`                                      | AI policy administration             |
+| F-BE-133 | `backend/src/main/java/com/sdv/policy/api/PolicyAdminController.java`                                        | Security level / label mapping admin |
+| F-BE-089 | `backend/src/main/java/com/sdv/policy/infrastructure/persistence/entity/DocumentSecurityLabelEntity.java`    | security label mapping               |
+| F-BE-090 | `backend/src/main/java/com/sdv/policy/infrastructure/persistence/entity/OverlayPolicyEntity.java`            | overlay_policies                     |
+| F-BE-091 | `backend/src/main/java/com/sdv/policy/infrastructure/persistence/entity/AiUsagePolicyEntity.java`            | ai_usage_policies                    |
+| F-BE-092 | `backend/src/main/java/com/sdv/policy/infrastructure/persistence/repository/OverlayPolicyJpaRepository.java` | Overlay persistence                  |
+| F-BE-093 | `backend/src/main/java/com/sdv/policy/infrastructure/persistence/repository/AiUsagePolicyJpaRepository.java` | AI policy persistence                |
+| F-BE-134 | `backend/src/main/java/com/sdv/policy/infrastructure/persistence/repository/SecurityLabelJpaRepository.java` | Security label lookup                |
+| F-BE-094 | `backend/src/main/java/com/sdv/policy/api/mapper/PolicyApiMapper.java`                                       | policy DTO conversion                |
 
 `PolicyPreviewController` and `PolicyCache` are extension scope and should not delay Core.
 
@@ -1231,13 +1231,13 @@ Existing M10 is GET /api/rag/files handled by RagQueryController; structured met
 - F-BE-177 — `backend/src/main/java/com/sdv/rag/api/dto/RagFileSearchQuery.java`: 파일 검색 요청; q,mimeType,sourceId,modifiedFrom,modifiedTo,sort,page,size.
 - F-BE-178 — `backend/src/main/java/com/sdv/rag/api/dto/RagFileSearchResponse.java`: 파일 검색 결과; items, Boolean hasMore, boolean partial.
 
-| ID | Path | Type | Responsibility |
-|---|---|---|---|
-| F-BE-095 | `backend/src/main/java/com/sdv/rag/api/RagQueryController.java` | Controller | search / ask |
-| F-BE-096 | `backend/src/main/java/com/sdv/rag/api/dto/RagSearchRequest.java` | DTO | search request |
-| F-BE-097 | `backend/src/main/java/com/sdv/rag/api/dto/RagAskRequest.java` | DTO | RAG question |
-| F-BE-098 | `backend/src/main/java/com/sdv/rag/api/dto/RagAnswerResponse.java` | DTO | answer + Citation + traceId |
-| F-BE-099 | `backend/src/main/java/com/sdv/rag/api/mapper/RetrievalFilterMapper.java` | Mapper | request filter→validated retrieval filter |
+| ID       | Path                                                                      | Type       | Responsibility                            |
+| -------- | ------------------------------------------------------------------------- | ---------- | ----------------------------------------- |
+| F-BE-095 | `backend/src/main/java/com/sdv/rag/api/RagQueryController.java`           | Controller | search / ask                              |
+| F-BE-096 | `backend/src/main/java/com/sdv/rag/api/dto/RagSearchRequest.java`         | DTO        | search request                            |
+| F-BE-097 | `backend/src/main/java/com/sdv/rag/api/dto/RagAskRequest.java`            | DTO        | RAG question                              |
+| F-BE-098 | `backend/src/main/java/com/sdv/rag/api/dto/RagAnswerResponse.java`        | DTO        | answer + Citation + traceId               |
+| F-BE-099 | `backend/src/main/java/com/sdv/rag/api/mapper/RetrievalFilterMapper.java` | Mapper     | request filter→validated retrieval filter |
 
 Client filters must never widen authorization scope.
 
@@ -1245,20 +1245,20 @@ Client filters must never widen authorization scope.
 
 # 21. RAG Application / Persistence
 
-| ID | Path | Type | Responsibility |
-|---|---|---|---|
-| F-BE-100 | `backend/src/main/java/com/sdv/rag/application/RagRetrievalService.java` | Service | ACL Catalog prefilter + embedding-only candidate shortlist (v1.4 §2A.4 — not a permission decision, not evidence) |
-| F-BE-101 | `backend/src/main/java/com/sdv/rag/application/RagAnswerService.java` | Service | Candidate shortlist → Mandatory Live Retrieval (v1.4 §2A.5: requester SDV + publisher-bound Drive verify → bounded fetch → parse → re-verify → ephemeral evidence) → Policy → LLM → Citation |
-| F-BE-102 | `backend/src/main/java/com/sdv/rag/application/CitationAssembler.java` | Service | verified live-retrieval evidence → Citation (v1.4 §2A.5 step 8; core locators `PAGE`/`SECTION`/`LINE_RANGE`, §2A.7) — not from a durable Chunk/text table |
-| F-BE-103 | `backend/src/main/java/com/sdv/rag/application/LiveEvidenceRetrievalService.java` | Service | Every query: requester SDV + publisher-bound Drive permission/version verification + transient evidence fetch; `retrieveLive()`, `retryOnVersionChange()`; depends on `DocumentSourceConnector`, `SourceConsistencyGuard`, `EphemeralEvidenceStore` |
-| F-BE-104 | `backend/src/main/java/com/sdv/rag/application/port/VectorSearchPort.java` | Interface | authorized vector search |
-| F-BE-105 | `backend/src/main/java/com/sdv/rag/infrastructure/PgVectorSearchAdapter.java` | Adapter | pgvector search |
-| F-BE-106 | `backend/src/main/java/com/sdv/rag/infrastructure/persistence/entity/DocumentEmbeddingEntity.java` | JPA Entity | Content-free `document_embedding_index`: `documentId`, `chunkIndex`, `embedding`, `locatorType`, `locatorValue`, `sourceVersion`, `contentHmac`, `modelVersion`; parser/model generation metadata remains required by the data model; no plaintext field |
-| F-BE-107 | `backend/src/main/java/com/sdv/rag/infrastructure/persistence/repository/DocumentEmbeddingJpaRepository.java` | Spring Data Repository | Atomic embedding generation replacement/delete/allowed search: `replaceGeneration()`, `deleteByDocumentId()`, `searchAllowed()`; generation key includes source, parser, and model versions |
-| F-BE-108 | `backend/src/main/java/com/sdv/rag/infrastructure/ai/DocumentParsingClient.java` | Client | FastAPI parse/index — v1.4: parse output is durable only as embedding-index rows (§2A.2); M06/V005 plaintext drift was corrected by M07A/V006; do not recreate it |
-| F-BE-114 | `backend/src/main/java/com/sdv/rag/infrastructure/event/IndexRequestedConsumer.java` | Kafka Consumer | index request → AI service; builds embedding-only index rows (v1.4 §2A.2), never a durable text store |
-| F-BE-173 | `backend/src/main/java/com/sdv/rag/application/ContentProcessingPolicy.java` | Service/Policy | `classify(metadata)`, `isIndexable(mimeType)` classify Core processing/index status from metadata, MIME, size, and policy; PDF/DOCX/TXT/MD content, XLSX parser retained but default-disabled |
-| F-BE-188 | `backend/src/main/java/com/sdv/rag/application/IndexOrchestrator.java` | Service | `index()`, `replaceGeneration()`, `cleanup()`, `markFailed()`: transient Drive fetch → parse/chunk/embed → atomic content-free generation replacement → cleanup; no content-bearing Kafka/DB retry state |
+| ID       | Path                                                                                                          | Type                   | Responsibility                                                                                                                                                                                                                                           |
+| -------- | ------------------------------------------------------------------------------------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-BE-100 | `backend/src/main/java/com/sdv/rag/application/RagRetrievalService.java`                                      | Service                | ACL Catalog prefilter + embedding-only candidate shortlist (v1.4 §2A.4 — not a permission decision, not evidence)                                                                                                                                        |
+| F-BE-101 | `backend/src/main/java/com/sdv/rag/application/RagAnswerService.java`                                         | Service                | Candidate shortlist → Mandatory Live Retrieval → LLM/Citation; response-wide requester revision fence before and after final audit discards answer/analysis/citations together                                                                           |
+| F-BE-102 | `backend/src/main/java/com/sdv/rag/application/CitationAssembler.java`                                        | Service                | verified live-retrieval evidence → Citation (v1.4 §2A.5 step 8; core locators `PAGE`/`SECTION`/`LINE_RANGE`, §2A.7) — not from a durable Chunk/text table                                                                                                |
+| F-BE-103 | `backend/src/main/java/com/sdv/rag/application/LiveEvidenceRetrievalService.java`                             | Service                | Every query: requester SDV + publisher-bound Drive permission/version verification + transient evidence fetch; `retrieveLive()`, `retryOnVersionChange()`; depends on `DocumentSourceConnector`, `SourceConsistencyGuard`, `EphemeralEvidenceStore`      |
+| F-BE-104 | `backend/src/main/java/com/sdv/rag/application/port/VectorSearchPort.java`                                    | Interface              | authorized vector search                                                                                                                                                                                                                                 |
+| F-BE-105 | `backend/src/main/java/com/sdv/rag/infrastructure/PgVectorSearchAdapter.java`                                 | Adapter                | pgvector search                                                                                                                                                                                                                                          |
+| F-BE-106 | `backend/src/main/java/com/sdv/rag/infrastructure/persistence/entity/DocumentEmbeddingEntity.java`            | JPA Entity             | Content-free `document_embedding_index`: `documentId`, `chunkIndex`, `embedding`, `locatorType`, `locatorValue`, `sourceVersion`, `contentHmac`, `modelVersion`; parser/model generation metadata remains required by the data model; no plaintext field |
+| F-BE-107 | `backend/src/main/java/com/sdv/rag/infrastructure/persistence/repository/DocumentEmbeddingJpaRepository.java` | Spring Data Repository | Atomic embedding generation replacement/delete/allowed search: `replaceGeneration()`, `deleteByDocumentId()`, `searchAllowed()`; generation key includes source, parser, and model versions                                                              |
+| F-BE-108 | `backend/src/main/java/com/sdv/rag/infrastructure/ai/DocumentParsingClient.java`                              | Client                 | FastAPI parse/index — v1.4: parse output is durable only as embedding-index rows (§2A.2); M06/V005 plaintext drift was corrected by M07A/V006; do not recreate it                                                                                        |
+| F-BE-114 | `backend/src/main/java/com/sdv/rag/infrastructure/event/IndexRequestedConsumer.java`                          | Kafka Consumer         | index request → AI service; builds embedding-only index rows (v1.4 §2A.2), never a durable text store                                                                                                                                                    |
+| F-BE-173 | `backend/src/main/java/com/sdv/rag/application/ContentProcessingPolicy.java`                                  | Service/Policy         | `classify(metadata)`, `isIndexable(mimeType)` classify Core processing/index status from metadata, MIME, size, and policy; PDF/DOCX/TXT/MD content, XLSX parser retained but default-disabled                                                            |
+| F-BE-188 | `backend/src/main/java/com/sdv/rag/application/IndexOrchestrator.java`                                        | Service                | `index()`, `replaceGeneration()`, `cleanup()`, `markFailed()`: transient Drive fetch → parse/chunk/embed → atomic content-free generation replacement → cleanup; no content-bearing Kafka/DB retry state                                                 |
 
 **v1.4 correction (`CORE_SPEC.md` §2A.11):** Mandatory Live Retrieval (§2A.5) is a Core MVP requirement, not a PoC. The class name `FederatedRetrievalService` below remains listed in §30 as a separate deferred/extension identifier, but this must not be read as meaning live, per-request, permission-verified retrieval itself is deferred — it is not; it is mandatory for every `FIND_CONTENT`/`SUMMARIZE`/`COMPARE`/`GROUNDED_ANALYSIS` request via `RagRetrievalService`/`RagAnswerService` above.
 
@@ -1266,14 +1266,14 @@ Client filters must never widen authorization scope.
 
 # 22. AI Gateway
 
-| ID | Path | Type | Responsibility |
-|---|---|---|---|
-| F-BE-109 | `backend/src/main/java/com/sdv/ai/application/port/LlmProvider.java` | Interface | common provider contract |
-| F-BE-110 | `backend/src/main/java/com/sdv/ai/application/PolicyEnforcedLlmGateway.java` | Service | AI policy before provider |
-| F-BE-111 | `backend/src/main/java/com/sdv/ai/application/PromptComposer.java` | Service | question + smallest live-verified ephemeral evidence prompt (v1.4 §2A.6, §2A.9 — never a durable Chunk/text table) |
-| F-BE-112 | `backend/src/main/java/com/sdv/ai/infrastructure/OllamaLlmAdapter.java` | Adapter | Local Ollama provider |
-| F-BE-113 | `backend/src/main/java/com/sdv/ai/infrastructure/ExternalLlmAdapter.java` | Adapter | External provider/mock; OFF by default |
-| F-BE-145 | `backend/src/main/java/com/sdv/ai/domain/LlmInvocationMetadata.java` | Record/VO | provider/model/version/latency |
+| ID       | Path                                                                         | Type      | Responsibility                                                                                                     |
+| -------- | ---------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------ |
+| F-BE-109 | `backend/src/main/java/com/sdv/ai/application/port/LlmProvider.java`         | Interface | common provider contract                                                                                           |
+| F-BE-110 | `backend/src/main/java/com/sdv/ai/application/PolicyEnforcedLlmGateway.java` | Service   | AI policy before provider                                                                                          |
+| F-BE-111 | `backend/src/main/java/com/sdv/ai/application/PromptComposer.java`           | Service   | question + smallest live-verified ephemeral evidence prompt (v1.4 §2A.6, §2A.9 — never a durable Chunk/text table) |
+| F-BE-112 | `backend/src/main/java/com/sdv/ai/infrastructure/OllamaLlmAdapter.java`      | Adapter   | Local Ollama provider                                                                                              |
+| F-BE-113 | `backend/src/main/java/com/sdv/ai/infrastructure/ExternalLlmAdapter.java`    | Adapter   | External provider/mock; OFF by default                                                                             |
+| F-BE-145 | `backend/src/main/java/com/sdv/ai/domain/LlmInvocationMetadata.java`         | Record/VO | provider/model/version/latency                                                                                     |
 
 No direct External LLM call that bypasses `PolicyEnforcedLlmGateway`.
 
@@ -1281,16 +1281,16 @@ No direct External LLM call that bypasses `PolicyEnforcedLlmGateway`.
 
 # 23. Audit
 
-| ID | Path | Type | Responsibility |
-|---|---|---|---|
-| F-BE-115 | `backend/src/main/java/com/sdv/audit/domain/AuditEvent.java` | Domain | actor/action/target/result/reason/traceId |
-| F-BE-116 | `backend/src/main/java/com/sdv/audit/application/AuditService.java` | Service | Audit save Use Case |
-| F-BE-117 | `backend/src/main/java/com/sdv/audit/application/RagAuditRecorder.java` | Service | connect Policy/Retrieval/LLM/Citation |
-| F-BE-118 | `backend/src/main/java/com/sdv/audit/api/AuditAdminController.java` | Controller | Audit search |
-| F-BE-119 | `backend/src/main/java/com/sdv/audit/application/AuditQueryService.java` | Service | admin Audit query |
-| F-BE-120 | `backend/src/main/java/com/sdv/audit/infrastructure/persistence/entity/AuditLogEntity.java` | Entity | audit_logs |
-| F-BE-121 | `backend/src/main/java/com/sdv/audit/infrastructure/persistence/repository/AuditLogJpaRepository.java` | Repository | Audit query |
-| F-BE-139 | `backend/src/main/java/com/sdv/audit/infrastructure/AuditAspect.java` | AOP | common admin/policy Audit hook |
+| ID       | Path                                                                                                   | Type       | Responsibility                            |
+| -------- | ------------------------------------------------------------------------------------------------------ | ---------- | ----------------------------------------- |
+| F-BE-115 | `backend/src/main/java/com/sdv/audit/domain/AuditEvent.java`                                           | Domain     | actor/action/target/result/reason/traceId |
+| F-BE-116 | `backend/src/main/java/com/sdv/audit/application/AuditService.java`                                    | Service    | Audit save Use Case                       |
+| F-BE-117 | `backend/src/main/java/com/sdv/audit/application/RagAuditRecorder.java`                                | Service    | connect Policy/Retrieval/LLM/Citation     |
+| F-BE-118 | `backend/src/main/java/com/sdv/audit/api/AuditAdminController.java`                                    | Controller | Audit search                              |
+| F-BE-119 | `backend/src/main/java/com/sdv/audit/application/AuditQueryService.java`                               | Service    | admin Audit query                         |
+| F-BE-120 | `backend/src/main/java/com/sdv/audit/infrastructure/persistence/entity/AuditLogEntity.java`            | Entity     | audit_logs                                |
+| F-BE-121 | `backend/src/main/java/com/sdv/audit/infrastructure/persistence/repository/AuditLogJpaRepository.java` | Repository | Audit query                               |
+| F-BE-139 | `backend/src/main/java/com/sdv/audit/infrastructure/AuditAspect.java`                                  | AOP        | common admin/policy Audit hook            |
 
 Raw Prompt / token / key / document content must not be stored.
 
@@ -1298,13 +1298,13 @@ Raw Prompt / token / key / document content must not be stored.
 
 # 24. Security Risk
 
-| ID | Path | Type | Responsibility |
-|---|---|---|---|
-| F-BE-122 | `backend/src/main/java/com/sdv/security/application/OversharingDetectionService.java` | Service | broad-sharing detection |
-| F-BE-123 | `backend/src/main/java/com/sdv/security/application/PermissionSyncRiskService.java` | Service | stale/sync error Finding |
-| F-BE-124 | `backend/src/main/java/com/sdv/security/api/SecurityFindingController.java` | Controller | Finding list/update |
-| F-BE-126 | `backend/src/main/java/com/sdv/security/infrastructure/persistence/entity/SecurityFindingEntity.java` | Entity | security_findings |
-| F-BE-127 | `backend/src/main/java/com/sdv/security/infrastructure/persistence/repository/SecurityFindingJpaRepository.java` | Repository | Finding persistence |
+| ID       | Path                                                                                                             | Type       | Responsibility           |
+| -------- | ---------------------------------------------------------------------------------------------------------------- | ---------- | ------------------------ |
+| F-BE-122 | `backend/src/main/java/com/sdv/security/application/OversharingDetectionService.java`                            | Service    | broad-sharing detection  |
+| F-BE-123 | `backend/src/main/java/com/sdv/security/application/PermissionSyncRiskService.java`                              | Service    | stale/sync error Finding |
+| F-BE-124 | `backend/src/main/java/com/sdv/security/api/SecurityFindingController.java`                                      | Controller | Finding list/update      |
+| F-BE-126 | `backend/src/main/java/com/sdv/security/infrastructure/persistence/entity/SecurityFindingEntity.java`            | Entity     | security_findings        |
+| F-BE-127 | `backend/src/main/java/com/sdv/security/infrastructure/persistence/repository/SecurityFindingJpaRepository.java` | Repository | Finding persistence      |
 
 Automatic Source permission remediation is not part of Core.
 
@@ -1312,18 +1312,18 @@ Automatic Source permission remediation is not part of Core.
 
 # 25. Python AI Service
 
-| ID | Path | Type | Responsibility |
-|---|---|---|---|
-| F-AI-001 | `ai-service/app/main.py` | Python | FastAPI entry point |
-| F-AI-002 | `ai-service/app/api/routes.py` | Router | `/parse`, `/index`, `/health` internal APIs |
-| F-AI-003 | `ai-service/app/services/parser_service.py` | Service | PDF/DOCX/TXT text extraction |
-| F-AI-004 | `ai-service/app/services/chunking_service.py` | Service | Chunk + metadata — v1.4: Chunk text is transient within one request/response cycle only, never returned for durable plaintext storage (§2A.2, §2A.3) |
-| F-AI-005 | `ai-service/app/services/embedding_service.py` | Service | Embedding — output (vectors + locators + version/digest metadata, §2A.2) is the only content-derived data the Backend may persist from this pipeline |
-| F-AI-006 | `ai-service/app/workers/index_worker.py` | Worker | Index orchestration — builds the v1.4 Embedding Candidate Index (§2A.11) only; must not cause plaintext to be written to a durable store |
-| F-AI-007 | `ai-service/app/models/schemas.py` | Pydantic | Internal schemas |
-| F-AI-008 | `ai-service/app/core/config.py` | Config | AI service settings |
-| F-AI-009 | `ai-service/tests/test_parser.py` | Test | parser validation |
-| F-AI-010 | `ai-service/tests/test_chunking.py` | Test | Chunk metadata validation |
+| ID       | Path                                           | Type     | Responsibility                                                                                                                                       |
+| -------- | ---------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-AI-001 | `ai-service/app/main.py`                       | Python   | FastAPI entry point                                                                                                                                  |
+| F-AI-002 | `ai-service/app/api/routes.py`                 | Router   | `/parse`, `/index`, `/health` internal APIs                                                                                                          |
+| F-AI-003 | `ai-service/app/services/parser_service.py`    | Service  | PDF/DOCX/TXT text extraction                                                                                                                         |
+| F-AI-004 | `ai-service/app/services/chunking_service.py`  | Service  | Chunk + metadata — v1.4: Chunk text is transient within one request/response cycle only, never returned for durable plaintext storage (§2A.2, §2A.3) |
+| F-AI-005 | `ai-service/app/services/embedding_service.py` | Service  | Embedding — output (vectors + locators + version/digest metadata, §2A.2) is the only content-derived data the Backend may persist from this pipeline |
+| F-AI-006 | `ai-service/app/workers/index_worker.py`       | Worker   | Index orchestration — builds the v1.4 Embedding Candidate Index (§2A.11) only; must not cause plaintext to be written to a durable store             |
+| F-AI-007 | `ai-service/app/models/schemas.py`             | Pydantic | Internal schemas                                                                                                                                     |
+| F-AI-008 | `ai-service/app/core/config.py`                | Config   | AI service settings                                                                                                                                  |
+| F-AI-009 | `ai-service/tests/test_parser.py`              | Test     | parser validation                                                                                                                                    |
+| F-AI-010 | `ai-service/tests/test_chunking.py`            | Test     | Chunk metadata validation                                                                                                                            |
 
 AI Service is internal.
 
@@ -1337,23 +1337,23 @@ Authorization remains Backend-owned.
 
 Actual M16A/B routes live in App.tsx; OIDC in auth/keycloak.ts + AuthContext.tsx; request infrastructure in api/client.ts + useApiClient.ts. Existing SourcesPage is admin-oriented; MyDrivePage/ShareSettingsDialog below are new USER-sharing targets. FileDiscoveryPage.tsx and SourceSyncPanel.tsx are completed frontend slices under features/rag and features/sources (Mock/Vitest only, not full live acceptance).
 
-| ID | Path | Responsibility |
-|---|---|---|
-| F-FE-001 | `frontend/src/main.tsx` | React entry |
-| F-FE-002 | `frontend/src/App.tsx` | USER/ADMIN routes |
-| F-FE-003 | `frontend/src/auth/keycloak.ts` | OIDC auth/token wrapper |
-| F-FE-004 | `frontend/src/pages/SourcesPage.tsx` | Source list/connect/disconnect |
-| F-FE-005 | `frontend/src/pages/GoogleDriveConnectPage.tsx` | Google Drive connect |
-| F-FE-006 | `frontend/src/features/sources/SourceSyncPanel.tsx` | Sync status/action |
-| F-FE-007 | `frontend/src/features/rag/RagChatPage.tsx` | question/answer/Citation UI |
-| F-FE-008 | `frontend/src/features/rag/CitationList.tsx` | Citation rendering |
-| F-FE-009 | `frontend/src/features/policies/PolicyAdminPage.tsx` | Overlay/AI policy UI |
-| F-FE-010 | `frontend/src/features/security/SecurityDashboardPage.tsx` | Finding/risk UI |
-| F-FE-011 | `frontend/src/features/audit/AuditLogPage.tsx` | Audit search |
-| F-FE-012 | `frontend/src/features/vault/VaultPage.tsx` | **EXCLUDED / RETIRED at v1.4** (`CORE_SPEC.md` §2A.1, §11) — Vault collection/upload; preserved for historical/traceability reference only, `/api/vault/*` is not an active API |
-| F-FE-013 | `frontend/src/api/client.ts` | common HTTP/401/trace handling |
-| F-FE-014 | `frontend/src/shared/types/api.ts` | shared API Types |
-| F-FE-015 | `frontend/src/*.test.tsx` | core UI tests |
+| ID       | Path                                                       | Responsibility                                                                                                                                                                  |
+| -------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-FE-001 | `frontend/src/main.tsx`                                    | React entry                                                                                                                                                                     |
+| F-FE-002 | `frontend/src/App.tsx`                                     | USER/ADMIN routes                                                                                                                                                               |
+| F-FE-003 | `frontend/src/auth/keycloak.ts`                            | OIDC auth/token wrapper                                                                                                                                                         |
+| F-FE-004 | `frontend/src/pages/SourcesPage.tsx`                       | Source list/connect/disconnect                                                                                                                                                  |
+| F-FE-005 | `frontend/src/pages/GoogleDriveConnectPage.tsx`            | Google Drive connect                                                                                                                                                            |
+| F-FE-006 | `frontend/src/features/sources/SourceSyncPanel.tsx`        | Sync status/action                                                                                                                                                              |
+| F-FE-007 | `frontend/src/features/rag/RagChatPage.tsx`                | question/answer/Citation UI                                                                                                                                                     |
+| F-FE-008 | `frontend/src/features/rag/CitationList.tsx`               | Citation rendering                                                                                                                                                              |
+| F-FE-009 | `frontend/src/features/policies/PolicyAdminPage.tsx`       | Overlay/AI policy UI                                                                                                                                                            |
+| F-FE-010 | `frontend/src/features/security/SecurityDashboardPage.tsx` | Finding/risk UI                                                                                                                                                                 |
+| F-FE-011 | `frontend/src/features/audit/AuditLogPage.tsx`             | Audit search                                                                                                                                                                    |
+| F-FE-012 | `frontend/src/features/vault/VaultPage.tsx`                | **EXCLUDED / RETIRED at v1.4** (`CORE_SPEC.md` §2A.1, §11) — Vault collection/upload; preserved for historical/traceability reference only, `/api/vault/*` is not an active API |
+| F-FE-013 | `frontend/src/api/client.ts`                               | common HTTP/401/trace handling                                                                                                                                                  |
+| F-FE-014 | `frontend/src/shared/types/api.ts`                         | shared API Types                                                                                                                                                                |
+| F-FE-015 | `frontend/src/*.test.tsx`                                  | core UI tests                                                                                                                                                                   |
 
 Frontend must not reimplement Backend permission logic.
 
@@ -1361,22 +1361,22 @@ Frontend must not reimplement Backend permission logic.
 
 # 27. Core Infrastructure / Configuration
 
-| ID | Path | Type | Responsibility |
-|---|---|---|---|
-| F-INF-001 | `compose.yaml` | Docker Compose | PostgreSQL/Kafka/Keycloak/Ollama/apps |
-| F-INF-002 | `backend/src/main/resources/application.yml` | YAML | common Backend config |
-| F-INF-003 | `backend/src/main/resources/application-local.yml` | YAML | localhost development |
-| F-INF-004 | `backend/src/main/resources/application-compose.yml` | YAML | Compose DNS config |
-| F-INF-005 | `.env.example` | ENV template | environment variable names; no real secrets |
-| F-INF-006 | `infra/keycloak/realm-export.json` | JSON | Realm/client/roles |
-| F-INF-007 | `backend/src/main/resources/db/migration/V001__baseline.sql` | SQL | Core relational schema |
-| F-INF-008 | `backend/src/main/resources/db/migration/V002__pgvector.sql` | SQL | pgvector / Chunk vector |
-| F-INF-009 | `scripts/bootstrap.ps1` | PowerShell | initial environment startup |
-| F-INF-010 | `scripts/verify.ps1` | PowerShell | health/secret/E2E checks |
-| F-INF-011 | `scripts/backup.ps1` | PowerShell | v1.4: DB (Metadata/ACL Catalog, embedding-only index, audit) backup only — ~~Vault backup~~ EXCLUDED/RETIRED (§2A.1); the Encrypted Ephemeral Evidence store (§2A.6) must never be backed up |
-| F-INF-012 | `scripts/restore.ps1` | PowerShell | restore/verification — same v1.4 scope narrowing as F-INF-011; ephemeral evidence is never restored (it is never backed up) |
-| F-INF-016 | `.github/workflows/ci.yml` | GitHub Actions | Gradle/pytest/npm/secret scan |
-| F-INF-017 | `backend/src/main/resources/db/migration/V003__content_processing_schema.sql` | SQL | Applied immutable ALTER-only migration for source document index status/reason and chunk locator type/value |
+| ID        | Path                                                                                      | Type                      | Responsibility                                                                                                                                                                                          |
+| --------- | ----------------------------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-INF-001 | `compose.yaml`                                                                            | Docker Compose            | PostgreSQL/Kafka/Keycloak/Ollama/apps                                                                                                                                                                   |
+| F-INF-002 | `backend/src/main/resources/application.yml`                                              | YAML                      | common Backend config                                                                                                                                                                                   |
+| F-INF-003 | `backend/src/main/resources/application-local.yml`                                        | YAML                      | localhost development                                                                                                                                                                                   |
+| F-INF-004 | `backend/src/main/resources/application-compose.yml`                                      | YAML                      | Compose DNS config                                                                                                                                                                                      |
+| F-INF-005 | `.env.example`                                                                            | ENV template              | environment variable names; no real secrets                                                                                                                                                             |
+| F-INF-006 | `infra/keycloak/realm-export.json`                                                        | JSON                      | Realm/client/roles                                                                                                                                                                                      |
+| F-INF-007 | `backend/src/main/resources/db/migration/V001__baseline.sql`                              | SQL                       | Core relational schema                                                                                                                                                                                  |
+| F-INF-008 | `backend/src/main/resources/db/migration/V002__pgvector.sql`                              | SQL                       | pgvector / Chunk vector                                                                                                                                                                                 |
+| F-INF-009 | `scripts/bootstrap.ps1`                                                                   | PowerShell                | initial environment startup                                                                                                                                                                             |
+| F-INF-010 | `scripts/verify.ps1`                                                                      | PowerShell                | health/secret/E2E checks                                                                                                                                                                                |
+| F-INF-011 | `scripts/backup.ps1`                                                                      | PowerShell                | v1.4: DB (Metadata/ACL Catalog, embedding-only index, audit) backup only — ~~Vault backup~~ EXCLUDED/RETIRED (§2A.1); the Encrypted Ephemeral Evidence store (§2A.6) must never be backed up            |
+| F-INF-012 | `scripts/restore.ps1`                                                                     | PowerShell                | restore/verification — same v1.4 scope narrowing as F-INF-011; ephemeral evidence is never restored (it is never backed up)                                                                             |
+| F-INF-016 | `.github/workflows/ci.yml`                                                                | GitHub Actions            | Gradle/pytest/npm/secret scan                                                                                                                                                                           |
+| F-INF-017 | `backend/src/main/resources/db/migration/V003__content_processing_schema.sql`             | SQL                       | Applied immutable ALTER-only migration for source document index status/reason and chunk locator type/value                                                                                             |
 | F-INF-018 | `backend/src/main/resources/db/migration/[next-unused-version]__consumer_idempotency.sql` | SQL (planned placeholder) | Consumer eventId ledger/unique constraints. V001–V009 already exist; assign the actual next unused version at implementation and update this path. Never create another V004 or assume a reserved V010. |
 
 Applied migration files must not be edited.
@@ -1387,13 +1387,13 @@ If V001 is already applied, new schema changes use a new migration.
 
 # 28. Core Documentation
 
-| ID | Path | Responsibility |
-|---|---|---|
-| F-DOC-001 | `README.md` | project / quick start / demo |
-| F-DOC-002 | `docs/architecture.md` | Source→Policy→RAG→Audit |
-| F-DOC-003 | `docs/threat-model.md` | assets/threats/controls |
-| F-DOC-004 | `docs/scope.md` | Core include/exclude |
-| F-DOC-005 | `docs/api.md` | API examples |
+| ID        | Path                   | Responsibility               |
+| --------- | ---------------------- | ---------------------------- |
+| F-DOC-001 | `README.md`            | project / quick start / demo |
+| F-DOC-002 | `docs/architecture.md` | Source→Policy→RAG→Audit      |
+| F-DOC-003 | `docs/threat-model.md` | assets/threats/controls      |
+| F-DOC-004 | `docs/scope.md`        | Core include/exclude         |
+| F-DOC-005 | `docs/api.md`          | API examples                 |
 
 This Agent-readable specification supplements those project-facing documents.
 
@@ -1401,16 +1401,16 @@ This Agent-readable specification supplements those project-facing documents.
 
 # 29. Core Security Tests
 
-| ID | Path | Purpose |
-|---|---|---|
-| F-TST-001 | `backend/src/test/java/com/sdv/security/EffectivePermissionServiceTest.java` | Source/Overlay policy matrix |
-| F-TST-002 | `backend/src/test/java/com/sdv/rag/UnauthorizedRetrievalE2ETest.java` | Unauthorized Chunk = 0; v1.4 update: must also prove the requester SDV + publisher-bound Drive access recheck fails closed (DENY/UNKNOWN/deleted/trashed/non-downloadable) before content ever reaches a parser/LLM (§2A.5) |
-| F-TST-003 | `backend/src/test/java/com/sdv/source/GoogleDriveConnectorContractTest.java` | Connector contract; v1.4 update: must also cover the `files.export` 10 MB boundary/`EXPORT_LIMIT_EXCEEDED` and the version-changed-during-fetch retry-once-then-`DOCUMENT_CHANGED` behavior (§2A.5, §2A.7) |
-| F-TST-004 | `backend/src/test/java/com/sdv/sync/PermissionSyncE2ETest.java` | Drive permission removal→RAG exclusion |
-| F-TST-005 | `backend/src/test/java/com/sdv/ai/ExternalLlmPolicyTest.java` | LOCAL_ONLY external call = 0 |
-| F-TST-006 | `backend/src/test/java/com/sdv/audit/AuditTraceE2ETest.java` | RAG trace reconstruction |
-| F-TST-007 | `backend/src/test/java/com/sdv/rag/ZeroOriginalPersistenceE2ETest.java` | Verify zero durable retention of originals, exports, complete extracted text, and plaintext chunks by scanning DB/files/cache/logs; cover hard-TTL expiry and cleanup recovery with Testcontainers and a temporary filesystem |
-| F-TST-008 | `backend/src/test/java/com/sdv/security/OversharingDetectionTest.java` | SECRET + anyone → HIGH |
+| ID        | Path                                                                         | Purpose                                                                                                                                                                                                                       |
+| --------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-TST-001 | `backend/src/test/java/com/sdv/security/EffectivePermissionServiceTest.java` | Source/Overlay policy matrix                                                                                                                                                                                                  |
+| F-TST-002 | `backend/src/test/java/com/sdv/rag/UnauthorizedRetrievalE2ETest.java`        | Unauthorized Chunk = 0; v1.4 update: must also prove the requester SDV + publisher-bound Drive access recheck fails closed (DENY/UNKNOWN/deleted/trashed/non-downloadable) before content ever reaches a parser/LLM (§2A.5)   |
+| F-TST-003 | `backend/src/test/java/com/sdv/source/GoogleDriveConnectorContractTest.java` | Connector contract; v1.4 update: must also cover the `files.export` 10 MB boundary/`EXPORT_LIMIT_EXCEEDED` and the version-changed-during-fetch retry-once-then-`DOCUMENT_CHANGED` behavior (§2A.5, §2A.7)                    |
+| F-TST-004 | `backend/src/test/java/com/sdv/sync/PermissionSyncE2ETest.java`              | Drive permission removal→RAG exclusion                                                                                                                                                                                        |
+| F-TST-005 | `backend/src/test/java/com/sdv/ai/ExternalLlmPolicyTest.java`                | LOCAL_ONLY external call = 0                                                                                                                                                                                                  |
+| F-TST-006 | `backend/src/test/java/com/sdv/audit/AuditTraceE2ETest.java`                 | RAG trace reconstruction                                                                                                                                                                                                      |
+| F-TST-007 | `backend/src/test/java/com/sdv/rag/ZeroOriginalPersistenceE2ETest.java`      | Verify zero durable retention of originals, exports, complete extracted text, and plaintext chunks by scanning DB/files/cache/logs; cover hard-TTL expiry and cleanup recovery with Testcontainers and a temporary filesystem |
+| F-TST-008 | `backend/src/test/java/com/sdv/security/OversharingDetectionTest.java`       | SECRET + anyone → HIGH                                                                                                                                                                                                        |
 
 Feature-specific smaller unit/integration tests may be added next to these canonical portfolio tests when needed.
 
@@ -1622,50 +1622,60 @@ then propose an intentional specification change if a better design is truly nec
 
 Do not create the actual code or migration files for these from this manifest entry alone — implementation is separate, future work (see `CORE_SPEC.md` §2A.12 development order). These IDs are added here only so future Plans reference the correct canonical path.
 
-| ID | Canonical Path | Type | Responsibility |
-|---|---|---|---|
-| F-BE-206 | `backend/src/main/java/com/sdv/rag/application/port/out/EphemeralEvidenceStore.java` | Java Interface | Encrypted ephemeral-evidence contract with a hard TTL of at most 300 seconds from original creation; `putEncrypted()`, `getIfAuthorizedAndCurrent()`, `evict()` (`CORE_SPEC.md` §2A.6) |
-| F-BE-207 | `backend/src/main/java/com/sdv/rag/application/SourceConsistencyGuard.java` | Java Service | Drive access/version checks before and after fetch, with one bounded retry on version change (`CORE_SPEC.md` §2A.5) |
-| F-BE-208 | `backend/src/main/java/com/sdv/rag/infrastructure/ephemeral/EncryptedEphemeralEvidenceStore.java` | Java Adapter | `EphemeralEvidenceStore` implementation: encrypted volatile evidence storage with forced eviction and no sliding TTL; `putEncrypted()`, `evictExpired()`, `evictByDocument()` (`CORE_SPEC.md` §2A.6); never backed up, snapshotted, or mounted on a durable volume |
-| F-INF-020 | `backend/src/main/resources/db/migration/V006__zero_original_persistence.sql` | SQL (M07A completed history) | Corrects the persistence model (removes/relocates durable plaintext such as `document_extracted_content.normalized_text`) without editing `V001`–`V005` (`CORE_SPEC.md` §2A.3) |
+| ID        | Canonical Path                                                                                    | Type                         | Responsibility                                                                                                                                                                                                                                                     |
+| --------- | ------------------------------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| F-BE-206  | `backend/src/main/java/com/sdv/rag/application/port/out/EphemeralEvidenceStore.java`              | Java Interface               | Encrypted ephemeral-evidence contract with a hard TTL of at most 300 seconds from original creation; `putEncrypted()`, `getIfAuthorizedAndCurrent()`, `evict()` (`CORE_SPEC.md` §2A.6)                                                                             |
+| F-BE-207  | `backend/src/main/java/com/sdv/rag/application/SourceConsistencyGuard.java`                       | Java Service                 | Drive access/version checks before and after fetch, with one bounded retry on version change (`CORE_SPEC.md` §2A.5)                                                                                                                                                |
+| F-BE-208  | `backend/src/main/java/com/sdv/rag/infrastructure/ephemeral/EncryptedEphemeralEvidenceStore.java` | Java Adapter                 | `EphemeralEvidenceStore` implementation: encrypted volatile evidence storage with forced eviction and no sliding TTL; `putEncrypted()`, `evictExpired()`, `evictByDocument()` (`CORE_SPEC.md` §2A.6); never backed up, snapshotted, or mounted on a durable volume |
+| F-INF-020 | `backend/src/main/resources/db/migration/V006__zero_original_persistence.sql`                     | SQL (M07A completed history) | Corrects the persistence model (removes/relocates durable plaintext such as `document_extracted_content.normalized_text`) without editing `V001`–`V005` (`CORE_SPEC.md` §2A.3)                                                                                     |
 
 The `F-BE-206`–`F-BE-208` package paths above are explicit values from the v1.4 Excel master, not inferred placements.
 
 ## 37.2 S3 / Object Storage — excluded/retired from introduction (v1.4)
 
-| ID | Canonical Path | Type | Responsibility | Status |
-|---|---|---|---|---|
-| F-BE-159 | `backend/src/main/java/com/sdv/storage/application/port/ObjectStoragePort.java` | Java Interface | Generic object storage write/read contract | **EXCLUDED / RETIRED at v1.4** — writer behavior conflicts with the default-mode no-original-retention rule (`CORE_SPEC.md` §2A.10) |
-| F-BE-160 | `backend/src/main/java/com/sdv/storage/infrastructure/aws/S3ObjectStorageAdapter.java` | Java Adapter | `ObjectStoragePort` AWS S3 implementation | **EXCLUDED / RETIRED at v1.4** — same reason as `F-BE-159`; In the default MVP no-original mode, S3 is not an SDV content store; a provider connector is read-only. Separate post-MVP STO-001 requires a new retention design/IDs and does not reactivate this writer (§2A.10). |
+| ID       | Canonical Path                                                                         | Type           | Responsibility                             | Status                                                                                                                                                                                                                                                                          |
+| -------- | -------------------------------------------------------------------------------------- | -------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-BE-159 | `backend/src/main/java/com/sdv/storage/application/port/ObjectStoragePort.java`        | Java Interface | Generic object storage write/read contract | **EXCLUDED / RETIRED at v1.4** — writer behavior conflicts with the default-mode no-original-retention rule (`CORE_SPEC.md` §2A.10)                                                                                                                                             |
+| F-BE-160 | `backend/src/main/java/com/sdv/storage/infrastructure/aws/S3ObjectStorageAdapter.java` | Java Adapter   | `ObjectStoragePort` AWS S3 implementation  | **EXCLUDED / RETIRED at v1.4** — same reason as `F-BE-159`; In the default MVP no-original mode, S3 is not an SDV content store; a provider connector is read-only. Separate post-MVP STO-001 requires a new retention design/IDs and does not reactivate this writer (§2A.10). |
 
 The `F-BE-159` and `F-BE-160` paths above are explicit v1.4 Excel identities retained only for traceability. Their writer responsibilities remain excluded/retired.
 
+# 38. Approved Sharing and Clearance Files
 
-# 38. v1.5 Approved Target Files — NOT Implemented by this Revision
+These entries describe the approved sharing/clearance contract and its current canonical implementation paths. Historical target method names are guidance only; inspect the current signatures. Preserve package-by-feature and avoid extra speculative layers.
 
-These 14 additions are explicit design decisions for SHR-001–006, not inferred claims that code exists. Methods below are target contracts; implementation prompts must inspect existing signatures first. Preserve package-by-feature and avoid extra speculative layers.
-
-| ID | Canonical path | Responsibility | Target methods/fields | Feature IDs |
-|---|---|---|---|---|
-| F-BE-209 | `backend/src/main/java/com/sdv/source/api/SourceUserController.java` | 본인 Source 등록·목록·중단·재연결 진입점 | list(),create(),disconnect() | SHR-001,SHR-005 |
-| F-BE-210 | `backend/src/main/java/com/sdv/source/application/SourceSharingService.java` | 파일 단위 공유 의도·수신자·등급·철회 관리 | publish(),update(),unshare(),resolveAccess() | SHR-002,SHR-003,SHR-006 |
-| F-BE-211 | `backend/src/main/java/com/sdv/source/domain/DocumentShare.java` | 연결 건강과 분리된 영속 공유 모델 | publisher,source,file,recipients,securityLevel,actions,generation,published,adminBlocked | SHR-002,SHR-005 |
-| F-BE-212 | `backend/src/main/java/com/sdv/source/infrastructure/persistence/entity/DocumentShareEntity.java` | 공유와 지정 수신자 영속 매핑 | document_shares; recipients collection | SHR-002,SHR-005 |
-| F-BE-213 | `backend/src/main/java/com/sdv/source/infrastructure/persistence/repository/DocumentShareJpaRepository.java` | 공유 소유권·수신자 필터 및 버전 조건부 갱신 | findByPublisher(),findAuthorizedShares(),conditional update | SHR-002,SHR-003 |
-| F-BE-214 | `backend/src/main/java/com/sdv/source/api/SourceShareController.java` | 소유자 전용 비공개 파일 선택·명시적 공유 API | browseFiles(),publish(),update(),unshare() | SHR-002 |
-| F-BE-215 | `backend/src/main/java/com/sdv/source/domain/SourceAccessContext.java` | 서버가 결합한 요청자·게시자·연결·공유·파일·세대 문맥 | requester,publisher,providerIdentity,source,file,share,generation,action | SHR-003,SHR-004 |
-| F-BE-216 | `backend/src/main/java/com/sdv/source/application/SharedFileDownloadService.java` | SDV 인가·게시자 원본 검증·상한 있는 다운로드 전달 | download(),verifyBefore(),verifyAfter() | SHR-004 |
-| F-BE-217 | `backend/src/main/java/com/sdv/source/api/SharedFileDownloadController.java` | OIDC 보호 파일 다운로드 API | download() | SHR-004 |
-| F-BE-218 | `backend/src/main/java/com/sdv/source/api/SharedFileAdminController.java` | 공유된 파일 관리만 제공; 개인 저장소 열람 금지 | listPublished(),block(),updatePolicy() | SHR-006 |
-| F-FE-019 | `frontend/src/features/sources/MyDrivePage.tsx` | 내 저장소·비공개 파일 선택·공유 및 복구 상태 | MyDrivePage | SHR-001,SHR-002,SHR-005 |
-| F-FE-020 | `frontend/src/features/sources/ShareSettingsDialog.tsx` | 선택 파일·수신자·보안등급·행위 확인 및 명시적 공유 | ShareSettingsDialog | SHR-002,SHR-006 |
-| F-TST-009 | `backend/src/test/java/com/sdv/source/SelectiveSharingE2ETest.java` | A 게시/B 허용/C 거부·비공개 숨김·재연결 경계 | multiUserSharing(),sameIdentityReconnect(),differentIdentityRejected() | SHR-001,SHR-002,SHR-003,SHR-005,SHR-006 |
-| F-TST-010 | `backend/src/test/java/com/sdv/source/SharedDownloadE2ETest.java` | 다운로드 위임·철회 경합·내용 비보관 검증 | downloadWithoutNativePermission(),revokeDuringFetch(),binaryWithoutParser() | SHR-004 |
+| ID        | Canonical path                                                                                               | Responsibility                                                                                                        | Target methods/fields                                                                                   | Feature IDs                             |
+| --------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| F-BE-209  | `backend/src/main/java/com/sdv/source/api/SourceUserController.java`                                         | 본인 Source 등록·목록·중단·재연결 진입점                                                                              | list(),create(),disconnect()                                                                            | SHR-001,SHR-005                         |
+| F-BE-210  | `backend/src/main/java/com/sdv/source/application/SourceSharingService.java`                                 | 파일 단위 공유 의도·audience·선택 수신자·등급·행위·철회 관리                                                          | createShare(),updateShare(),unshare(),publishIndexRequested()                                           | SHR-002,SHR-003,SHR-006                 |
+| F-BE-211  | `backend/src/main/java/com/sdv/source/domain/DocumentShare.java`                                             | 연결 건강과 분리된 영속 공유 모델과 audience/recipient 불변식                                                         | publisher,source,file,audience,recipients,securityLevel,actions,generation,published,adminBlocked       | SHR-002,SHR-005                         |
+| F-BE-212  | `backend/src/main/java/com/sdv/source/infrastructure/persistence/entity/DocumentShareEntity.java`            | 공유 audience와 선택적 안정 수신자 영속 매핑                                                                          | document_shares.audience; recipients collection                                                         | SHR-002,SHR-005                         |
+| F-BE-213  | `backend/src/main/java/com/sdv/source/infrastructure/persistence/repository/DocumentShareJpaRepository.java` | 공유 소유권·audience·현재 clearance 사전필터와 안정 정렬 검색                                                         | searchSharedDiscoverable(),findByPublisherSubjectOrderByIdAsc()                                         | SHR-002,SHR-003                         |
+| F-BE-214  | `backend/src/main/java/com/sdv/source/api/SourceShareController.java`                                        | 소유자 전용 비공개 파일 선택·명시적 공유 API                                                                          | browseFiles(),publish(),update(),unshare()                                                              | SHR-002                                 |
+| F-BE-215  | `backend/src/main/java/com/sdv/source/domain/SourceAccessContext.java`                                       | 서버가 결합한 요청자 authorization revision·게시자·연결·공유·파일·세대 문맥                                           | requester,requesterAuthorizationRevision,publisher,providerIdentity,source,file,share,generation,action | SHR-003,SHR-004                         |
+| F-BE-216  | `backend/src/main/java/com/sdv/source/application/SharedFileDownloadService.java`                            | SDV 인가·게시자 원본 검증·상한 있는 다운로드 전달                                                                     | download(),verifyBefore(),verifyAfter()                                                                 | SHR-004                                 |
+| F-BE-217  | `backend/src/main/java/com/sdv/source/api/SharedFileDownloadController.java`                                 | OIDC 보호 파일 다운로드 API                                                                                           | download()                                                                                              | SHR-004                                 |
+| F-BE-218  | `backend/src/main/java/com/sdv/source/api/SharedFileAdminController.java`                                    | 공유된 파일 관리만 제공; 개인 저장소 열람 금지                                                                        | listPublished(),block(),updatePolicy()                                                                  | SHR-006                                 |
+| F-FE-019  | `frontend/src/features/sources/MyDrivePage.tsx`                                                              | 내 저장소·비공개 파일 선택·공유 및 복구 상태                                                                          | MyDrivePage                                                                                             | SHR-001,SHR-002,SHR-005                 |
+| F-FE-020  | `frontend/src/features/sources/ShareSettingsDialog.tsx`                                                      | 기본 전체 인증 사용자 audience, 선택적 login-ID 자동완성 수신자, 등급·행위 확인                                       | ShareSettingsDialog                                                                                     | SHR-002,SHR-006                         |
+| F-BE-219  | `backend/src/main/java/com/sdv/source/domain/ShareAudience.java`                                             | 공유 audience discriminator                                                                                           | ALL_AUTHENTICATED,NAMED_USERS                                                                           | SHR-002,SHR-003                         |
+| F-BE-220  | `backend/src/main/java/com/sdv/identity/application/IdentityRegistryService.java`                            | 검증 로그인 사용자 projection, 최소 디렉터리, bootstrap 상태, ADMIN clearance/status 변경과 revision fence            | observeValidatedLogin(),registryStatus(),searchDirectory(),updateAccess()                               | POL-002,SHR-002                         |
+| F-BE-221  | `backend/src/main/java/com/sdv/identity/infrastructure/persistence/entity/SdvUserEntity.java`                | issuer+subject 안정 결합, login/display label, nullable clearance, active, authorization revision, optimistic version | sdv_users                                                                                               | POL-002                                 |
+| F-BE-222  | `backend/src/main/java/com/sdv/identity/api/UserDirectoryController.java`                                    | 인증 USER용 제한된 login-ID 후보 검색                                                                                 | search()                                                                                                | SHR-002                                 |
+| F-BE-223  | `backend/src/main/java/com/sdv/identity/api/AdminUserAccessController.java`                                  | ADMIN 사용자 접근 목록/상세/clearance reset·갱신                                                                      | list(),get(),update()                                                                                   | POL-002                                 |
+| F-FE-021  | `frontend/src/pages/UserAccessAdminPage.tsx`                                                                 | ADMIN login-ID 검색 및 최대 열람 등급/활성 상태의 버전 충돌 안전 관리                                                 | UserAccessAdminPage                                                                                     | POL-002                                 |
+| F-FE-022  | `frontend/src/components/SessionBootstrap.tsx`                                                               | 인증 직후 `/api/me` projection bootstrap, bounded manual retry, 계정 전환/StrictMode stale completion 차단            | SessionBootstrap                                                                                        | AUT-002,POL-002                         |
+| F-INF-021 | `backend/src/main/resources/db/migration/V013__clearance_and_share_audience.sql`                             | `sdv_users`, 명시적 audience, 안정 recipient FK; legacy share는 NAMED_USERS로만 보존                                  | SQL migration                                                                                           | POL-002,SHR-002                         |
+| F-TST-011 | `backend/src/test/java/com/sdv/migration/V013ClearanceAudienceMigrationTest.java`                            | V012 대표 지정 공유를 V013으로 승격해 범위 비확장/nullable clearance 검증                                             | migrationPreservesLegacyNamedScope()                                                                    | POL-002,SHR-002                         |
+| F-TST-012 | `backend/src/test/java/com/sdv/source/ClassificationSharingContractTest.java`                                | 명시적 등급 순위와 audience/recipient 불변식 회귀                                                                     | explicitRanks(),audienceRules()                                                                         | POL-002,SHR-002                         |
+| F-TST-009 | `backend/src/test/java/com/sdv/source/SelectiveSharingE2ETest.java`                                          | A 게시/B 허용/C 거부·비공개 숨김·재연결 경계                                                                          | multiUserSharing(),sameIdentityReconnect(),differentIdentityRejected()                                  | SHR-001,SHR-002,SHR-003,SHR-005,SHR-006 |
+| F-TST-010 | `backend/src/test/java/com/sdv/source/SharedDownloadE2ETest.java`                                            | 다운로드 위임·철회 경합·내용 비보관 검증                                                                              | downloadWithoutNativePermission(),revokeDuringFetch(),binaryWithoutParser()                             | SHR-004                                 |
+| F-TST-013 | `backend/src/test/java/com/sdv/rag/application/RagAnswerAuthorizationFenceIntegrationTest.java`              | persisted issuer+subject/revision 기반 생성 중 downgrade/reset/disable/ABA와 rollback/unaffected-user release fence   | committedRequesterChangeWhileGenerationIsPausedReleasesNoAnswerAnalysisOrCitation()                     | POL-002,RAG-005                         |
 
 SourceShareController also lists owner shares; SourceUserController supports owner list/create/disconnect, with reconnect through existing OAuth flow. Admin policy may restrict but not expand the publisher's audience/action consent. SourceAccessContext is trusted internal context, never a user-issued capability.
 
-Existing EffectivePermissionService (F-BE-081) must evolve to requester SDV share permission AND publisher Source permission. Reuse SourceConsistencyGuard (F-BE-207) for live checks; bind evidence/index work to share/connection generations. Exact update wiring is M10B/M10C/M11/M12 work, not a completed claim.
+EffectivePermissionService (F-BE-081) combines requester audience/current persisted clearance and authorization revision with publisher Source permission. SourceConsistencyGuard (F-BE-207), evidence keys and release checks bind requester revision, share/connection generations and source version; this does not replace later live provider/model acceptance.
 
-F-INF-018's [next-unused-version] placeholder records a version collision without inventing a new migration. New sharing schema also uses an actual unused version when implemented; never edit applied V001–V009.
+F-INF-018's [next-unused-version] placeholder records a historical version collision without inventing a second migration. V013 is the actual next migration for clearance/audience after the existing V012; never edit applied V001–V012.
 
 STO-001 post-MVP original storage requires separate design/IDs, opt-in and retention/offline authorization decisions; keep retired writers retired. MVP-28 CSS is the first post-MVP task.

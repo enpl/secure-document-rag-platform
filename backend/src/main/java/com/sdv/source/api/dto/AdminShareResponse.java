@@ -9,6 +9,6 @@ import java.util.Set;
  * (ADMIN이 이 정보로 콘텐츠/다운로드를 우회할 수 없다).
  */
 public record AdminShareResponse(Long id, String publisherSubject, Long sourceId, Long documentId,
-        String classification, Set<String> allowedActions, Set<String> recipients, boolean adminBlocked,
+        String audience, String classification, Set<String> allowedActions, java.util.List<ShareRecipientResponse> recipients, boolean adminBlocked,
         String adminBlockReason, long generation, Instant createdAt, Instant updatedAt) {
 }

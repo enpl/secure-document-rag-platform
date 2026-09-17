@@ -2,6 +2,8 @@ package com.sdv.policy.application;
 
 import com.sdv.audit.application.AuditService;
 import com.sdv.common.model.UserContext;
+import com.sdv.identity.application.IdentityRegistryService;
+import com.sdv.identity.domain.UserAuthorizationSnapshot;
 import com.sdv.policy.application.OverlayPolicyService.OverlayVerdict;
 import com.sdv.policy.domain.AiRequestContext;
 import com.sdv.policy.domain.PolicyDecision;
@@ -19,6 +21,7 @@ import com.sdv.source.infrastructure.persistence.repository.SourceConnectionJpaR
 import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRepository;
 import com.sdv.source.infrastructure.persistence.repository.SourcePermissionJpaRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
@@ -113,6 +116,7 @@ public class EffectivePermissionService {
     private final OverlayPolicyService overlayPolicyService;
     private final AiUsagePolicyService aiUsagePolicyService;
     private final AuditService auditService;
+    private final IdentityRegistryService identityRegistryService;
 
     public EffectivePermissionService(
             SourceDocumentJpaRepository sourceDocumentJpaRepository,
@@ -124,6 +128,23 @@ public class EffectivePermissionService {
             OverlayPolicyService overlayPolicyService,
             AiUsagePolicyService aiUsagePolicyService,
             AuditService auditService) {
+        this(sourceDocumentJpaRepository, sourceConnectionJpaRepository, sourcePermissionJpaRepository,
+                documentShareJpaRepository, permissionFreshnessPolicy, securityLabelService, overlayPolicyService,
+                aiUsagePolicyService, auditService, null);
+    }
+
+    @Autowired
+    public EffectivePermissionService(
+            SourceDocumentJpaRepository sourceDocumentJpaRepository,
+            SourceConnectionJpaRepository sourceConnectionJpaRepository,
+            SourcePermissionJpaRepository sourcePermissionJpaRepository,
+            DocumentShareJpaRepository documentShareJpaRepository,
+            PermissionFreshnessPolicy permissionFreshnessPolicy,
+            SecurityLabelService securityLabelService,
+            OverlayPolicyService overlayPolicyService,
+            AiUsagePolicyService aiUsagePolicyService,
+            AuditService auditService,
+            IdentityRegistryService identityRegistryService) {
         this.sourceDocumentJpaRepository = sourceDocumentJpaRepository;
         this.sourceConnectionJpaRepository = sourceConnectionJpaRepository;
         this.sourcePermissionJpaRepository = sourcePermissionJpaRepository;
@@ -133,6 +154,15 @@ public class EffectivePermissionService {
         this.overlayPolicyService = overlayPolicyService;
         this.aiUsagePolicyService = aiUsagePolicyService;
         this.auditService = auditService;
+        this.identityRegistryService = identityRegistryService;
+    }
+
+    /** Current persisted requester authorization, used before any shared candidate/vector lookup. */
+    @Transactional(readOnly = true)
+    public Optional<UserAuthorizationSnapshot> currentSharedAuthorization(UserContext user) {
+        requireValidUser(user);
+        if (identityRegistryService == null) return Optional.empty();
+        return identityRegistryService.currentAuthorization(user.issuer(), user.subject());
     }
 
     /**
@@ -247,8 +277,16 @@ public class EffectivePermissionService {
             // Entity에 새 필드가 추가돼도 이 한 줄이 "무엇이든 바뀌면 거부"를 보장한다.
             return PolicyDecision.deny(PolicyReasonCode.STALE_AUTHORIZATION_CONTEXT);
         }
+        com.sdv.source.domain.ShareAudience audience;
+        try {
+            audience = com.sdv.source.domain.ShareAudience.valueOf(share.getAudience());
+        } catch (IllegalArgumentException | NullPointerException invalidAudience) {
+            return PolicyDecision.deny(PolicyReasonCode.SHARE_NOT_AUTHORIZED);
+        }
         List<String> recipients = documentShareJpaRepository.findRecipientSubjects(share.getId());
-        if (!recipients.contains(requester.subject())) {
+        if ((audience == com.sdv.source.domain.ShareAudience.NAMED_USERS
+                && !recipients.contains(requester.subject()))
+                || (audience == com.sdv.source.domain.ShareAudience.ALL_AUTHENTICATED && !recipients.isEmpty())) {
             return PolicyDecision.deny(PolicyReasonCode.SHARE_NOT_AUTHORIZED);
         }
         Set<String> allowedActions = Set.of(share.getAllowedActions().split(","));
@@ -303,6 +341,17 @@ public class EffectivePermissionService {
         SecurityLevel classification = parseSecurityLevelOrNull(share.getClassification());
         if (classification == null) {
             return PolicyDecision.deny(PolicyReasonCode.SHARE_NOT_AUTHORIZED);
+        }
+        if (identityRegistryService != null) {
+            Optional<UserAuthorizationSnapshot> authorization = identityRegistryService
+                    .currentAuthorization(requester.issuer(), requester.subject());
+            if (authorization.isEmpty() || !authorization.get().covers(classification)) {
+                return PolicyDecision.deny(PolicyReasonCode.SHARE_NOT_AUTHORIZED);
+            }
+            if (context.requesterAuthorizationRevision() < 0
+                    || authorization.get().authorizationRevision() != context.requesterAuthorizationRevision()) {
+                return PolicyDecision.deny(PolicyReasonCode.STALE_AUTHORIZATION_CONTEXT);
+            }
         }
         if (overlayPolicyService.evaluate(requester, context.requestedAction().name(), classification)
                 == OverlayVerdict.DENY) {
