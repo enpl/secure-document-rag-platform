@@ -233,6 +233,48 @@ class SourceDocumentJpaRepositoryTest {
                 .containsExactly("shared-active");
     }
 
+    @Test
+    void ownerPickerSearchFiltersBeforePagingAndTreatsLikeMetacharactersLiterally() {
+        Long sourceId = persistSource("owner-picker-search");
+        for (int index = 0; index < 30; index++) {
+            sourceDocumentJpaRepository.save(document(sourceId, "noise-" + index, "ACTIVE"));
+        }
+        sourceDocumentJpaRepository.save(documentNamed(sourceId, "literal-percent", "Budget%_2026\\final.txt"));
+        sourceDocumentJpaRepository.save(documentNamed(sourceId, "case-match", "QUARTERLY Report.txt"));
+        sourceDocumentJpaRepository.flush();
+        entityManager.clear();
+
+        Slice<SourceDocumentEntity> literal = sourceDocumentJpaRepository.findOwnedForPicker(
+                "owner-picker-search", sourceId, true, "%budget\\%\\_2026\\\\final%", PageRequest.of(0, 10));
+        Slice<SourceDocumentEntity> caseInsensitive = sourceDocumentJpaRepository.findOwnedForPicker(
+                "owner-picker-search", sourceId, true, "%quarterly report%", PageRequest.of(0, 10));
+
+        assertThat(literal.getContent()).extracting(SourceDocumentEntity::getName)
+                .containsExactly("Budget%_2026\\final.txt");
+        assertThat(caseInsensitive.getContent()).extracting(SourceDocumentEntity::getName)
+                .containsExactly("QUARTERLY Report.txt");
+    }
+
+    @Test
+    void ownerPickerSearchKeepsStableNameThenIdOrderingAndDoesNotCrossOwners() {
+        Long sourceId = persistSource("owner-picker-order");
+        Long otherSourceId = persistSource("other-picker-order");
+        SourceDocumentEntity first = sourceDocumentJpaRepository.save(
+                documentNamed(sourceId, "same-1", "same.txt"));
+        SourceDocumentEntity second = sourceDocumentJpaRepository.save(
+                documentNamed(sourceId, "same-2", "same.txt"));
+        sourceDocumentJpaRepository.save(documentNamed(otherSourceId, "other", "same.txt"));
+        sourceDocumentJpaRepository.flush();
+        entityManager.clear();
+
+        Slice<SourceDocumentEntity> result = sourceDocumentJpaRepository.findOwnedForPicker(
+                "owner-picker-order", sourceId, false, "", PageRequest.of(0, 10,
+                        org.springframework.data.domain.Sort.by("name").and(org.springframework.data.domain.Sort.by("id"))));
+
+        assertThat(result.getContent()).extracting(SourceDocumentEntity::getId)
+                .containsExactly(first.getId(), second.getId());
+    }
+
     private Long persistSource(String ownerSubject) {
         SourceConnectionEntity source = sourceConnectionJpaRepository.saveAndFlush(
                 new SourceConnectionEntity("GOOGLE_DRIVE", "Test Source", "ACTIVE", "INCREMENTAL", ownerSubject));
@@ -242,5 +284,10 @@ class SourceDocumentJpaRepositoryTest {
     private static SourceDocumentEntity document(Long sourceId, String externalId, String state) {
         return new SourceDocumentEntity(sourceId, externalId, "Doc " + externalId, "text/plain", null, null,
                 state, "PENDING", null);
+    }
+
+    private static SourceDocumentEntity documentNamed(Long sourceId, String externalId, String name) {
+        return new SourceDocumentEntity(sourceId, externalId, name, "text/plain", null, null,
+                "ACTIVE", "PENDING", null);
     }
 }

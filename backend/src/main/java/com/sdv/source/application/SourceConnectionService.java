@@ -20,6 +20,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -242,13 +243,27 @@ public class SourceConnectionService {
      */
     @Transactional(readOnly = true)
     public FilesPage listFiles(Long sourceId, String ownerSubject, int page, int size) {
+        return listFiles(sourceId, ownerSubject, page, size, null);
+    }
+
+    @Transactional(readOnly = true)
+    public FilesPage listFiles(Long sourceId, String ownerSubject, int page, int size, String filenameQuery) {
         sourceConnectionJpaRepository.findByIdAndOwnerSubject(sourceId, ownerSubject)
                 .orElseThrow(() -> new NotFoundException("Source connection not found"));
         Pageable pageable = PageRequest.of(page, size,
                 Sort.by(Sort.Direction.ASC, "name").and(Sort.by(Sort.Direction.ASC, "id")));
+        String pattern = toLiteralContainsPattern(filenameQuery);
         Slice<SourceDocumentEntity> slice = sourceDocumentJpaRepository.findOwnedForPicker(ownerSubject, sourceId,
-                pageable);
+                pattern != null, pattern == null ? "" : pattern, pageable);
         return new FilesPage(slice.getContent(), slice.hasNext());
+    }
+
+    private static String toLiteralContainsPattern(String query) {
+        if (query == null || query.isBlank()) {
+            return null;
+        }
+        String normalized = query.trim().toLowerCase(Locale.ROOT);
+        return "%" + normalized.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
     }
 
     /** {@link #listFiles}의 반환 항목 - Repository의 원시 Count Query 부재를 그대로 반영한다(원시 총계 비노출). */

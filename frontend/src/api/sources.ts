@@ -138,6 +138,11 @@ export function listMyDriveFiles(
   sourceId: number,
   page: number,
   size: number,
+  query?: string,
+  signal?: AbortSignal,
 ): Promise<SourceFilesPageResponse> {
-  return client.get<SourceFilesPageResponse>(`/sources/${sourceId}/files?page=${page}&size=${size}`)
+  const params = new URLSearchParams({ page: String(page), size: String(size) })
+  const normalizedQuery = query?.trim()
+  if (normalizedQuery) params.set('q', normalizedQuery)
+  return client.get<SourceFilesPageResponse>(`/sources/${sourceId}/files?${params.toString()}`, signal)
 }

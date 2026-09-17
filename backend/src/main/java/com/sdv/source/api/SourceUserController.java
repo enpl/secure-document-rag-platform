@@ -56,6 +56,7 @@ public class SourceUserController {
     private static final String SYNC_FAILED_CODE = "SYNC_FAILED";
     private static final int DEFAULT_PAGE_SIZE = 50;
     private static final int MAX_PAGE_SIZE = 200;
+    private static final int MAX_FILENAME_QUERY_LENGTH = 200;
 
     private final SourceConnectionService sourceConnectionService;
     private final SourceSyncService sourceSyncService;
@@ -106,13 +107,26 @@ public class SourceUserController {
      */
     @GetMapping("/{id}/files")
     public SourceFilesPageResponse files(@PathVariable Long id,
-            @RequestParam(required = false) String page, @RequestParam(required = false) String size) {
+            @RequestParam(required = false) String page, @RequestParam(required = false) String size,
+            @RequestParam(required = false) String q) {
         String ownerSubject = currentUserProvider.getCurrentUser().subject();
         int parsedPage = parseBoundedInt(page, 0, 0, Integer.MAX_VALUE);
         int parsedSize = parseBoundedInt(size, DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE);
-        var result = sourceConnectionService.listFiles(id, ownerSubject, parsedPage, parsedSize);
+        var result = sourceConnectionService.listFiles(id, ownerSubject, parsedPage, parsedSize,
+                normalizeFilenameQuery(q));
         List<SourceFileResponse> items = result.items().stream().map(SourceUserController::toFileResponse).toList();
         return new SourceFilesPageResponse(items, result.hasMore());
+    }
+
+    private static String normalizeFilenameQuery(String value) {
+        if (value == null) {
+            return null;
+        }
+        if (value.length() > MAX_FILENAME_QUERY_LENGTH || value.chars().anyMatch(Character::isISOControl)) {
+            throw new InvalidPickerQueryException();
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private static SourceFileResponse toFileResponse(SourceDocumentEntity entity) {

@@ -107,9 +107,13 @@ export function MyDrivePage() {
   // ---------------- 비공개 파일 선택기 ----------------
   const [browsingSourceId, setBrowsingSourceId] = useState<number | null>(null)
   const [pickerPage, setPickerPage] = useState(0)
+  const [pickerQueryDraft, setPickerQueryDraft] = useState('')
+  const [pickerQuery, setPickerQuery] = useState('')
+  const [pickerAttempt, setPickerAttempt] = useState(0)
   const [picker, setPicker] = useState<PickerState>({ kind: 'idle' })
   const [selected, setSelected] = useState<Map<number, ShareTarget>>(new Map())
   const pickerFetchSeq = useRef(0)
+  const pickerControllerRef = useRef<AbortController | null>(null)
 
   // ---------------- 공유 대화상자 / 내가 게시한 공유 ----------------
   const [dialog, setDialog] = useState<DialogState>(null)
@@ -169,6 +173,7 @@ export function MyDrivePage() {
       window.removeEventListener('pageshow', handlePageShow)
       authorizeControllerRef.current?.abort()
       connectionsControllerRef.current?.abort()
+      pickerControllerRef.current?.abort()
       authorizationAttemptSeq.current += 1
       connectionsFetchSeq.current += 1
       pendingAuthorizationRef.current = null
@@ -184,17 +189,35 @@ export function MyDrivePage() {
       return
     }
     const requestId = ++pickerFetchSeq.current
+    pickerControllerRef.current?.abort()
+    const controller = new AbortController()
+    pickerControllerRef.current = controller
     setPicker({ kind: 'loading' })
-    listMyDriveFiles(apiClient, browsingSourceId, pickerPage, PICKER_PAGE_SIZE)
+    listMyDriveFiles(apiClient, browsingSourceId, pickerPage, PICKER_PAGE_SIZE, pickerQuery, controller.signal)
       .then((page) => {
-        if (pickerFetchSeq.current !== requestId) return
+        if (controller.signal.aborted || pickerFetchSeq.current !== requestId) return
         setPicker({ kind: 'loaded', items: page.items, hasMore: page.hasMore })
       })
       .catch((error: unknown) => {
-        if (pickerFetchSeq.current !== requestId) return
+        if (isAbortError(error) || controller.signal.aborted || pickerFetchSeq.current !== requestId) return
         setPicker({ kind: 'error', message: describeSourceError(error) })
       })
-  }, [apiClient, browsingSourceId, pickerPage])
+    return () => controller.abort()
+  }, [apiClient, browsingSourceId, pickerPage, pickerQuery, pickerAttempt])
+
+  function submitPickerQuery(event: FormEvent) {
+    event.preventDefault()
+    setPickerPage(0)
+    setPickerQuery(pickerQueryDraft.trim())
+    setPickerAttempt((attempt) => attempt + 1)
+  }
+
+  function clearPickerQuery() {
+    setPickerQueryDraft('')
+    setPickerQuery('')
+    setPickerPage(0)
+    setPickerAttempt((attempt) => attempt + 1)
+  }
 
   async function handleCreate(event: FormEvent) {
     event.preventDefault()
@@ -314,6 +337,7 @@ export function MyDrivePage() {
       setConfirmingId(null)
       if (browsingSourceId === source.id) {
         setBrowsingSourceId(null)
+        clearSelection()
       }
       refreshConnections()
     } catch (error) {
@@ -474,6 +498,11 @@ export function MyDrivePage() {
               onConfirmDisconnect={() => handleDisconnect(source)}
               onSync={() => handleSync(source)}
               onBrowse={() => {
+                if (browsingSourceId !== source.id) {
+                  clearSelection()
+                  setPickerQueryDraft('')
+                  setPickerQuery('')
+                }
                 setBrowsingSourceId(source.id)
                 setPickerPage(0)
               }}
@@ -482,21 +511,8 @@ export function MyDrivePage() {
         </ul>
       )}
 
-      {browsingSource && (
-        <FilePicker
-          source={browsingSource}
-          picker={picker}
-          page={pickerPage}
-          selected={selected}
-          onToggle={(file) => toggleSelected(browsingSource, file)}
-          onPrevious={() => setPickerPage((p) => Math.max(0, p - 1))}
-          onNext={() => setPickerPage((p) => p + 1)}
-          onClose={() => setBrowsingSourceId(null)}
-        />
-      )}
-
       {selected.size > 0 && (
-        <div className="status-banner form-row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="status-banner selection-toolbar">
           <span>선택한 파일 {selected.size}개</span>
           <div className="form-row" style={{ margin: 0 }}>
             <button type="button" className="btn" onClick={clearSelection}>
@@ -511,6 +527,25 @@ export function MyDrivePage() {
             </button>
           </div>
         </div>
+      )}
+
+      {browsingSource && (
+        <FilePicker
+          source={browsingSource}
+          picker={picker}
+          page={pickerPage}
+          queryDraft={pickerQueryDraft}
+          committedQuery={pickerQuery}
+          selected={selected}
+          onQueryDraftChange={setPickerQueryDraft}
+          onSubmitQuery={submitPickerQuery}
+          onClearQuery={clearPickerQuery}
+          onRetry={() => setPickerAttempt((attempt) => attempt + 1)}
+          onToggle={(file) => toggleSelected(browsingSource, file)}
+          onPrevious={() => setPickerPage((p) => Math.max(0, p - 1))}
+          onNext={() => setPickerPage((p) => p + 1)}
+          onClose={() => setBrowsingSourceId(null)}
+        />
       )}
 
       <h2>내가 게시한 공유</h2>
@@ -715,7 +750,13 @@ function FilePicker({
   source,
   picker,
   page,
+  queryDraft,
+  committedQuery,
   selected,
+  onQueryDraftChange,
+  onSubmitQuery,
+  onClearQuery,
+  onRetry,
   onToggle,
   onPrevious,
   onNext,
@@ -724,54 +765,106 @@ function FilePicker({
   source: SourceResponse
   picker: PickerState
   page: number
+  queryDraft: string
+  committedQuery: string
   selected: Map<number, ShareTarget>
+  onQueryDraftChange: (value: string) => void
+  onSubmitQuery: (event: FormEvent) => void
+  onClearQuery: () => void
+  onRetry: () => void
   onToggle: (file: SourceFileResponse) => void
   onPrevious: () => void
   onNext: () => void
   onClose: () => void
 }) {
   return (
-    <div className="card">
-      <div className="form-row" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 0 }}>
-        <h2 style={{ margin: 0 }}>{source.name} - 파일 선택</h2>
+    <section className="card file-picker" aria-label={`${source.name} 파일 선택`}>
+      <div className="file-picker__heading">
+        <div>
+          <h2>{source.name} - 파일 선택</h2>
+          <p className="text-secondary">
+            동기화된 비공개 Metadata Catalog만 검색합니다. Google 전체를 새로 탐색하거나 검색 결과를 자동 공유하지
+            않습니다.
+          </p>
+        </div>
         <button type="button" className="btn" onClick={onClose}>
           닫기
         </button>
       </div>
       <p className="text-secondary">
-        폴더 구조 없이 평면 목록으로 보여줍니다(이번 화면의 알려진 한계 - 전체 Drive 크롤링/폴더 탐색은 아직
-        구현하지 않았습니다). 여기서 체크만 해서는 아무것도 공유되지 않습니다.
+        폴더 구조 없이 평면 목록으로 보여줍니다. 여기서 체크만 해서는 아무것도 공유되지 않으며, 공유는 별도 확인
+        단계가 필요합니다.
       </p>
+
+      <form className="file-picker__toolbar" onSubmit={onSubmitQuery}>
+        <label className="form-label" htmlFor="owner-file-query">동기화된 파일 이름 검색</label>
+        <div className="form-row">
+          <input
+            id="owner-file-query"
+            className="input"
+            value={queryDraft}
+            onChange={(event) => onQueryDraftChange(event.target.value)}
+            maxLength={200}
+            placeholder="파일 이름 일부"
+          />
+          <button type="submit" className="btn btn--primary">파일 검색</button>
+          {(queryDraft || committedQuery) && (
+            <button type="button" className="btn" onClick={onClearQuery}>검색 지우기</button>
+          )}
+        </div>
+        {committedQuery && <span className="text-secondary">“{committedQuery}” 검색 결과</span>}
+      </form>
 
       {picker.kind === 'idle' || picker.kind === 'loading' ? (
         <div className="status-banner">파일 목록을 불러오는 중입니다...</div>
       ) : picker.kind === 'error' ? (
-        <div className="status-banner status-banner--error">{picker.message}</div>
+        <div className="status-banner status-banner--error">
+          <p>{picker.message}</p>
+          <button type="button" className="btn" onClick={onRetry}>같은 조건으로 다시 시도</button>
+        </div>
       ) : picker.items.length === 0 ? (
-        <div className="status-banner">이 연결에 표시할 파일이 없습니다.</div>
+        <div className="status-banner">
+          {committedQuery ? '이름이 일치하는 동기화된 파일이 없습니다.' : '이 연결에 표시할 파일이 없습니다.'}
+        </div>
       ) : (
-        <ul className="file-list">
+        <div className="file-table-wrap">
+          <table className="file-table">
+            <thead>
+              <tr>
+                <th scope="col">선택</th>
+                <th scope="col">파일 이름</th>
+                <th scope="col">형식</th>
+                <th scope="col">색인 상태</th>
+                <th scope="col">수정 시각</th>
+              </tr>
+            </thead>
+            <tbody>
           {picker.items.map((file) => (
-            <li key={file.documentId} className="file-row">
-              <label className="checkbox-row file-row__meta">
-                <input
+              <tr key={file.documentId}>
+                <td data-label="선택">
+                  <input
                   type="checkbox"
                   checked={selected.has(file.documentId)}
                   onChange={() => onToggle(file)}
                   aria-label={`${file.name} 선택`}
-                />
-                <span className="file-row__name">{file.name}</span>
-                <span className="text-secondary">{file.mimeType}</span>
-              </label>
-            </li>
+                  />
+                </td>
+                <td data-label="파일 이름" className="file-table__name">{file.name}</td>
+                <td data-label="형식">{file.mimeType}</td>
+                <td data-label="색인 상태">{describePickerIndexStatus(file.indexStatus)}</td>
+                <td data-label="수정 시각">{formatPickerModifiedAt(file.modifiedAt)}</td>
+              </tr>
           ))}
-        </ul>
+            </tbody>
+          </table>
+        </div>
       )}
 
-      <div className="form-row">
+      <div className="file-picker__pagination" aria-label="파일 목록 페이지">
         <button type="button" className="btn" onClick={onPrevious} disabled={page === 0}>
           이전
         </button>
+        <span className="text-secondary" aria-live="polite">{page + 1}페이지</span>
         <button
           type="button"
           className="btn"
@@ -781,8 +874,26 @@ function FilePicker({
           다음
         </button>
       </div>
-    </div>
+    </section>
   )
+}
+
+function describePickerIndexStatus(status: string): string {
+  const labels: Record<string, string> = {
+    PENDING: '색인 대기 (선택 가능)',
+    INDEXED: '색인됨',
+    SKIPPED_UNSUPPORTED: 'AI 색인 미지원',
+    SKIPPED_NO_TEXT: 'AI용 텍스트 없음',
+    FAILED: '색인 실패',
+    STALE: '재색인 필요',
+  }
+  return labels[status] ?? '상태 확인 필요'
+}
+
+function formatPickerModifiedAt(value: string | null): string {
+  if (!value) return '확인 불가'
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? '확인 불가' : parsed.toLocaleString()
 }
 
 function ShareRow({

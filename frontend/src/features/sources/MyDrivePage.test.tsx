@@ -108,6 +108,7 @@ function renderPageWithCallback(flag: 'success' | 'failed') {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockedListFiles.mockReset()
   mockedUseAuth.mockReturnValue(asAuth({ subject: 'user-a-subject', isAdmin: false }))
   mockedListShares.mockResolvedValue([])
 })
@@ -445,6 +446,82 @@ describe('MyDrivePage connection management', () => {
 })
 
 describe('MyDrivePage private file picker never publishes on its own', () => {
+  it('searches the synchronized owner catalog, resets to page zero, and preserves prior selections', async () => {
+    mockedListSources.mockResolvedValue([connectedSource()])
+    mockedListFiles
+      .mockResolvedValueOnce(filesPage({ items: [pickerFile({ documentId: 1, name: '첫 페이지.txt' })], hasMore: true }))
+      .mockResolvedValueOnce(filesPage({ items: [pickerFile({ documentId: 2, name: '둘째 페이지.txt' })] }))
+      .mockResolvedValueOnce(filesPage({ items: [pickerFile({ documentId: 3, name: '분기 보고서.txt' })] }))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('내 드라이브')).toBeInTheDocument())
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: '파일 보기' }))
+    await waitFor(() => expect(screen.getByLabelText('첫 페이지.txt 선택')).toBeInTheDocument())
+    await user.click(screen.getByLabelText('첫 페이지.txt 선택'))
+    await user.click(screen.getByRole('button', { name: '다음' }))
+    await waitFor(() => expect(screen.getByText('둘째 페이지.txt')).toBeInTheDocument())
+
+    await user.type(screen.getByLabelText('동기화된 파일 이름 검색'), '분기 보고서')
+    await user.click(screen.getByRole('button', { name: '파일 검색' }))
+
+    await waitFor(() =>
+      expect(mockedListFiles).toHaveBeenLastCalledWith(
+        expect.anything(), 1, 0, 50, '분기 보고서', expect.any(AbortSignal),
+      ),
+    )
+    expect(screen.getByText('선택한 파일 1개')).toBeInTheDocument()
+    expect(screen.getByText('1페이지')).toBeInTheDocument()
+  })
+
+  it('aborts an obsolete catalog request and clears search without selecting or sharing results', async () => {
+    mockedListSources.mockResolvedValue([connectedSource()])
+    let firstSignal: AbortSignal | undefined
+    mockedListFiles.mockImplementationOnce((_client, _sourceId, _page, _size, _query, signal) => {
+      firstSignal = signal
+      return new Promise<SourceFilesPageResponse>(() => undefined)
+    })
+    mockedListFiles.mockResolvedValueOnce(filesPage({ items: [pickerFile({ name: '검색 결과.txt' })] }))
+    mockedListFiles.mockResolvedValueOnce(filesPage({ items: [pickerFile({ name: '전체 목록.txt' })] }))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('내 드라이브')).toBeInTheDocument())
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: '파일 보기' }))
+    await user.type(screen.getByLabelText('동기화된 파일 이름 검색'), '검색 결과')
+    await user.click(screen.getByRole('button', { name: '파일 검색' }))
+
+    await waitFor(() => expect(firstSignal?.aborted).toBe(true))
+    await waitFor(() => expect(screen.getByText('검색 결과.txt')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: '검색 지우기' }))
+
+    await waitFor(() => expect(screen.getByText('전체 목록.txt')).toBeInTheDocument())
+    expect(mockedCreateShare).not.toHaveBeenCalled()
+    expect(screen.queryByText(/선택한 파일/)).not.toBeInTheDocument()
+  })
+
+  it('clears selections when the owner switches to another source', async () => {
+    mockedListSources.mockResolvedValue([
+      connectedSource({ id: 1, name: '첫 Drive' }),
+      connectedSource({ id: 2, name: '둘째 Drive' }),
+    ])
+    mockedListFiles
+      .mockResolvedValueOnce(filesPage({ items: [pickerFile({ documentId: 11, name: '첫 파일.txt' })] }))
+      .mockResolvedValueOnce(filesPage({ items: [pickerFile({ documentId: 22, name: '둘째 파일.txt' })] }))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('첫 Drive')).toBeInTheDocument())
+    const user = userEvent.setup()
+    await user.click(screen.getAllByRole('button', { name: '파일 보기' })[0])
+    await waitFor(() => expect(screen.getByLabelText('첫 파일.txt 선택')).toBeInTheDocument())
+    await user.click(screen.getByLabelText('첫 파일.txt 선택'))
+    expect(screen.getByText('선택한 파일 1개')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '파일 보기' }))
+    await waitFor(() => expect(screen.getByText('둘째 파일.txt')).toBeInTheDocument())
+    expect(screen.queryByText(/선택한 파일/)).not.toBeInTheDocument()
+  })
+
   it('lets the owner browse and check files without ever calling createShare', async () => {
     mockedListSources.mockResolvedValue([connectedSource()])
     mockedListFiles.mockResolvedValue(filesPage({ items: [pickerFile()] }))
@@ -453,8 +530,14 @@ describe('MyDrivePage private file picker never publishes on its own', () => {
     await waitFor(() => expect(screen.getByText('내 드라이브')).toBeInTheDocument())
     await userEvent.setup().click(screen.getByRole('button', { name: '파일 보기' }))
 
-    await waitFor(() => expect(mockedListFiles).toHaveBeenCalledWith(expect.anything(), 1, 0, 50))
+    await waitFor(() => expect(mockedListFiles).toHaveBeenCalledWith(
+      expect.anything(), 1, 0, 50, '', expect.any(AbortSignal),
+    ))
     await waitFor(() => expect(screen.getByLabelText('보고서.pdf 선택')).toBeInTheDocument())
+    expect(screen.getByRole('columnheader', { name: '파일 이름' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '형식' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '색인 상태' })).toBeInTheDocument()
+    expect(screen.getByText('색인 대기 (선택 가능)')).toBeInTheDocument()
 
     await userEvent.setup().click(screen.getByLabelText('보고서.pdf 선택'))
     await userEvent.setup().click(screen.getByLabelText('보고서.pdf 선택')) // 체크 해제 - 빈 선택으로 되돌아온다.
@@ -475,7 +558,9 @@ describe('MyDrivePage private file picker never publishes on its own', () => {
     mockedListFiles.mockResolvedValueOnce(filesPage({ items: [pickerFile({ documentId: 101, name: '두번째.pdf' })] }))
     await userEvent.setup().click(screen.getByRole('button', { name: '다음' }))
 
-    await waitFor(() => expect(mockedListFiles).toHaveBeenLastCalledWith(expect.anything(), 1, 1, 50))
+    await waitFor(() => expect(mockedListFiles).toHaveBeenLastCalledWith(
+      expect.anything(), 1, 1, 50, '', expect.any(AbortSignal),
+    ))
     await waitFor(() => expect(screen.getByText('두번째.pdf')).toBeInTheDocument())
     expect(screen.getByText(/폴더 구조 없이 평면 목록으로/)).toBeInTheDocument()
   })
