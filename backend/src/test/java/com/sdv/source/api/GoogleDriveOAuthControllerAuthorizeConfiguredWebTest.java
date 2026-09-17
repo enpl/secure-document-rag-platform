@@ -48,6 +48,25 @@ class GoogleDriveOAuthControllerAuthorizeConfiguredWebTest {
     private SourceConnectionJpaRepository sourceConnectionJpaRepository;
 
     @Test
+    void authorizeAsOwningUserUsesServerOAuthClientAndReturnsAuthorizationUrl() throws Exception {
+        SourceConnectionEntity source = sourceConnectionJpaRepository.saveAndFlush(
+                new SourceConnectionEntity("GOOGLE_DRIVE", "Ordinary User Source", "ACTIVE", "FULL",
+                        "sdv-user-a"));
+
+        MvcResult result = mockMvc.perform(
+                        get("/api/admin/sources/google/authorize").param("sourceId", String.valueOf(source.getId()))
+                                .with(jwt().jwt(builder -> builder.subject("sdv-user-a"))
+                                        .authorities(new SimpleGrantedAuthority("ROLE_USER"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.authorizationUrl").isNotEmpty())
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString()).contains("accounts.google.com");
+        assertThat(result.getResponse().getHeader("Set-Cookie"))
+                .contains("sdv_google_oauth_binding=");
+    }
+
+    @Test
     void authorizeAsOwningAdminReturnsAuthorizationUrlAndIssuesTheBindingCookie() throws Exception {
         SourceConnectionEntity source = sourceConnectionJpaRepository.saveAndFlush(
                 new SourceConnectionEntity("GOOGLE_DRIVE", "Configured Source", "ACTIVE", "FULL",

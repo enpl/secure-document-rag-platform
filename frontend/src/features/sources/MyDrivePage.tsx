@@ -19,6 +19,7 @@ import { SourceSyncPanel } from './SourceSyncPanel'
 import type { SyncOutcome } from './SourceSyncPanel'
 import { ShareSettingsDialog } from './ShareSettingsDialog'
 import type { ShareTarget } from './ShareSettingsDialog'
+import { navigateToGoogleAuthorization } from './googleAuthorizationNavigation'
 
 const PICKER_PAGE_SIZE = 50
 
@@ -39,6 +40,28 @@ type SharesState =
   | { kind: 'loaded'; shares: ShareResponse[] }
 
 type DialogState = { mode: 'create'; files: ShareTarget[] } | { mode: 'edit'; share: ShareResponse } | null
+
+type CallbackHint = 'success' | 'failed' | null
+
+type AuthorizationReturnState =
+  | { kind: 'idle' }
+  | { kind: 'checking' }
+  | { kind: 'confirmed'; message: string }
+  | { kind: 'incomplete'; message: string }
+  | { kind: 'failed'; message: string }
+  | { kind: 'error'; message: string }
+
+interface PendingAuthorizationAttempt {
+  id: number
+  sourceId: number
+  subject: string | null
+  credentialPresentBefore: boolean
+}
+
+interface AuthorizationRecoveryContext {
+  hint: CallbackHint
+  attempt: PendingAuthorizationAttempt | null
+}
 
 /**
  * M16C 신규(SHR-001/002/003, `docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.1/§2A.13) -
@@ -69,7 +92,17 @@ export function MyDrivePage() {
   const [syncingId, setSyncingId] = useState<number | null>(null)
   const [syncOutcomes, setSyncOutcomes] = useState<Record<number, SyncOutcome>>({})
   const [callbackHint] = useState(() => toCallbackHint(searchParams.get('googleConnect')))
+  const [authorizationReturn, setAuthorizationReturn] = useState<AuthorizationReturnState>({ kind: 'idle' })
   const connectionsFetchSeq = useRef(0)
+  const mountedRef = useRef(false)
+  const currentSubjectRef = useRef(subject)
+  const authorizationAttemptSeq = useRef(0)
+  const pendingAuthorizationRef = useRef<PendingAuthorizationAttempt | null>(null)
+  const recoveryContextRef = useRef<AuthorizationRecoveryContext | null>(null)
+  const recoveryInFlightRef = useRef(false)
+  const authorizeControllerRef = useRef<AbortController | null>(null)
+  const connectionsControllerRef = useRef<AbortController | null>(null)
+  currentSubjectRef.current = subject
 
   // ---------------- 비공개 파일 선택기 ----------------
   const [browsingSourceId, setBrowsingSourceId] = useState<number | null>(null)
@@ -86,13 +119,16 @@ export function MyDrivePage() {
 
   function fetchConnections() {
     const requestId = ++connectionsFetchSeq.current
-    listMyDriveSources(apiClient)
+    connectionsControllerRef.current?.abort()
+    const controller = new AbortController()
+    connectionsControllerRef.current = controller
+    listMyDriveSources(apiClient, controller.signal)
       .then((sources) => {
-        if (connectionsFetchSeq.current !== requestId) return
+        if (!mountedRef.current || controller.signal.aborted || connectionsFetchSeq.current !== requestId) return
         setConnections({ kind: 'loaded', sources })
       })
       .catch((error: unknown) => {
-        if (connectionsFetchSeq.current !== requestId) return
+        if (isAbortError(error) || !mountedRef.current || connectionsFetchSeq.current !== requestId) return
         setConnections({ kind: 'error', message: describeSourceError(error) })
       })
   }
@@ -109,21 +145,38 @@ export function MyDrivePage() {
   }
 
   useEffect(() => {
-    fetchConnections()
+    mountedRef.current = true
     fetchShares()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- apiClient만 실제로 바뀌는 의존성이다.
-  }, [apiClient])
 
-  useEffect(() => {
     if (callbackHint === null) {
-      return
+      fetchConnections()
+    } else {
+      const next = new URLSearchParams(searchParams)
+      next.delete('googleConnect')
+      setSearchParams(next, { replace: true })
+      void reconcileAuthorizationReturn({ hint: callbackHint, attempt: null })
     }
-    const next = new URLSearchParams(searchParams)
-    next.delete('googleConnect')
-    setSearchParams(next, { replace: true })
-    fetchConnections()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- callbackHint는 Mount 시점 한 번만 값이 정해진다.
-  }, [callbackHint])
+
+    function handlePageShow() {
+      const attempt = pendingAuthorizationRef.current
+      if (attempt === null) return
+      void reconcileAuthorizationReturn({ hint: null, attempt })
+    }
+
+    window.addEventListener('pageshow', handlePageShow)
+    return () => {
+      mountedRef.current = false
+      window.removeEventListener('pageshow', handlePageShow)
+      authorizeControllerRef.current?.abort()
+      connectionsControllerRef.current?.abort()
+      authorizationAttemptSeq.current += 1
+      connectionsFetchSeq.current += 1
+      pendingAuthorizationRef.current = null
+      recoveryInFlightRef.current = false
+    }
+    // callbackHint는 이 Mount의 최초 query에서 고정되고 App.tsx의 key={subject}가 계정 전환 시 Remount한다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiClient, subject])
 
   useEffect(() => {
     if (browsingSourceId === null) {
@@ -163,14 +216,93 @@ export function MyDrivePage() {
 
   async function handleConnect(source: SourceResponse) {
     if (connectingId !== null) return
+    authorizeControllerRef.current?.abort()
+    const controller = new AbortController()
+    authorizeControllerRef.current = controller
+    const attempt: PendingAuthorizationAttempt = {
+      id: ++authorizationAttemptSeq.current,
+      sourceId: source.id,
+      subject,
+      credentialPresentBefore: source.credentialPresent,
+    }
+    pendingAuthorizationRef.current = attempt
     setConnectingId(source.id)
+    setAuthorizationReturn({ kind: 'idle' })
     clearRowError(source.id)
     try {
-      const result = await authorizeGoogleSource(apiClient, source.id)
-      window.location.href = result.authorizationUrl
+      const result = await authorizeGoogleSource(apiClient, source.id, controller.signal)
+      if (!isCurrentAuthorizationAttempt(attempt, controller)) return
+      navigateToGoogleAuthorization(result.authorizationUrl)
     } catch (error) {
+      if (isAbortError(error) || !isCurrentAuthorizationAttempt(attempt, controller)) return
+      pendingAuthorizationRef.current = null
       setRowError(source.id, describeSourceError(error))
       setConnectingId(null)
+    }
+  }
+
+  function isCurrentAuthorizationAttempt(attempt: PendingAuthorizationAttempt, controller: AbortController) {
+    return (
+      mountedRef.current &&
+      !controller.signal.aborted &&
+      authorizationAttemptSeq.current === attempt.id &&
+      currentSubjectRef.current === attempt.subject &&
+      pendingAuthorizationRef.current?.id === attempt.id
+    )
+  }
+
+  async function reconcileAuthorizationReturn(context: AuthorizationRecoveryContext) {
+    if (recoveryInFlightRef.current) return
+    recoveryInFlightRef.current = true
+    recoveryContextRef.current = context
+    connectionsControllerRef.current?.abort()
+    const controller = new AbortController()
+    connectionsControllerRef.current = controller
+    const requestId = ++connectionsFetchSeq.current
+    const expectedSubject = currentSubjectRef.current
+    setAuthorizationReturn({ kind: 'checking' })
+    if (context.attempt !== null) {
+      setConnectingId(context.attempt.sourceId)
+    }
+
+    try {
+      const sources = await listMyDriveSources(apiClient, controller.signal)
+      if (
+        !mountedRef.current ||
+        controller.signal.aborted ||
+        connectionsFetchSeq.current !== requestId ||
+        currentSubjectRef.current !== expectedSubject
+      ) {
+        return
+      }
+      setConnections({ kind: 'loaded', sources })
+      setAuthorizationReturn(describeAuthorizationReturn(context, sources))
+      pendingAuthorizationRef.current = null
+    } catch (error) {
+      if (
+        isAbortError(error) ||
+        !mountedRef.current ||
+        connectionsFetchSeq.current !== requestId ||
+        currentSubjectRef.current !== expectedSubject
+      ) {
+        return
+      }
+      setAuthorizationReturn({
+        kind: 'error',
+        message: `Google 연결 상태를 확인하지 못했습니다. ${describeSourceError(error)}`,
+      })
+    } finally {
+      if (mountedRef.current && connectionsFetchSeq.current === requestId) {
+        recoveryInFlightRef.current = false
+        setConnectingId(null)
+      }
+    }
+  }
+
+  function retryAuthorizationReconciliation() {
+    const context = recoveryContextRef.current
+    if (context !== null) {
+      void reconcileAuthorizationReturn(context)
     }
   }
 
@@ -267,12 +399,23 @@ export function MyDrivePage() {
 
       <ShareIdCard subject={subject} />
 
-      {callbackHint === 'success' && (
-        <div className="status-banner">Google 연결 요청을 처리했습니다. 아래 목록에서 연결 상태를 확인해 주세요.</div>
+      {authorizationReturn.kind === 'checking' && (
+        <div className="status-banner">Google 연결 상태를 다시 확인하는 중입니다...</div>
       )}
-      {callbackHint === 'failed' && (
+      {(authorizationReturn.kind === 'confirmed' || authorizationReturn.kind === 'incomplete') && (
+        <div className="status-banner">{authorizationReturn.message}</div>
+      )}
+      {authorizationReturn.kind === 'failed' && (
+        <div className="status-banner status-banner--error">{authorizationReturn.message}</div>
+      )}
+      {authorizationReturn.kind === 'error' && (
         <div className="status-banner status-banner--error">
-          Google 연결에 실패했거나 취소되었습니다. 다시 시도해 주세요.
+          <p style={{ margin: 0 }}>{authorizationReturn.message}</p>
+          <div className="form-row">
+            <button type="button" className="btn" onClick={retryAuthorizationReconciliation}>
+              연결 상태 다시 확인
+            </button>
+          </div>
         </div>
       )}
 
@@ -698,8 +841,59 @@ function describeFileLabel(share: ShareResponse, picker: PickerState): string {
   return `문서 #${share.documentId} (연결 #${share.sourceId})`
 }
 
-function toCallbackHint(flag: string | null): 'success' | 'failed' | null {
+function toCallbackHint(flag: string | null): CallbackHint {
   return flag === 'success' || flag === 'failed' ? flag : null
+}
+
+function describeAuthorizationReturn(
+  context: AuthorizationRecoveryContext,
+  sources: SourceResponse[],
+): AuthorizationReturnState {
+  if (context.hint === 'failed') {
+    return {
+      kind: 'failed',
+      message: 'Google 연결에 실패했거나 취소되었습니다. 기존 연결 정보는 변경하지 않았습니다. 다시 시도할 수 있습니다.',
+    }
+  }
+
+  if (context.attempt !== null) {
+    const current = sources.find((source) => source.id === context.attempt?.sourceId)
+    if (
+      !context.attempt.credentialPresentBefore &&
+      current?.status === 'ACTIVE' &&
+      current.credentialPresent
+    ) {
+      return {
+        kind: 'confirmed',
+        message: 'Google 연결 정보가 SDV에 저장되었습니다. 실제 Google 접근 가능 여부는 동기화할 때 다시 확인합니다.',
+      }
+    }
+    return {
+      kind: 'incomplete',
+      message:
+        'Google 연결 완료를 확인하지 못했습니다. 취소, Google 거부 또는 다른 오류였는지는 SDV가 구분할 수 없습니다. 기존 연결 정보는 그대로 유지되며 다시 시도할 수 있습니다.',
+    }
+  }
+
+  const hasStoredConnection = sources.some(
+    (source) => source.status === 'ACTIVE' && source.credentialPresent,
+  )
+  if (context.hint === 'success' && hasStoredConnection) {
+    return {
+      kind: 'incomplete',
+      message:
+        '현재 SDV에 저장된 Google 연결 정보를 확인했습니다. 주소의 완료 표시는 이번 요청이 새로 성공했다는 증거가 아니며, 실제 접근은 동기화할 때 다시 확인합니다.',
+    }
+  }
+  return {
+    kind: 'incomplete',
+    message:
+      'Google 연결 완료를 확인하지 못했습니다. 주소의 완료 표시는 연결 증거가 아닙니다. 아래 상태를 확인하고 다시 시도할 수 있습니다.',
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
 }
 
 function describeSyncError(error: unknown): string {
@@ -740,7 +934,7 @@ function describeSourceError(error: unknown): string {
       case 'VALIDATION_ERROR':
         return '입력값을 확인해 주세요.'
       case 'OAUTH_UNAVAILABLE':
-        return 'Google 연결 기능을 현재 사용할 수 없습니다. 서버 설정을 확인해 주세요.'
+        return 'Google 연결 기능을 현재 사용할 수 없습니다. SDV 운영자에게 문의해 주세요.'
       case 'NETWORK_ERROR':
         return '서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.'
       default:

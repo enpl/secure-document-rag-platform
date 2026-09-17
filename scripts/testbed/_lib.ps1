@@ -32,6 +32,7 @@ function Get-TestbedPaths {
         SecretsDir   = Join-Path $testbedDir 'secrets'
         PidsDir      = Join-Path $testbedDir '.pids'
         LogsDir      = Join-Path $testbedDir '.logs'
+        StateDir     = Join-Path $testbedDir '.state'
         ComposeFile  = Join-Path $testbedDir 'docker-compose.testbed.yml'
         ProjectName  = 'sdv-testbed'
         BackendDir   = Join-Path $repoRoot 'backend'

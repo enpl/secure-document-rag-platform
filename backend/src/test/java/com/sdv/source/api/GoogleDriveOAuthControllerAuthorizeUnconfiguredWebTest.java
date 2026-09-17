@@ -96,4 +96,18 @@ class GoogleDriveOAuthControllerAuthorizeUnconfiguredWebTest {
                 // Cookie를 세팅하지 않았어야 한다(Cookie는 authorize()가 정상 반환한 뒤에만 추가된다).
                 .andExpect(header().doesNotExist("Set-Cookie"));
     }
+
+    @Test
+    void authorizeAsOwningUserFailsSafelyWhenTheOperatorOAuthClientIsUnavailable() throws Exception {
+        SourceConnectionEntity source = sourceConnectionJpaRepository.saveAndFlush(
+                new SourceConnectionEntity("GOOGLE_DRIVE", "Ordinary User Unconfigured Source", "ACTIVE", "FULL",
+                        "sdv-user-b"));
+
+        mockMvc.perform(get("/api/admin/sources/google/authorize").param("sourceId", String.valueOf(source.getId()))
+                        .with(jwt().jwt(builder -> builder.subject("sdv-user-b"))
+                                .authorities(new SimpleGrantedAuthority("ROLE_USER"))))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("OAUTH_UNAVAILABLE"))
+                .andExpect(header().doesNotExist("Set-Cookie"));
+    }
 }

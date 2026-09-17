@@ -1,10 +1,10 @@
 # M11 Embedding-Only Indexing — Activation Runbook
 
-**Status: activation is intentionally still OFF in every profile.** This document
-describes the prerequisites and steps an operator must complete before turning
-the pipeline on against a real environment. Writing this runbook does not
-itself enable anything, and no step here has been executed against a live
-Google account, Ollama server, or the user's testbed.
+**Status: activation remains OFF by default in every profile.** The M17 local
+testbed launcher now has one explicit, fail-closed opt-in path, but this code
+change did not execute that path or index a live document. Writing this
+runbook and passing offline launcher tests do not prove live Google, Kafka,
+Ollama, HMAC, or embedding behavior.
 
 ## What "activation" means
 
@@ -52,6 +52,83 @@ SDV_OUTBOX_PUBLISHER_ENABLED=true
 SDV_RAG_INDEX_CONSUMER_ENABLED=true
 ```
 
+Do not export those variables in the parent PowerShell and expect the M16A
+testbed to inherit them. `New-IsolatedEnvironment` intentionally strips all
+inherited `SDV_*`/`SPRING_*` application settings. For this one controlled
+testbed acceptance, use the launcher's explicit parameters; it passes only the
+checked allowlist to the backend and keeps Assistant off:
+
+```powershell
+scripts\testbed\start-testbed.ps1 -EnableIndexing -IndexingActivationMode FirstRun -KafkaBootstrapServers 127.0.0.1:9092 -IndexingTopic sdv.testbed.m17.indexing.v1 -IndexingGroupId sdv-testbed-m17-indexing-v1 -AiServiceUrl http://127.0.0.1:8000 -IndexHmacState NewEmptyIndex -PrepareNewIndexingTopics
+```
+
+Use `NewEmptyIndex` only when the launcher's content-free DB check confirms
+that `document_embedding_index` has zero rows. If rows already exist, stop. Use
+`ConfirmedSameKey` only when the operator really knows that the still-running
+AI process has the same `SDV_INDEX_CONTENT_HMAC_KEY` that created those rows;
+the launcher neither reads nor prints that key. It never generates, rotates,
+or persists an HMAC key.
+
+First run explicitly creates and verifies an empty pair:
+
+- `sdv.testbed.m17.indexing.v1`
+- `sdv.testbed.m17.indexing.v1.DLT`
+
+The broker protocol is checked with the Kafka CLI inside the existing
+`sdv-kafka` container; a TCP-open result is not accepted. The topic and group
+must use the testbed-only namespaces. A content-free provenance record is
+written under ignored `infra/testbed/.state/`, including the testbed PostgreSQL
+system identifier. A restart must reuse the same topic/group and the same
+preserved database; a recreated database cannot consume old topic history:
+
+```powershell
+scripts\testbed\start-testbed.ps1 -EnableIndexing -IndexingActivationMode Resume -KafkaBootstrapServers 127.0.0.1:9092 -IndexingTopic sdv.testbed.m17.indexing.v1 -IndexingGroupId sdv-testbed-m17-indexing-v1 -AiServiceUrl http://127.0.0.1:8000 -IndexHmacState ConfirmedSameKey
+```
+
+Resume does not equate "no PENDING/PUBLISHING outbox row" with "no work".
+The publisher can have completed its send and marked the row `PUBLISHED`
+before the consumer indexes it. When SHARED is still `PENDING` or `STALE` and
+no live relevant outbox row remains, the gate verifies the established main
+topic partition by partition: retained earliest/end offsets, the exact
+testbed group committed positions, matching partition sets, and positions
+inside retained ranges. The backend configuration is fixed to
+`auto-offset-reset: earliest`; if the group has not been created or a
+partition has no committed position, the retained earliest offset is used for
+that partition rather than inventing committed offset zero. At least one
+retained main-topic record must remain after those effective positions.
+
+An empty or fully consumed main topic remains blocked. DLT records do not
+qualify as resumable main-topic work. Missing/malformed/duplicate/mismatched
+offset rows, an unavailable broker, or ambiguous group state also block with
+a fixed content-free error. This check establishes only that the approved
+topic/group has resumable work within the controlled scope; offsets do not
+prove that a particular SHARED event will index successfully. The bounded
+`INDEXED` polling below remains the acceptance criterion.
+
+Do not pick a fresh topic/group on every restart. Already-published events
+would remain on the prior topic. If the topic exists without matching local
+provenance, the gate blocks rather than adopting or replaying it. The DLT is a
+separate, content-free disposition channel and must retain the same
+provenance. The gate also blocks an active consumer group, any testbed runtime
+DB session, or any `PUBLISHING` outbox claim instead of trying to stop/reset
+another process.
+
+The content-free DB gate resolves the approved fixture by `source_id=2` plus
+the exact synthetic name; document/outbox IDs are never hard-coded. It checks
+one active INTERNAL/VIEW share with one named recipient, active publisher
+connection/token binding, INTERNAL `LOCAL_ONLY` with external use disabled,
+PRIVATE unshared/no embeddings, other currently fetch-eligible shared
+documents, and both `INDEX_REQUESTED` and `SOURCE_DOCUMENT_CHANGED` backlog.
+Malformed/unknown targets fail closed. Other catalog events and relevant
+events for currently unshared/ineligible private documents may be published
+because `IndexOrchestrator` rechecks current share authorization before any
+fetch; the launcher does not invent a per-document runtime filter.
+
+This is a point-in-time workload gate, not a concurrency fence. During this
+controlled run, do not create/change unrelated shares or start another
+publisher. Runtime share/connection generation fencing and provider checks
+remain authoritative.
+
 Optional tuning (defaults shown):
 
 ```
@@ -63,6 +140,114 @@ SDV_INDEX_CHUNK_MAX_CHARS=1800                        # ai-service chunking (pro
 SDV_INDEX_CHUNK_OVERLAP_CHARS=200
 SDV_INDEX_MAX_CHUNKS=200
 ```
+
+## M17 user-run bounded acceptance
+
+Keep the current AI-service PowerShell window open. Do not regenerate its
+HMAC key. While the current testbed Postgres is still available, this optional
+content-free check tells you which HMAC declaration is truthful:
+
+```powershell
+docker exec sdv-testbed-postgres psql -X -v ON_ERROR_STOP=1 -U sdv_user -d sdv -c "SELECT COUNT(*) AS embedding_rows FROM document_embedding_index;"
+```
+
+If the count is zero, use the documented `FirstRun` command with
+`NewEmptyIndex`. If it is nonzero and continuity of the still-running AI key
+is not known, stop. Do not replace the key or delete rows. Then perform the
+user-controlled restart (the launcher repeats a stronger DB gate after it has
+brought the preserved testbed DB back):
+
+```powershell
+scripts\testbed\stop-testbed.ps1
+scripts\testbed\start-testbed.ps1 -EnableIndexing -IndexingActivationMode FirstRun -KafkaBootstrapServers 127.0.0.1:9092 -IndexingTopic sdv.testbed.m17.indexing.v1 -IndexingGroupId sdv-testbed-m17-indexing-v1 -AiServiceUrl http://127.0.0.1:8000 -IndexHmacState NewEmptyIndex -PrepareNewIndexingTopics
+```
+
+The launcher above is the existing secret-loading entry point and must be run
+by the user, never by an agent. It does not stop AI/Ollama or any unrelated
+development container.
+
+Poll at most 24 times / 5 seconds. Output is limited to status, safe reason,
+IDs, and counts; it does not select names, provider IDs, payloads, tokens, or
+content:
+
+```powershell
+$pollSql = @'
+WITH shared AS (
+  SELECT id, index_status, index_reason, source_version
+  FROM source_documents
+  WHERE source_id = 2 AND name = 'SDV_M17_SHARED.txt'
+), private AS (
+  SELECT id FROM source_documents
+  WHERE source_id = 2 AND name = 'SDV_M17_PRIVATE.txt'
+)
+SELECT json_build_object(
+  'document_id', (SELECT id FROM shared),
+  'index_status', (SELECT index_status FROM shared),
+  'index_reason', (SELECT index_reason FROM shared),
+  'current_generation_rows', (SELECT COUNT(*) FROM document_embedding_index e JOIN shared s ON s.id = e.document_id AND e.source_version = s.source_version),
+  'other_generation_rows', (SELECT COUNT(*) FROM document_embedding_index e JOIN shared s ON s.id = e.document_id AND e.source_version <> s.source_version),
+  'private_embedding_rows', (SELECT COUNT(*) FROM document_embedding_index e JOIN private p ON p.id = e.document_id),
+  'outbox_id', (SELECT o.id FROM outbox_events o JOIN shared s ON CASE WHEN COALESCE(o.payload->>'internalDocumentId','') ~ '^[0-9]+$' THEN (o.payload->>'internalDocumentId')::bigint END = s.id WHERE o.event_type IN ('INDEX_REQUESTED','SOURCE_DOCUMENT_CHANGED') ORDER BY o.id DESC LIMIT 1),
+  'outbox_status', (SELECT o.status FROM outbox_events o JOIN shared s ON CASE WHEN COALESCE(o.payload->>'internalDocumentId','') ~ '^[0-9]+$' THEN (o.payload->>'internalDocumentId')::bigint END = s.id WHERE o.event_type IN ('INDEX_REQUESTED','SOURCE_DOCUMENT_CHANGED') ORDER BY o.id DESC LIMIT 1),
+  'outbox_attempts', (SELECT o.attempts FROM outbox_events o JOIN shared s ON CASE WHEN COALESCE(o.payload->>'internalDocumentId','') ~ '^[0-9]+$' THEN (o.payload->>'internalDocumentId')::bigint END = s.id WHERE o.event_type IN ('INDEX_REQUESTED','SOURCE_DOCUMENT_CHANGED') ORDER BY o.id DESC LIMIT 1),
+  'consumer_indexed', (SELECT COUNT(*) FROM processed_events p JOIN shared s ON s.id = p.document_id WHERE p.consumer_name = 'rag-index-orchestrator' AND p.outcome = 'INDEXED'),
+  'consumer_terminal_failed', (SELECT COUNT(*) FROM processed_events p JOIN shared s ON s.id = p.document_id WHERE p.consumer_name = 'rag-index-orchestrator' AND p.outcome IN ('FAILED_TERMINAL','FAILED_TERMINAL_MALFORMED'))
+);
+'@
+$indexed = $false
+for ($attempt = 1; $attempt -le 24; $attempt++) {
+    $raw = & docker exec sdv-testbed-postgres psql -X -q -t -A -v ON_ERROR_STOP=1 -U sdv_user -d sdv -c $pollSql
+    if ($LASTEXITCODE -ne 0) { throw 'Content-free polling query failed; stop polling.' }
+    $state = $raw | ConvertFrom-Json
+    $state | ConvertTo-Json -Compress
+    if ($state.index_status -eq 'INDEXED' -and $state.current_generation_rows -gt 0 -and
+            $state.other_generation_rows -eq 0 -and $state.private_embedding_rows -eq 0 -and
+            $state.consumer_indexed -gt 0) {
+        $indexed = $true
+        break
+    }
+    Start-Sleep -Seconds 5
+}
+if (-not $indexed) { Write-Warning 'INDEXED acceptance was not reached within 120 seconds; do not republish or reset anything.' }
+```
+
+Actual success is all of: SHARED `INDEXED`, at least one embedding row for its
+current source version, no other generation rows for SHARED, a durable
+consumer `INDEXED` disposition, and zero PRIVATE embeddings. `outbox_status =
+PUBLISHED` or application health alone is not success.
+
+If the bound ends, keep only the final JSON above. `FAILED` means use its
+allowlisted `index_reason` and consumer failure count for the next focused
+diagnosis. `PENDING` with a PENDING/PUBLISHING outbox row means do not enqueue
+another copy; wait for the publisher state to settle. `PENDING` after a
+PUBLISHED outbox row with no consumer disposition points to the isolated
+Kafka/group path. The following checks expose only topic/group coordinates and
+counts; do not consume raw records or print application logs/payloads:
+
+```powershell
+docker exec sdv-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group sdv-testbed-m17-indexing-v1 --state
+docker exec sdv-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group sdv-testbed-m17-indexing-v1 --topic sdv.testbed.m17.indexing.v1
+docker exec sdv-kafka /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic sdv.testbed.m17.indexing.v1 --time -2
+docker exec sdv-kafka /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic sdv.testbed.m17.indexing.v1 --time -1
+docker exec sdv-kafka /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic sdv.testbed.m17.indexing.v1.DLT --time -1
+```
+
+Do not repeatedly unshare/republish, reset offsets, mark outbox rows, change AI
+policy, or use backfill. Report the allowlisted state/count evidence and take
+the matching focused branch.
+
+To disable indexing again without deleting data, topic history, credentials,
+or embeddings, restart in baseline mode. Do not rotate HMAC keys:
+
+```powershell
+scripts\testbed\stop-testbed.ps1
+scripts\testbed\start-testbed.ps1
+```
+
+Implementation-complete means the launcher correction and offline tests are
+done. Live activation/INDEXED remains NOT RUN until the operator supplies the
+evidence above. Assistant/grounded-answer acceptance and overall MVP remain
+separate and incomplete even after INDEXED.
 
 ## Backfilling already-published shares
 

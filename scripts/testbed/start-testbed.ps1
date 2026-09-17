@@ -24,8 +24,26 @@
   relative to the repository root).
 #>
 
+[CmdletBinding()]
+param(
+    [switch]$EnableIndexing,
+    [ValidateSet('FirstRun', 'Resume')][string]$IndexingActivationMode,
+    [string]$KafkaBootstrapServers,
+    [string]$IndexingTopic,
+    [string]$IndexingGroupId,
+    [string]$AiServiceUrl,
+    [ValidateSet('NewEmptyIndex', 'ConfirmedSameKey')][string]$IndexHmacState,
+    [switch]$PrepareNewIndexingTopics
+)
+
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_lib.ps1')
+. (Join-Path $PSScriptRoot '_indexing-activation.ps1')
+
+Assert-M17IndexingParameters -Enabled $EnableIndexing.IsPresent `
+    -ActivationMode $IndexingActivationMode -KafkaBootstrapServers $KafkaBootstrapServers `
+    -Topic $IndexingTopic -GroupId $IndexingGroupId -AiServiceUrl $AiServiceUrl `
+    -IndexHmacState $IndexHmacState -PrepareNewTopics $PrepareNewIndexingTopics.IsPresent
 
 $paths = Get-TestbedPaths
 $KeycloakRealm = 'sdv-testbed'
@@ -44,6 +62,9 @@ if ($existingBackend -or $existingFrontend) {
     Write-Host "The testbed already appears to be running (tracked, verified process identity):" -ForegroundColor Yellow
     if ($existingBackend) { Write-Host "  backend  PID $($existingBackend.Id), started $($existingBackend.StartTime)" }
     if ($existingFrontend) { Write-Host "  frontend PID $($existingFrontend.Id), started $($existingFrontend.StartTime)" }
+    if ($EnableIndexing) {
+        Invoke-Fail 'Indexing was requested but an existing baseline/testbed process is already running. It is not indexing-enabled merely because this invocation included a switch. Run the normal testbed stop yourself, then restart with the explicit activation settings.'
+    }
     Write-Host "Run scripts\testbed\status-testbed.ps1 to check readiness, or scripts\testbed\stop-testbed.ps1 first if you want a clean restart."
     exit 0
 }
@@ -212,6 +233,20 @@ if (Test-Path $AccountsFile) {
 }
 
 # ------------------------------------------------------------------
+# 4.5 Optional M17 indexing activation gate. This is deliberately after
+#     Postgres is ready (a normal stop removes its container) and before the
+#     enabled backend is built/spawned. It never loads or inspects a secret.
+# ------------------------------------------------------------------
+if ($EnableIndexing) {
+    Write-Step 'M17 explicit indexing activation gate (content-free, fail closed)'
+    Invoke-M17IndexingActivationPreflight -Paths $paths -ActivationMode $IndexingActivationMode `
+        -KafkaBootstrapServers $KafkaBootstrapServers -Topic $IndexingTopic `
+        -GroupId $IndexingGroupId -AiServiceUrl $AiServiceUrl -IndexHmacState $IndexHmacState `
+        -PrepareNewTopics:$PrepareNewIndexingTopics
+    Write-Ok 'Indexing activation prerequisites confirmed before backend launch'
+}
+
+# ------------------------------------------------------------------
 # 5. Build and start the backend (host process, testbed profile)
 #    Built once via `gradlew bootJar`, then run directly as `java -jar` -
 #    NOT `gradlew bootRun`, whose actual application process can end up
@@ -264,9 +299,16 @@ $backendOverrides = @{
     SDV_TESTBED_DIAGNOSTICS_ENABLED         = 'true'
     SDV_TESTBED_DIAGNOSTICS_ALLOWED_FILE_ID = [string]($googleEnv['SDV_TESTBED_DIAGNOSTICS_ALLOWED_FILE_ID'])
 }
+$indexingOverrides = Get-M17IndexingBackendOverrides -Enabled $EnableIndexing.IsPresent `
+    -KafkaBootstrapServers $KafkaBootstrapServers -Topic $IndexingTopic `
+    -GroupId $IndexingGroupId -AiServiceUrl $AiServiceUrl
+foreach ($key in $indexingOverrides.Keys) {
+    $backendOverrides[$key] = $indexingOverrides[$key]
+}
 $backendEnv = New-IsolatedEnvironment -Overrides $backendOverrides
 
-Write-Step 'Starting backend (testbed profile, hidden, isolated environment)'
+$backendMode = if ($EnableIndexing) { 'indexing enabled; Assistant disabled' } else { 'publisher/consumer/Assistant disabled' }
+Write-Step "Starting backend (testbed profile, hidden, isolated environment; $backendMode)"
 $backendProcess = Start-TrackedProcess -Name 'backend' -FilePath 'java' `
     -ArgumentList @('-jar', $bootJar.FullName) `
     -WorkingDirectory $paths.BackendDir -Environment $backendEnv -PidsDir $paths.PidsDir `

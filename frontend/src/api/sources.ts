@@ -44,8 +44,12 @@ export function disconnectSource(client: ApiClient, id: number): Promise<void> {
   return client.del(`/admin/sources/${id}`)
 }
 
-export function authorizeGoogleSource(client: ApiClient, sourceId: number): Promise<GoogleAuthorizeResponse> {
-  return client.get<GoogleAuthorizeResponse>(`/admin/sources/google/authorize?sourceId=${sourceId}`)
+export function authorizeGoogleSource(
+  client: ApiClient,
+  sourceId: number,
+  signal?: AbortSignal,
+): Promise<GoogleAuthorizeResponse> {
+  return client.get<GoogleAuthorizeResponse>(`/admin/sources/google/authorize?sourceId=${sourceId}`, signal)
 }
 
 /**
@@ -102,8 +106,8 @@ export interface SourceFilesPageResponse {
   hasMore: boolean
 }
 
-export function listMyDriveSources(client: ApiClient): Promise<SourceResponse[]> {
-  return client.get<SourceResponse[]>('/sources')
+export function listMyDriveSources(client: ApiClient, signal?: AbortSignal): Promise<SourceResponse[]> {
+  return client.get<SourceResponse[]>('/sources', signal)
 }
 
 export function createMyGoogleDriveSource(client: ApiClient, name: string): Promise<SourceResponse> {

@@ -9,6 +9,7 @@ infra/secrets/*
 # passwords/keys and tracked process PIDs, never committed.
 infra/testbed/secrets/
 infra/testbed/.pids/
+infra/testbed/.state/
 *.local.*
 
 # Java / Gradle
