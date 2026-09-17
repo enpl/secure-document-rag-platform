@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -17,6 +18,7 @@ import type { SourceFileResponse, SourceFilesPageResponse, SourceResponse } from
 import { createShare, listMyShares, unshare } from '../../api/shares'
 import type { ShareResponse } from '../../api/shares'
 import { ApiError } from '../../api/client'
+import { navigateToGoogleAuthorization } from './googleAuthorizationNavigation'
 
 vi.mock('../../auth/AuthContext')
 vi.mock('../../api/useApiClient', () => {
@@ -39,6 +41,7 @@ vi.mock('../../api/shares', async () => {
   const actual = await vi.importActual<typeof import('../../api/shares')>('../../api/shares')
   return { ...actual, listMyShares: vi.fn(), unshare: vi.fn(), createShare: vi.fn() }
 })
+vi.mock('./googleAuthorizationNavigation', () => ({ navigateToGoogleAuthorization: vi.fn() }))
 
 const mockedUseAuth = vi.mocked(useAuth)
 const mockedListSources = vi.mocked(listMyDriveSources)
@@ -50,6 +53,7 @@ const mockedAuthorize = vi.mocked(authorizeGoogleSource)
 const mockedListShares = vi.mocked(listMyShares)
 const mockedUnshare = vi.mocked(unshare)
 const mockedCreateShare = vi.mocked(createShare)
+const mockedNavigateToGoogle = vi.mocked(navigateToGoogleAuthorization)
 
 function asAuth(partial: Partial<AuthState>): AuthState {
   return partial as unknown as AuthState
@@ -154,7 +158,9 @@ describe('MyDrivePage connection management', () => {
     // SourcesPage.test.tsx와 같은 이유로 실제 이동 자체는 검증하지 않는다.
     await userEvent.setup().click(screen.getByRole('button', { name: 'Google 연결' }))
 
-    await waitFor(() => expect(mockedAuthorize).toHaveBeenCalledWith(expect.anything(), 1))
+    await waitFor(() =>
+      expect(mockedAuthorize).toHaveBeenCalledWith(expect.anything(), 1, expect.any(AbortSignal)),
+    )
   })
 
   it('runs a manual sync through the reused SourceSyncPanel and refreshes the connection list', async () => {
@@ -216,7 +222,9 @@ describe('MyDrivePage connection management', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Google 재연결' }))
 
     // 같은 sourceId(1)로 기존 authorizeGoogleSource API를 그대로 재사용한다 - 새 Source를 만들지 않는다.
-    await waitFor(() => expect(mockedAuthorize).toHaveBeenCalledWith(expect.anything(), 1))
+    await waitFor(() =>
+      expect(mockedAuthorize).toHaveBeenCalledWith(expect.anything(), 1, expect.any(AbortSignal)),
+    )
     expect(mockedCreateSource).not.toHaveBeenCalled()
     // 공유 설정은 그대로 보존된다 - 재연결 시도 자체가 공유 목록을 건드리지 않는다.
     expect(mockedListShares).toHaveBeenCalledTimes(1)
@@ -247,14 +255,191 @@ describe('MyDrivePage connection management', () => {
     await waitFor(() => expect(screen.getByText('해당 연결을 찾을 수 없습니다.')).toBeInTheDocument())
   })
 
+  it.each([
+    ['AUTHENTICATION_REQUIRED', '로그인 인증을 확인하지 못했습니다. 다시 로그인해 주세요.'],
+    ['ACCESS_DENIED', '이 작업을 수행할 권한이 없습니다.'],
+    ['OAUTH_UNAVAILABLE', 'Google 연결 기능을 현재 사용할 수 없습니다. SDV 운영자에게 문의해 주세요.'],
+    ['NETWORK_ERROR', '서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.'],
+  ])('clears the busy state and keeps %s distinct when authorize is rejected', async (code, message) => {
+    mockedListSources.mockResolvedValue([connectedSource({ credentialPresent: false })])
+    mockedAuthorize.mockRejectedValue(new ApiError(code === 'NETWORK_ERROR' ? 0 : 503, { code, message: 'x', traceId: null }))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('내 드라이브')).toBeInTheDocument())
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Google 연결' }))
+
+    await waitFor(() => expect(screen.getByText(message)).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Google 연결' })).toBeEnabled()
+  })
+
+  it('reconciles owner-scoped state and clears pending authorization after a simulated Back pageshow', async () => {
+    mockedListSources
+      .mockResolvedValueOnce([connectedSource({ credentialPresent: false })])
+      .mockResolvedValueOnce([connectedSource({ credentialPresent: false })])
+    mockedAuthorize.mockResolvedValue({ authorizationUrl: 'https://accounts.google.com/mock' })
+
+    renderPage()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Google 연결' })).toBeEnabled())
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Google 연결' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '연결 중...' })).toBeDisabled())
+
+    // jsdom의 pageshow 이벤트는 브라우저 Back/BFCache 복귀의 제어 가능한 근사치다.
+    // 실제 BFCache 시각 검증은 별도 브라우저 증거로 구분한다.
+    window.dispatchEvent(new Event('pageshow'))
+
+    await waitFor(() => expect(mockedListSources).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.getByText(/연결 완료를 확인하지 못했습니다/)).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Google 연결' })).toBeEnabled()
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Google 연결' }))
+    await waitFor(() => expect(mockedAuthorize).toHaveBeenCalledTimes(2))
+  })
+
+  it('does not treat a forged success query as proof when the owner-scoped source is still unconnected', async () => {
+    mockedListSources.mockResolvedValue([connectedSource({ credentialPresent: false })])
+
+    renderPageWithCallback('success')
+
+    await waitFor(() => expect(screen.getByText(/연결 완료를 확인하지 못했습니다/)).toBeInTheDocument())
+    expect(screen.queryByText(/연결 요청을 처리했습니다/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Google 연결' })).toBeEnabled()
+  })
+
+  it('shows a retryable status-check error when callback reconciliation cannot load owner state', async () => {
+    mockedListSources
+      .mockRejectedValueOnce(new ApiError(0, { code: 'NETWORK_ERROR', message: 'x', traceId: null }))
+      .mockResolvedValueOnce([connectedSource({ credentialPresent: false })])
+
+    renderPageWithCallback('success')
+
+    await waitFor(() => expect(screen.getByText(/Google 연결 상태를 확인하지 못했습니다/)).toBeInTheDocument())
+    await userEvent.setup().click(screen.getByRole('button', { name: '연결 상태 다시 확인' }))
+
+    await waitFor(() => expect(mockedListSources).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.getByText(/연결 완료를 확인하지 못했습니다/)).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Google 연결' })).toBeEnabled()
+  })
+
+  it('reports only stored server state after a callback success hint when a credential already existed', async () => {
+    mockedListSources.mockResolvedValue([connectedSource({ credentialPresent: true })])
+
+    renderPageWithCallback('success')
+
+    await waitFor(() => expect(screen.getByText(/현재 SDV에 저장된 Google 연결 정보를 확인했습니다/)).toBeInTheDocument())
+    expect(screen.getByText(/이번 요청이 새로 성공했다는 증거가 아니며/)).toBeInTheDocument()
+  })
+
+  it('does not show an authorization-return warning or request storm on a normal mount', async () => {
+    mockedListSources.mockResolvedValue([])
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText(/등록된 연결이 없습니다/)).toBeInTheDocument())
+    expect(mockedListSources).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText(/연결 완료를 확인하지 못했습니다/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '연결 상태 다시 확인' })).not.toBeInTheDocument()
+
+    window.dispatchEvent(new Event('focus'))
+    await Promise.resolve()
+    expect(mockedListSources).toHaveBeenCalledTimes(1)
+  })
+
+  it('deduplicates overlapping pageshow recovery events while the owner-state lookup is pending', async () => {
+    let resolveRecovery!: (value: SourceResponse[]) => void
+    mockedListSources
+      .mockResolvedValueOnce([connectedSource({ credentialPresent: false })])
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRecovery = resolve }))
+    mockedAuthorize.mockResolvedValue({ authorizationUrl: 'https://accounts.google.com/mock' })
+
+    renderPage()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Google 연결' })).toBeEnabled())
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Google 연결' }))
+    await waitFor(() => expect(mockedNavigateToGoogle).toHaveBeenCalledTimes(1))
+
+    window.dispatchEvent(new Event('pageshow'))
+    window.dispatchEvent(new Event('pageshow'))
+    await waitFor(() => expect(mockedListSources).toHaveBeenCalledTimes(2))
+    expect(mockedListSources).toHaveBeenCalledTimes(2)
+
+    resolveRecovery([connectedSource({ credentialPresent: false })])
+    await waitFor(() => expect(screen.getByText(/연결 완료를 확인하지 못했습니다/)).toBeInTheDocument())
+  })
+
+  it('installs only one effective pageshow recovery listener under StrictMode', async () => {
+    mockedListSources.mockResolvedValue([connectedSource({ credentialPresent: false })])
+    mockedAuthorize.mockResolvedValue({ authorizationUrl: 'https://accounts.google.com/mock' })
+
+    render(
+      <StrictMode>
+        <MemoryRouter initialEntries={['/my-drive']}>
+          <MyDrivePage />
+        </MemoryRouter>
+      </StrictMode>,
+    )
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Google 연결' })).toBeEnabled())
+    const initialLookupCount = mockedListSources.mock.calls.length
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Google 연결' }))
+    await waitFor(() => expect(mockedNavigateToGoogle).toHaveBeenCalledTimes(1))
+
+    window.dispatchEvent(new Event('pageshow'))
+
+    await waitFor(() => expect(mockedListSources).toHaveBeenCalledTimes(initialLookupCount + 1))
+  })
+
+  it('does not redirect after an authorize response arrives following unmount', async () => {
+    mockedListSources.mockResolvedValue([connectedSource({ credentialPresent: false })])
+    let resolveAuthorize!: (value: { authorizationUrl: string }) => void
+    mockedAuthorize.mockImplementation(
+      () => new Promise((resolve) => { resolveAuthorize = resolve }),
+    )
+
+    const view = renderPage()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Google 연결' })).toBeEnabled())
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Google 연결' }))
+    await waitFor(() => expect(mockedAuthorize).toHaveBeenCalledTimes(1))
+
+    view.unmount()
+    resolveAuthorize({ authorizationUrl: 'https://accounts.google.com/late' })
+    await Promise.resolve()
+
+    expect(mockedNavigateToGoogle).not.toHaveBeenCalled()
+  })
+
+  it('does not redirect an old authorization response after an account-keyed identity remount', async () => {
+    mockedListSources.mockResolvedValue([connectedSource({ credentialPresent: false })])
+    let resolveAuthorize!: (value: { authorizationUrl: string }) => void
+    mockedAuthorize.mockImplementation(
+      () => new Promise((resolve) => { resolveAuthorize = resolve }),
+    )
+
+    const view = render(
+      <MemoryRouter initialEntries={['/my-drive']}>
+        <MyDrivePage key="sdv-user-a" />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Google 연결' })).toBeEnabled())
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Google 연결' }))
+    await waitFor(() => expect(mockedAuthorize).toHaveBeenCalledTimes(1))
+
+    mockedUseAuth.mockReturnValue(asAuth({ subject: 'sdv-user-b', isAdmin: false }))
+    view.rerender(
+      <MemoryRouter initialEntries={['/my-drive']}>
+        <MyDrivePage key="sdv-user-b" />
+      </MemoryRouter>,
+    )
+    resolveAuthorize({ authorizationUrl: 'https://accounts.google.com/late-user-a' })
+    await Promise.resolve()
+
+    expect(mockedNavigateToGoogle).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByText('sdv-user-b')).toBeInTheDocument())
+  })
+
   it('shows the honest failed-callback banner for a rejected reconnect (e.g. a different Google account), never a success claim', async () => {
     mockedListSources.mockResolvedValue([connectedSource({ status: 'DISABLED', credentialPresent: false })])
 
     renderPageWithCallback('failed')
 
-    await waitFor(() =>
-      expect(screen.getByText('Google 연결에 실패했거나 취소되었습니다. 다시 시도해 주세요.')).toBeInTheDocument(),
-    )
+    await waitFor(() => expect(screen.getByText(/Google 연결에 실패했거나 취소되었습니다/)).toBeInTheDocument())
     expect(screen.queryByText(/처리했습니다/)).not.toBeInTheDocument()
   })
 })

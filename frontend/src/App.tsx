@@ -81,7 +81,7 @@ function App() {
         path="/admin/sources"
         element={
           <AppShell title="연결 관리">
-            <SourcesPage />
+            <SourcesPage key={subject} />
           </AppShell>
         }
       />
@@ -89,7 +89,7 @@ function App() {
         path="/admin/shares"
         element={
           <AppShell title="공유 자료 관리">
-            <SharedMaterialsAdminPage />
+            <SharedMaterialsAdminPage key={subject} />
           </AppShell>
         }
       />

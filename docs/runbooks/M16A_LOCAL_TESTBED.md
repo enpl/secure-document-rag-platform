@@ -55,6 +55,32 @@ scripts\testbed\status-testbed.ps1
 scripts\testbed\stop-testbed.ps1
 ```
 
+평상시 명령은 publisher/index consumer/Assistant를 모두 명시적으로 OFF로
+전달하며 Kafka나 AI 서비스가 없어도 기존처럼 시작된다. M17의 통제된 색인
+수락에서만 아래처럼 opt-in한다. 이 명령은 실제 비밀 설정 파일을 읽는 launcher
+이므로 **사용자만 실행**한다. Agent 검증에서는 실행하지 않았다.
+
+```powershell
+# 최초 1회: DB content-free gate 통과 후 새 main/DLT topic을 명시적으로 생성·검증
+scripts\testbed\start-testbed.ps1 -EnableIndexing -IndexingActivationMode FirstRun -KafkaBootstrapServers 127.0.0.1:9092 -IndexingTopic sdv.testbed.m17.indexing.v1 -IndexingGroupId sdv-testbed-m17-indexing-v1 -AiServiceUrl http://127.0.0.1:8000 -IndexHmacState NewEmptyIndex -PrepareNewIndexingTopics
+
+# 같은 topic/group과 같은 AI HMAC key로 재시작할 때만
+scripts\testbed\start-testbed.ps1 -EnableIndexing -IndexingActivationMode Resume -KafkaBootstrapServers 127.0.0.1:9092 -IndexingTopic sdv.testbed.m17.indexing.v1 -IndexingGroupId sdv-testbed-m17-indexing-v1 -AiServiceUrl http://127.0.0.1:8000 -IndexHmacState ConfirmedSameKey
+```
+
+이미 baseline backend/frontend가 추적 실행 중이면 두 번째 start 호출에
+`-EnableIndexing`을 붙여도 활성화된 것이 아니다. Launcher는 실패로 알리고,
+사용자가 먼저 정상 `stop-testbed.ps1`을 실행한 뒤 재시작하도록 요구한다.
+정상 stop은 testbed container/network만 내리고 volume/account/credential은
+보존하며 AI/Ollama와 `sdv-postgres`/`sdv-keycloak`/`sdv-kafka`는 건드리지 않는다.
+Stop 직후 DB가 내려가 있어도 괜찮다. 새 start가 testbed Postgres/Keycloak을
+먼저 올린 뒤 enabled backend를 띄우기 전에 gate를 다시 수행한다.
+
+`NewEmptyIndex`는 전체 embedding 행 수가 0일 때만 통과한다. 기존 행이 있는데
+현재 AI 창의 HMAC key 연속성을 모르면 멈추고 그 key를 복구해야 한다. key를
+새로 만들거나 embedding을 삭제하는 것은 복구가 아니다. `/health`의 `OK`는
+HMAC이나 `bge-m3:567m` 실제 계산 성공을 증명하지 않는다.
+
 시작이 끝나면 다음이 출력된다:
 
 - Frontend 주소: `http://localhost:15173`
@@ -288,7 +314,11 @@ docker compose -p sdv-testbed -f infra\testbed\docker-compose.testbed.yml down -
 Remove-Item -Recurse -Force infra\testbed\secrets
 Remove-Item -Recurse -Force infra\testbed\.pids
 Remove-Item -Recurse -Force infra\testbed\.logs
+Remove-Item -Recurse -Force infra\testbed\.state
 ```
 
 이후 `start-testbed.ps1`을 다시 실행하면 계정 비밀번호/암호화 키가 전부
-새로 생성된다.
+새로 생성된다. `.state` 삭제는 Kafka topic 자체를 삭제하지 않는다. 따라서
+M17 topic이 broker에 남아 있으면 새 DB가 옛 topic history를 이어받지 않도록
+launcher의 `FirstRun`이 provenance 불명으로 차단하는 것이 정상이다. Topic을
+자동 삭제하거나 새 이름으로 우회하지 말고 별도 운영 판단을 받는다.
