@@ -148,7 +148,7 @@ function AdminSharedMaterialsPage() {
                 <span className="source-row__name">
                   문서 #{share.documentId} (연결 #{share.sourceId})
                 </span>
-                <span className="text-secondary">게시자: {share.publisherSubject}</span>
+                <span className="text-secondary">게시자: 인증된 SDV 사용자</span>
                 <span className="text-secondary">
                   등급 {share.classification} · 행위 {share.allowedActions.join(', ')} · 수신자{' '}
                   {share.recipients.length}명

@@ -18,7 +18,13 @@ function renderSidebar(partial: Partial<AuthState>) {
   mockedUseAuth.mockReturnValue(asAuth(partial))
   return render(
     <MemoryRouter>
-      <Sidebar open={false} onNavigate={vi.fn()} onClose={vi.fn()} />
+      <Sidebar
+        open={false}
+        onNavigate={vi.fn()}
+        onClose={vi.fn()}
+        mobileHidden={false}
+        closeButtonRef={null}
+      />
     </MemoryRouter>,
   )
 }
@@ -68,5 +74,12 @@ describe('Sidebar', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: '로그아웃' }))
 
     expect(logout).toHaveBeenCalledTimes(1)
+  })
+
+  it('never falls back to an opaque subject as the account label', () => {
+    renderSidebar({ isAdmin: false, email: null, subject: 'opaque-account-subject', logout: vi.fn() })
+
+    expect(screen.getByText('로그인된 사용자')).toBeInTheDocument()
+    expect(screen.queryByText('opaque-account-subject')).not.toBeInTheDocument()
   })
 })

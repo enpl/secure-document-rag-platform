@@ -225,9 +225,11 @@ public interface SourceDocumentJpaRepository extends JpaRepository<SourceDocumen
      */
     @Query("SELECT d FROM SourceDocumentEntity d JOIN SourceConnectionEntity c ON c.id = d.sourceId "
             + "WHERE c.ownerSubject = :ownerSubject AND d.sourceId = :sourceId "
-            + "AND c.type = 'GOOGLE_DRIVE' AND c.status = 'ACTIVE' AND d.state = 'ACTIVE'")
+            + "AND c.type = 'GOOGLE_DRIVE' AND c.status = 'ACTIVE' AND d.state = 'ACTIVE' "
+            + "AND (:hasNamePattern = false OR LOWER(d.name) LIKE :namePattern ESCAPE '\\')")
     Slice<SourceDocumentEntity> findOwnedForPicker(@Param("ownerSubject") String ownerSubject,
-            @Param("sourceId") Long sourceId, Pageable pageable);
+            @Param("sourceId") Long sourceId, @Param("hasNamePattern") boolean hasNamePattern,
+            @Param("namePattern") String namePattern, Pageable pageable);
 
     /**
      * M11 후속 교정(이 작업 지시사항의 1번, "connect a successful verified same-account

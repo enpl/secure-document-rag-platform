@@ -77,7 +77,8 @@ describe('SharedMaterialsAdminPage admin management', () => {
 
     render(<SharedMaterialsAdminPage />)
 
-    await waitFor(() => expect(screen.getByText('게시자: publisher-a')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('게시자: 인증된 SDV 사용자')).toBeInTheDocument())
+    expect(screen.queryByText('publisher-a')).not.toBeInTheDocument()
     // 이 화면에는 등급/행위/수신자를 편집할 어떤 입력 요소도 없다 - 차단/해제 Action만 있다.
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/수신자/)).not.toBeInTheDocument()
@@ -88,7 +89,7 @@ describe('SharedMaterialsAdminPage admin management', () => {
     mockedSetBlocked.mockResolvedValue(adminShare({ adminBlocked: true, adminBlockReason: '정책 위반' }))
 
     render(<SharedMaterialsAdminPage />)
-    await waitFor(() => expect(screen.getByText('게시자: publisher-a')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('게시자: 인증된 SDV 사용자')).toBeInTheDocument())
 
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: '차단' }))
@@ -119,7 +120,7 @@ describe('SharedMaterialsAdminPage admin management', () => {
     mockedSetBlocked.mockRejectedValue(new ApiError(404, { code: 'NOT_FOUND', message: 'x', traceId: null }))
 
     render(<SharedMaterialsAdminPage />)
-    await waitFor(() => expect(screen.getByText('게시자: publisher-a')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('게시자: 인증된 SDV 사용자')).toBeInTheDocument())
 
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: '차단' }))
