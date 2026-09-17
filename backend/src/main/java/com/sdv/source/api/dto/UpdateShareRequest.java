@@ -14,7 +14,8 @@ import java.util.Set;
  */
 public record UpdateShareRequest(
         long expectedGeneration,
+        @NotBlank String audience,
         @NotBlank String classification,
         @NotEmpty Set<String> actions,
-        @NotEmpty Set<String> recipients) {
+        Set<Long> recipientUserIds) {
 }

@@ -58,6 +58,12 @@ export function Sidebar({ open, onNavigate, onClose, mobileHidden, closeButtonRe
         </NavLink>
 
         {isAdmin && (
+          <NavLink to="/admin/users" className="sidebar__link" onClick={onNavigate}>
+            사용자 접근
+          </NavLink>
+        )}
+
+        {isAdmin && (
           <NavLink to="/admin/sources" className="sidebar__link" onClick={onNavigate}>
             연결 관리
           </NavLink>
@@ -68,8 +74,16 @@ export function Sidebar({ open, onNavigate, onClose, mobileHidden, closeButtonRe
             공유 자료 관리
           </NavLink>
         )}
-        {isAdmin && <NavLink to="/admin/audits" className="sidebar__link" onClick={onNavigate}>감사 로그</NavLink>}
-        {isAdmin && <NavLink to="/admin/security" className="sidebar__link" onClick={onNavigate}>보안 발견</NavLink>}
+        {isAdmin && (
+          <NavLink to="/admin/audits" className="sidebar__link" onClick={onNavigate}>
+            감사 로그
+          </NavLink>
+        )}
+        {isAdmin && (
+          <NavLink to="/admin/security" className="sidebar__link" onClick={onNavigate}>
+            보안 발견
+          </NavLink>
+        )}
       </nav>
 
       <div className="sidebar__footer">

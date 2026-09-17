@@ -1,6 +1,8 @@
 package com.sdv.rag.application;
 
 import com.sdv.common.model.UserContext;
+import com.sdv.identity.domain.UserAuthorizationSnapshot;
+import com.sdv.policy.domain.SecurityLevel;
 import com.sdv.policy.application.EffectivePermissionService;
 import com.sdv.policy.domain.PolicyDecision;
 import com.sdv.rag.application.port.VectorSearchPort;
@@ -32,7 +34,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class RagRetrievalCandidateSelectionTest {
-    private static final UserContext USER = new UserContext("recipient", "r@example.test", Set.of(), Set.of());
+    private static final String ISSUER = "http://localhost:8180/realms/sdv";
+    private static final UserContext USER = new UserContext("recipient", "r@example.test", Set.of(), Set.of(),
+            ISSUER, "recipient");
+    private static final UserAuthorizationSnapshot AUTHORIZATION = new UserAuthorizationSnapshot(1L, ISSUER,
+            "recipient", "recipient", SecurityLevel.SECRET, 7L);
 
     @Test
     void absentSelectionUsesOnlyTheFreshAuthorizedScopeForVectorSearch() {
@@ -67,6 +73,7 @@ class RagRetrievalCandidateSelectionTest {
     private static Fixture fixtureWithAuthorizedDocument() {
         DocumentShareJpaRepository shares = mock(DocumentShareJpaRepository.class);
         EffectivePermissionService permissions = mock(EffectivePermissionService.class);
+        when(permissions.currentSharedAuthorization(USER)).thenReturn(java.util.Optional.of(AUTHORIZATION));
         VectorSearchPort vector = mock(VectorSearchPort.class);
         DocumentParsingClient parser = mock(DocumentParsingClient.class);
         SourceDocumentJpaRepository documents = mock(SourceDocumentJpaRepository.class);
@@ -80,7 +87,7 @@ class RagRetrievalCandidateSelectionTest {
         when(share.getId()).thenReturn(91L);
         when(share.getGeneration()).thenReturn(3L);
         var candidate = new DocumentShareJpaRepository.SharedDiscoveryCandidate(document, share, "publisher", 4L);
-        when(shares.searchSharedDiscoverable(anyString(), any(Boolean.class), anyLong(), any(Boolean.class),
+        when(shares.searchSharedDiscoverable(anyString(), anyInt(), any(Boolean.class), anyLong(), any(Boolean.class),
                 anyString(), any(Boolean.class), anyString(), any(Boolean.class), any(), any(Boolean.class), any(), any()))
                 .thenReturn(new SliceImpl<>(List.of(candidate)));
         when(permissions.evaluateSharedAccess(any(), any(), any())).thenReturn(PolicyDecision.allow());

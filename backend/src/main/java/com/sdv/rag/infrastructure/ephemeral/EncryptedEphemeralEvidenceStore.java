@@ -239,6 +239,16 @@ public class EncryptedEphemeralEvidenceStore implements EphemeralEvidenceStore {
         }
     }
 
+    @Override
+    public void evictByRequester(String requesterSubject) {
+        Objects.requireNonNull(requesterSubject, "requesterSubject must not be null");
+        synchronized (admissionLock) {
+            entries.entrySet().stream()
+                    .filter(e -> requesterSubject.equals(e.getValue().key().requesterSubject()))
+                    .map(java.util.Map.Entry::getKey).toList().forEach(this::removeLocked);
+        }
+    }
+
     /**
      * 주기적 Sweep - Hard TTL이 지났지만 그 사이 아무도 읽지 않은 항목까지 회수한다
      * (읽기 시점의 지연(Lazy) 제거만으로는 "아무도 다시 읽지 않는 만료 항목"이 다음
@@ -286,7 +296,8 @@ public class EncryptedEphemeralEvidenceStore implements EphemeralEvidenceStore {
         String joined = String.join("|", id.toString(), key.requesterSubject(), key.conversationId(),
                 String.valueOf(key.sourceId()), String.valueOf(key.documentId()), String.valueOf(key.shareId()),
                 String.valueOf(key.shareGeneration()), String.valueOf(key.connectionGeneration()),
-                key.sourceVersion(), createdAt.toString(), expiresAt.toString());
+                String.valueOf(key.requesterAuthorizationRevision()), key.sourceVersion(), createdAt.toString(),
+                expiresAt.toString());
         return joined.getBytes(StandardCharsets.UTF_8);
     }
 

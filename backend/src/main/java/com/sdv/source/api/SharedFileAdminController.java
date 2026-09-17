@@ -1,8 +1,12 @@
 package com.sdv.source.api;
 
 import com.sdv.common.security.CurrentUserProvider;
+import com.sdv.common.model.UserContext;
+import com.sdv.identity.application.IdentityRegistryService;
+import com.sdv.identity.api.dto.DirectoryUserResponse;
 import com.sdv.source.api.dto.AdminShareResponse;
 import com.sdv.source.api.dto.AdminUpdateShareRequest;
+import com.sdv.source.api.dto.ShareRecipientResponse;
 import com.sdv.source.application.SourceSharingService;
 import com.sdv.source.domain.DocumentShare;
 import com.sdv.source.domain.ShareAction;
@@ -35,31 +39,40 @@ public class SharedFileAdminController {
 
     private final SourceSharingService sourceSharingService;
     private final CurrentUserProvider currentUserProvider;
+    private final IdentityRegistryService identities;
 
     public SharedFileAdminController(SourceSharingService sourceSharingService,
-            CurrentUserProvider currentUserProvider) {
+            CurrentUserProvider currentUserProvider, IdentityRegistryService identities) {
         this.sourceSharingService = sourceSharingService;
         this.currentUserProvider = currentUserProvider;
+        this.identities = identities;
     }
 
     @GetMapping
     public List<AdminShareResponse> list() {
-        return sourceSharingService.adminList().stream().map(SharedFileAdminController::toResponse).toList();
+        UserContext admin = currentUserProvider.getCurrentUser();
+        return sourceSharingService.adminList().stream().map(share -> toResponse(share, admin.issuer())).toList();
     }
 
     @PatchMapping("/{shareId}")
     public AdminShareResponse setBlocked(@PathVariable Long shareId, @Valid @RequestBody AdminUpdateShareRequest request) {
-        String adminSubject = currentUserProvider.getCurrentUser().subject();
-        DocumentShare share = sourceSharingService.adminSetBlocked(adminSubject, shareId, request.blocked(),
+        UserContext admin = currentUserProvider.getCurrentUser();
+        DocumentShare share = sourceSharingService.adminSetBlocked(admin.subject(), shareId, request.blocked(),
                 request.reason());
-        return toResponse(share);
+        return toResponse(share, admin.issuer());
     }
 
-    private static AdminShareResponse toResponse(DocumentShare share) {
+    private AdminShareResponse toResponse(DocumentShare share, String issuer) {
         Set<String> actionNames = share.getAllowedActions().stream().map(ShareAction::name)
                 .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
+        var labels = identities.labelsBySubjects(issuer, share.getRecipients());
+        List<ShareRecipientResponse> recipients = share.getRecipients().stream().sorted().map(subject -> {
+            DirectoryUserResponse label = labels.get(subject);
+            return label == null ? new ShareRecipientResponse(null, "기존 수신자", null)
+                    : new ShareRecipientResponse(label.id(), label.loginId(), label.displayName());
+        }).toList();
         return new AdminShareResponse(share.getId(), share.getPublisherSubject(), share.getSourceId(),
-                share.getDocumentId(), share.getClassification().name(), actionNames, share.getRecipients(),
+                share.getDocumentId(), share.getAudience().name(), share.getClassification().name(), actionNames, recipients,
                 share.isAdminBlocked(), share.getAdminBlockReason(), share.getGeneration(), share.getCreatedAt(),
                 share.getUpdatedAt());
     }

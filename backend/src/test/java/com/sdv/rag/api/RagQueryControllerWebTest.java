@@ -3,6 +3,7 @@ package com.sdv.rag.api;
 import com.sdv.rag.api.dto.RagFileSearchResponse;
 import com.sdv.rag.application.FileMetadataDiscoveryService;
 import com.sdv.rag.application.RagAnswerService;
+import com.sdv.rag.application.RequesterAuthorizationChangedException;
 import com.sdv.rag.api.dto.RagAnswerResponse;
 import com.sdv.testsupport.TestcontainersConfiguration;
 import org.junit.jupiter.api.Test;
@@ -97,6 +98,17 @@ class RagQueryControllerWebTest {
                 ArgumentCaptor.forClass(com.sdv.common.model.UserContext.class);
         verify(fileMetadataDiscoveryService).search(userCaptor.capture(), any());
         assertThat(userCaptor.getValue().subject()).isEqualTo("user-a");
+    }
+
+    @Test
+    void finalRequesterAuthorizationChangeReturnsAContentFreeConflictInsteadOfAStaleDiscoveryPage() throws Exception {
+        when(fileMetadataDiscoveryService.search(any(), any()))
+                .thenThrow(new RequesterAuthorizationChangedException());
+
+        mockMvc.perform(get("/api/rag/files").with(userSubject("user-a")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("REQUESTER_AUTHORIZATION_CHANGED"))
+                .andExpect(jsonPath("$.message").value("The requester's authorization changed."));
     }
 
     @Test

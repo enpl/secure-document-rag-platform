@@ -12,6 +12,13 @@ export type Classification = 'PUBLIC' | 'INTERNAL' | 'CONFIDENTIAL' | 'SECRET'
  * native Google permission is granted or required for either action).
  */
 export type ShareAction = 'VIEW' | 'DOWNLOAD'
+export type ShareAudience = 'ALL_AUTHENTICATED' | 'NAMED_USERS'
+
+export interface ShareRecipient {
+  id: number | null
+  loginId: string
+  displayName: string | null
+}
 
 export const CLASSIFICATION_OPTIONS: readonly Classification[] = ['PUBLIC', 'INTERNAL', 'CONFIDENTIAL', 'SECRET']
 export const SHARE_ACTION_OPTIONS: readonly ShareAction[] = ['VIEW', 'DOWNLOAD']
@@ -24,9 +31,10 @@ export interface ShareResponse {
   id: number
   sourceId: number
   documentId: number
+  audience: ShareAudience
   classification: Classification
   allowedActions: ShareAction[]
-  recipients: string[]
+  recipients: ShareRecipient[]
   adminBlocked: boolean
   adminBlockReason: string | null
   generation: number
@@ -42,9 +50,10 @@ export interface AdminShareResponse {
   publisherSubject: string
   sourceId: number
   documentId: number
+  audience: ShareAudience
   classification: Classification
   allowedActions: ShareAction[]
-  recipients: string[]
+  recipients: ShareRecipient[]
   adminBlocked: boolean
   adminBlockReason: string | null
   generation: number
@@ -55,16 +64,18 @@ export interface AdminShareResponse {
 export interface CreateShareInput {
   sourceId: number
   documentId: number
+  audience: ShareAudience
   classification: Classification
   actions: ShareAction[]
-  recipients: string[]
+  recipientUserIds: number[]
 }
 
 export interface UpdateShareInput {
   expectedGeneration: number
+  audience: ShareAudience
   classification: Classification
   actions: ShareAction[]
-  recipients: string[]
+  recipientUserIds: number[]
 }
 
 /**

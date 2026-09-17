@@ -30,7 +30,14 @@ import java.util.Objects;
  *         시점 기준으로는 낡은 것으로 취급한다.
  */
 public record SourceAccessContext(String requesterSubject, String publisherSubject, Long sourceId, Long documentId,
-        Long shareId, ShareAction requestedAction, long shareGeneration, long connectionGeneration) {
+        Long shareId, ShareAction requestedAction, long shareGeneration, long connectionGeneration,
+        long requesterAuthorizationRevision) {
+
+    public SourceAccessContext(String requesterSubject, String publisherSubject, Long sourceId, Long documentId,
+            Long shareId, ShareAction requestedAction, long shareGeneration, long connectionGeneration) {
+        this(requesterSubject, publisherSubject, sourceId, documentId, shareId, requestedAction, shareGeneration,
+                connectionGeneration, -1L);
+    }
 
     public SourceAccessContext {
         requireNonBlank(requesterSubject, "requesterSubject");

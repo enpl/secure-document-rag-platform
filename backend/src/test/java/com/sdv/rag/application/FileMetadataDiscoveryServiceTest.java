@@ -3,6 +3,8 @@ package com.sdv.rag.application;
 import com.sdv.ai.application.NaturalLanguageFileQueryParser;
 import com.sdv.common.model.Role;
 import com.sdv.common.model.UserContext;
+import com.sdv.identity.api.dto.AdminUserResponse;
+import com.sdv.identity.application.IdentityRegistryService;
 import com.sdv.policy.application.EffectivePermissionService;
 import com.sdv.rag.api.dto.RagFileItem;
 import com.sdv.rag.api.dto.RagFileSearchQuery;
@@ -29,6 +31,8 @@ import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRep
 import com.sdv.testsupport.TestcontainersConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
@@ -45,8 +49,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * M10B 교정(SHR-001, `docs/spec/SDV_v3.2_CORE_SPEC.md` §2A.13) - {@link
@@ -87,6 +97,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 })
 class FileMetadataDiscoveryServiceTest {
 
+    private static final String ISSUER = "http://localhost:8180/realms/sdv";
+
     @Autowired
     private SourceConnectionJpaRepository sourceConnectionJpaRepository;
     @Autowired
@@ -97,6 +109,8 @@ class FileMetadataDiscoveryServiceTest {
     private DocumentShareRecipientJpaRepository documentShareRecipientJpaRepository;
     @Autowired
     private EffectivePermissionService effectivePermissionService;
+    @Autowired
+    private IdentityRegistryService identityRegistryService;
 
     private FakeConnector fakeConnector;
     private MutableClock clock;
@@ -696,7 +710,7 @@ class FileMetadataDiscoveryServiceTest {
         RagFileSearchQuery query = new RagFileSearchQuery(null, null, null, null, null, RagFileSortKey.NAME_ASC, 0,
                 30);
         FileMetadataDiscoveryService service = newService(properties(10_000L, 50));
-        RagFileSearchResponse response = service.search(userContext(recipient), query);
+        RagFileSearchResponse response = service.search(identifiedAndClearedUser(recipient), query);
 
         assertThat(response.items()).isEmpty();
         assertThat(response.hasMore()).as("the cap was reached before exhaustion could be confirmed").isNull();
@@ -723,7 +737,7 @@ class FileMetadataDiscoveryServiceTest {
         RagFileSearchQuery query = new RagFileSearchQuery(null, null, null, null, null, RagFileSortKey.NAME_ASC, 0,
                 20);
         FileMetadataDiscoveryService service = newService(properties(10_000L, 1));
-        RagFileSearchResponse response = service.search(userContext(recipient), query);
+        RagFileSearchResponse response = service.search(identifiedAndClearedUser(recipient), query);
 
         assertThat(response.items()).isEmpty();
         assertThat(response.hasMore()).isNull();
@@ -800,7 +814,7 @@ class FileMetadataDiscoveryServiceTest {
         fakeConnector.onNextVerify(() -> clock.advance(Duration.ofDays(1)));
 
         FileMetadataDiscoveryService service = newService(properties(1L, 50));
-        RagFileSearchResponse response = service.search(userContext(recipient), emptyQuery());
+        RagFileSearchResponse response = service.search(identifiedAndClearedUser(recipient), emptyQuery());
 
         assertThat(response.items()).hasSize(1);
         assertThat(response.hasMore()).as("no more raw rows exist - nothing was left to check").isFalse();
@@ -831,7 +845,7 @@ class FileMetadataDiscoveryServiceTest {
         RagFileSearchQuery pageOfOne = new RagFileSearchQuery(null, null, null, null, null,
                 RagFileSortKey.NAME_ASC, 0, 1);
         FileMetadataDiscoveryService service = newService(properties(1L, 50));
-        RagFileSearchResponse response = service.search(userContext(recipient), pageOfOne);
+        RagFileSearchResponse response = service.search(identifiedAndClearedUser(recipient), pageOfOne);
 
         assertThat(response.items()).hasSize(1);
         assertThat(response.hasMore())
@@ -861,7 +875,7 @@ class FileMetadataDiscoveryServiceTest {
         RagFileSearchQuery query = new RagFileSearchQuery(null, null, null, null, null, RagFileSortKey.NAME_ASC, 0,
                 20);
         FileMetadataDiscoveryService service = newService(properties(10L, 50));
-        RagFileSearchResponse response = service.search(userContext(recipient), query);
+        RagFileSearchResponse response = service.search(identifiedAndClearedUser(recipient), query);
 
         assertThat(response.items()).as("exactly-at-deadline must count as expired, not as remaining budget")
                 .hasSize(1);
@@ -899,7 +913,7 @@ class FileMetadataDiscoveryServiceTest {
         RagFileSearchQuery query = new RagFileSearchQuery(null, null, null, null, null,
                 RagFileSortKey.NAME_ASC, 0, 20);
         FileMetadataDiscoveryService service = newService(properties(1L, 50));
-        RagFileSearchResponse response = service.search(userContext(recipient), query);
+        RagFileSearchResponse response = service.search(identifiedAndClearedUser(recipient), query);
 
         assertThat(response.partial()).as("budget exhaustion must be reported honestly").isTrue();
         assertThat(response.items()).hasSize(1);
@@ -927,13 +941,60 @@ class FileMetadataDiscoveryServiceTest {
         assertThat(fakeConnector.verifyCalls()).containsExactly(fixture.sourceId() + ":" + fixture.sourceDocumentId());
     }
 
+    @ParameterizedTest
+    @EnumSource(AuthorizationMutation.class)
+    void wholeDiscoveryResponseIsDiscardedWhenRequesterAuthorizationChangesAfterAnEarlierRowWasCollected(
+            AuthorizationMutation mutation) throws Exception {
+        String publisher = "publisher-final-fence-" + unique();
+        String recipient = "recipient-final-fence-" + unique();
+        AdminUserResponse registered = registerAndAssign(recipient, "INTERNAL", true);
+        Fixture first = stubVisible(publisher, recipient, "A-first.pdf");
+        Fixture second = stubVisible(publisher, recipient, "B-second.pdf");
+        CountDownLatch secondCheckStarted = new CountDownLatch(1);
+        CountDownLatch resumeSecondCheck = new CountDownLatch(1);
+        fakeConnector.onVerify(second.sourceId(), second.sourceDocumentId(), () -> {
+            secondCheckStarted.countDown();
+            await(resumeSecondCheck);
+        });
+
+        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+            Future<RagFileSearchResponse> response = executor.submit(() -> newService(defaultProperties()).search(
+                    identifiedUser(recipient), new RagFileSearchQuery(null, null, null, null, null,
+                            RagFileSortKey.NAME_ASC, 0, 20)));
+            assertThat(secondCheckStarted.await(2, TimeUnit.SECONDS)).isTrue();
+            mutateAuthorization(registered, mutation);
+            resumeSecondCheck.countDown();
+
+            assertThatThrownBy(response::get)
+                    .hasCauseInstanceOf(RequesterAuthorizationChangedException.class);
+        }
+        assertThat(fakeConnector.verifyCalls()).contains(
+                first.sourceId() + ":" + first.sourceDocumentId(),
+                second.sourceId() + ":" + second.sourceDocumentId());
+    }
+
+    @Test
+    void unchangedRequesterAuthorizationStillReleasesTheCompleteDiscoveryResponse() {
+        String publisher = "publisher-unchanged-fence-" + unique();
+        String recipient = "recipient-unchanged-fence-" + unique();
+        registerAndAssign(recipient, "INTERNAL", true);
+        stubVisible(publisher, recipient, "A-first.pdf");
+        stubVisible(publisher, recipient, "B-second.pdf");
+
+        RagFileSearchResponse response = newService(defaultProperties()).search(identifiedUser(recipient),
+                new RagFileSearchQuery(null, null, null, null, null, RagFileSortKey.NAME_ASC, 0, 20));
+
+        assertThat(response.items()).extracting(RagFileItem::name)
+                .containsExactly("A-first.pdf", "B-second.pdf");
+    }
+
     // ------------------------------------------------------------------
     // helpers
     // ------------------------------------------------------------------
 
     private RagFileSearchResponse search(String subject, RagFileSearchQuery query) {
         FileMetadataDiscoveryService service = newService(defaultProperties());
-        return service.search(userContext(subject), query);
+        return service.search(identifiedAndClearedUser(subject), query);
     }
 
     private FileMetadataDiscoveryService newService(RagDiscoveryProperties properties) {
@@ -1030,9 +1091,51 @@ class FileMetadataDiscoveryServiceTest {
         return "recipient-" + unique();
     }
 
-    private static UserContext userContext(String subject) {
-        return new UserContext(subject, subject + "@example.com", Set.of(Role.USER), Set.of());
+    private UserContext identifiedUser(String subject) {
+        return new UserContext(subject, subject + "@example.com", Set.of(Role.USER), Set.of(), ISSUER, subject);
     }
+
+    private UserContext identifiedAndClearedUser(String subject) {
+        if (identityRegistryService.currentAuthorization(ISSUER, subject).isEmpty()) {
+            registerAndAssign(subject, "SECRET", true);
+        }
+        return identifiedUser(subject);
+    }
+
+    private AdminUserResponse registerAndAssign(String subject, String level, boolean active) {
+        identityRegistryService.observeValidatedLogin(ISSUER, subject, subject, subject);
+        String boundedQuery = subject.substring(0, Math.min(subject.length(), 50));
+        AdminUserResponse user = identityRegistryService.adminSearch(boundedQuery, 0, 50).items().stream()
+                .filter(candidate -> candidate.loginId().equals(subject)).findFirst().orElseThrow();
+        return identityRegistryService.updateAccess("admin-test", user.id(), user.version(), level, active);
+    }
+
+    private void mutateAuthorization(AdminUserResponse user, AuthorizationMutation mutation) {
+        switch (mutation) {
+            case DOWNGRADE -> identityRegistryService.updateAccess("admin-test", user.id(), user.version(),
+                    "PUBLIC", true);
+            case RESET -> identityRegistryService.updateAccess("admin-test", user.id(), user.version(), null, true);
+            case DISABLE -> identityRegistryService.updateAccess("admin-test", user.id(), user.version(),
+                    "INTERNAL", false);
+            case ABA -> {
+                AdminUserResponse downgraded = identityRegistryService.updateAccess("admin-test", user.id(),
+                        user.version(), "PUBLIC", true);
+                identityRegistryService.updateAccess("admin-test", downgraded.id(), downgraded.version(),
+                        "INTERNAL", true);
+            }
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(2, TimeUnit.SECONDS)) throw new AssertionError("latch timeout");
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(interrupted);
+        }
+    }
+
+    private enum AuthorizationMutation { DOWNGRADE, RESET, DISABLE, ABA }
 
     private static String unique() {
         return UUID.randomUUID().toString();
@@ -1046,6 +1149,7 @@ class FileMetadataDiscoveryServiceTest {
         private final Map<String, SourceMetadataVerificationResult> canned = new HashMap<>();
         private final List<String> calls = new ArrayList<>();
         private Runnable onNextVerify;
+        private final Map<String, Runnable> verifyHooks = new HashMap<>();
 
         void stub(Long sourceId, String sourceDocumentId, SourceMetadataVerificationResult result) {
             canned.put(key(sourceId, sourceDocumentId), result);
@@ -1054,6 +1158,10 @@ class FileMetadataDiscoveryServiceTest {
         /** 다음 {@link #verifyCurrentMetadata} 호출이 결과를 계산하기 직전에 정확히 한 번 실행된다. */
         void onNextVerify(Runnable hook) {
             this.onNextVerify = hook;
+        }
+
+        void onVerify(Long sourceId, String sourceDocumentId, Runnable hook) {
+            verifyHooks.put(key(sourceId, sourceDocumentId), hook);
         }
 
         List<String> verifyCalls() {
@@ -1096,6 +1204,8 @@ class FileMetadataDiscoveryServiceTest {
         public SourceMetadataVerificationResult verifyCurrentMetadata(UserContext requestingUser, Long sourceId,
                 String sourceDocumentId) {
             calls.add(key(sourceId, sourceDocumentId));
+            Runnable keyedHook = verifyHooks.remove(key(sourceId, sourceDocumentId));
+            if (keyedHook != null) keyedHook.run();
             if (onNextVerify != null) {
                 Runnable hook = onNextVerify;
                 onNextVerify = null;

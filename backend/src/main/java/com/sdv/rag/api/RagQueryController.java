@@ -10,6 +10,7 @@ import com.sdv.rag.api.dto.RagFileSortKey;
 import com.sdv.rag.api.dto.RagAskRequest;
 import com.sdv.rag.api.dto.RagAnswerResponse;
 import com.sdv.rag.application.FileMetadataDiscoveryService;
+import com.sdv.rag.application.RequesterAuthorizationChangedException;
 import com.sdv.rag.application.RagAnswerService;
 import com.sdv.rag.application.RagDiscoveryProperties;
 import com.sdv.ai.application.AssistantProperties;
@@ -189,5 +190,13 @@ public class RagQueryController {
         ApiErrorResponse body = new ApiErrorResponse(VALIDATION_ERROR_CODE, "Request validation failed.",
                 MDC.get(TraceIdFilter.MDC_KEY));
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
+
+    @ExceptionHandler(RequesterAuthorizationChangedException.class)
+    public ResponseEntity<ApiErrorResponse> handleRequesterAuthorizationChanged(
+            RequesterAuthorizationChangedException ex) {
+        ApiErrorResponse body = new ApiErrorResponse("REQUESTER_AUTHORIZATION_CHANGED",
+                "The requester's authorization changed.", MDC.get(TraceIdFilter.MDC_KEY));
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
     }
 }

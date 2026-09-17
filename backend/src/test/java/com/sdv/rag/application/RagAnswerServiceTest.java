@@ -13,8 +13,10 @@ import com.sdv.audit.application.AuditService;
 import com.sdv.audit.application.port.AuditEventPort;
 import com.sdv.audit.domain.AuditEvent;
 import com.sdv.common.model.UserContext;
+import com.sdv.identity.domain.UserAuthorizationSnapshot;
 import com.sdv.policy.application.EffectivePermissionService;
 import com.sdv.policy.domain.PolicyDecision;
+import com.sdv.policy.domain.SecurityLevel;
 import com.sdv.rag.domain.CandidateSelectionResult;
 import com.sdv.rag.domain.EvidenceBatchResult;
 import com.sdv.rag.domain.EvidenceHandle;
@@ -47,7 +49,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class RagAnswerServiceTest {
-    private static final UserContext USER = new UserContext("user-b", "b@example.test", Set.of(), Set.of());
+    private static final UserContext USER = new UserContext("user-b", "b@example.test", Set.of(), Set.of(),
+            "https://issuer.test/realms/sdv", "sdv-user-b");
     private static final AssistantProperties PROPERTIES = new AssistantProperties(true, "test", 8192, 1024,
             2000, 5, 10, 24000, 2, 5000, 1000, 2000);
 
@@ -294,6 +297,19 @@ class RagAnswerServiceTest {
     }
 
     @Test
+    void findFileTurnsAWholeResponseAuthorizationFenceFailureIntoASafeAssistantFailure() {
+        Fixture f = fixture(new ScriptedPort(AssistantIntent.FIND_FILE,
+                new LlmPort.GenerationResult(LlmPort.GenerationResult.Kind.SUCCESS, List.of(), null)));
+        when(f.fileDiscovery.search(any(), any())).thenThrow(new RequesterAuthorizationChangedException());
+
+        var response = f.service.ask(USER, "find policy files", List.of());
+
+        assertThat(response.status()).isEqualTo("FAILED");
+        assertThat(response.reasonCode()).isEqualTo("NOT_AUTHORIZED");
+        assertThat(response.files()).isNull();
+    }
+
+    @Test
     void unauthorizedSelectedIdStopsBeforeLiveFetchAndBusinessGeneration() {
         ScriptedPort port = new ScriptedPort(new LlmPort.GenerationResult(LlmPort.GenerationResult.Kind.SUCCESS,
                 List.of(), null));
@@ -396,12 +412,16 @@ class RagAnswerServiceTest {
         when(retrieval.validateEvidenceForResponse(any(), anyString(), any(), any())).thenReturn(true);
         EffectivePermissionService permissions = mock(EffectivePermissionService.class);
         when(permissions.evaluateSharedAccess(any(), any(), any())).thenReturn(PolicyDecision.allow());
+        when(permissions.currentSharedAuthorization(USER)).thenReturn(java.util.Optional.of(
+                new UserAuthorizationSnapshot(2L, USER.issuer(), USER.subject(), USER.loginId(),
+                        SecurityLevel.SECRET, 7L)));
         PolicyEnforcedLlmGateway gateway = new PolicyEnforcedLlmGateway(port, properties);
         AssistantRouter router = new AssistantRouter(new PromptSecurityService(), gateway);
+        FileMetadataDiscoveryService fileDiscovery = mock(FileMetadataDiscoveryService.class);
         RagAnswerService service = new RagAnswerService(router, new NaturalLanguageFileQueryParser(),
-                mock(FileMetadataDiscoveryService.class), retrieval, new PromptComposer(properties), gateway,
-                new CitationAssembler(permissions), properties, audit);
-        return new Fixture(service, retrieval, audit);
+                fileDiscovery, retrieval, new PromptComposer(properties), gateway,
+                new CitationAssembler(permissions), properties, audit, permissions);
+        return new Fixture(service, retrieval, audit, fileDiscovery);
     }
 
     private static LiveRetrievalResult live(Long documentId, String locator) {
@@ -425,7 +445,8 @@ class RagAnswerServiceTest {
                 "chunk-v2", "bge-m3:567m");
     }
 
-    private record Fixture(RagAnswerService service, RagRetrievalService retrieval, RagAuditRecorder audit) { }
+    private record Fixture(RagAnswerService service, RagRetrievalService retrieval, RagAuditRecorder audit,
+            FileMetadataDiscoveryService fileDiscovery) { }
 
     private static final class ScriptedPort implements LlmPort {
         private final AssistantIntent classified;

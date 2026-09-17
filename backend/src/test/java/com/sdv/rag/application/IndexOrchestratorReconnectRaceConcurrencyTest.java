@@ -198,7 +198,8 @@ class IndexOrchestratorReconnectRaceConcurrencyTest {
         sourceDocumentJpaRepository.saveAndFlush(document);
         long documentId = document.getId();
         documentShareJpaRepository.saveAndFlush(
-                new DocumentShareEntity(owner, sourceId, documentId, "INTERNAL", "VIEW", Instant.now()));
+                new DocumentShareEntity(owner, sourceId, documentId, "ALL_AUTHENTICATED", "INTERNAL", "VIEW",
+                        Instant.now()));
 
         // 최초 연결 - 재연결이 비교할 Provider Identity(account-a)를 채택시킨다.
         GoogleDriveOAuthService.AuthorizeResult firstAuthorize = googleDriveOAuthService.startAuthorization(owner,

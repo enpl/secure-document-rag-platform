@@ -128,6 +128,21 @@ class IndexOrchestratorTest {
     }
 
     @Test
+    void processRejectsAMalformedNamedShareWithoutRecipientsBeforeFetchingContent() {
+        givenActiveDocument("application/pdf");
+        DocumentShareEntity malformed = new DocumentShareEntity(OWNER, SOURCE_ID, DOCUMENT_ID,
+                "NAMED_USERS", SecurityLevel.INTERNAL.name(), "VIEW", Instant.now());
+        ReflectionTestUtils.setField(malformed, "id", SHARE_ID);
+        when(documentShareJpaRepository.findByDocumentIdAndRevokedAtIsNull(DOCUMENT_ID))
+                .thenReturn(Optional.of(malformed));
+        when(documentShareJpaRepository.countRecipients(SHARE_ID)).thenReturn(0L);
+
+        assertThat(orchestrator.process(DOCUMENT_ID)).isEqualTo(IndexProcessingOutcome.SKIPPED_INELIGIBLE);
+        verify(googleDriveConnector, never()).fetchContent(any(), any(), any(), any());
+        verifyNoInteractions(documentParsingClient);
+    }
+
+    @Test
     void processReturnsSkippedIneligibleWhenAiUsagePolicyDeniesTheClassification() {
         givenActiveDocument("text/plain");
         when(documentShareJpaRepository.findByDocumentIdAndRevokedAtIsNull(DOCUMENT_ID))
@@ -399,8 +414,8 @@ class IndexOrchestratorTest {
     }
 
     private static DocumentShareEntity activeShare(SecurityLevel classification) {
-        DocumentShareEntity share = new DocumentShareEntity(OWNER, SOURCE_ID, DOCUMENT_ID, classification.name(),
-                "VIEW", Instant.now());
+        DocumentShareEntity share = new DocumentShareEntity(OWNER, SOURCE_ID, DOCUMENT_ID, "ALL_AUTHENTICATED",
+                classification.name(), "VIEW", Instant.now());
         // @GeneratedValue 필드라 Setter가 없다 - 실제 영속화 없이(순수 단위 Test) publishGeneration이
         // 요구하는 non-null shareId(발행 직전 Lock 재조회 Key)를 만들기 위한 최소한의 우회다.
         ReflectionTestUtils.setField(share, "id", SHARE_ID);

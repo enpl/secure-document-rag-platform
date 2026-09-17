@@ -53,6 +53,9 @@ public class DocumentShareEntity {
     @Column(name = "document_id", nullable = false)
     private Long documentId;
 
+    @Column(name = "audience", nullable = false, length = 30)
+    private String audience;
+
     // PUBLIC, INTERNAL, CONFIDENTIAL, SECRET만 유효하다(chk_document_share_classification).
     @Column(name = "classification", nullable = false, length = 30)
     private String classification;
@@ -84,17 +87,24 @@ public class DocumentShareEntity {
         // JPA
     }
 
-    public DocumentShareEntity(String publisherSubject, Long sourceId, Long documentId, String classification,
-            String allowedActions, Instant createdAt) {
+    public DocumentShareEntity(String publisherSubject, Long sourceId, Long documentId, String audience,
+            String classification, String allowedActions, Instant createdAt) {
         this.publisherSubject = publisherSubject;
         this.sourceId = sourceId;
         this.documentId = documentId;
+        this.audience = audience;
         this.classification = classification;
         this.allowedActions = allowedActions;
         this.adminBlocked = false;
         this.generation = 1L;
         this.createdAt = createdAt;
         this.updatedAt = createdAt;
+    }
+
+    /** Legacy test/source compatibility: old constructor is always safely named-only. */
+    public DocumentShareEntity(String publisherSubject, Long sourceId, Long documentId, String classification,
+            String allowedActions, Instant createdAt) {
+        this(publisherSubject, sourceId, documentId, "NAMED_USERS", classification, allowedActions, createdAt);
     }
 
     public Long getId() {
@@ -115,6 +125,10 @@ public class DocumentShareEntity {
 
     public String getClassification() {
         return classification;
+    }
+
+    public String getAudience() {
+        return audience;
     }
 
     public String getAllowedActions() {
@@ -156,10 +170,15 @@ public class DocumentShareEntity {
      * {@code OptimisticLockException}이 발생한다({@code SourceSharingService.updateShare}
      * 참고).
      */
-    public void applyOwnerUpdate(String classification, String allowedActions, Instant now) {
+    public void applyOwnerUpdate(String audience, String classification, String allowedActions, Instant now) {
+        this.audience = audience;
         this.classification = classification;
         this.allowedActions = allowedActions;
         this.updatedAt = now;
+    }
+
+    public void applyOwnerUpdate(String classification, String allowedActions, Instant now) {
+        applyOwnerUpdate("NAMED_USERS", classification, allowedActions, now);
     }
 
     /** 명시적 unshare - Disconnect와 별개 연산이며, 되살릴 수 없다(재공유는 새 행). */

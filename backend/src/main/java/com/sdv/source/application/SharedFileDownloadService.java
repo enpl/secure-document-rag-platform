@@ -95,7 +95,7 @@ public class SharedFileDownloadService {
 
     /** Resolves an immutable server-side context and validates the live publisher file before bytes are fetched. */
     Attempt verifyBefore(UserContext requester, Long shareId, DownloadDeadline deadline) {
-        Snapshot snapshot = readFreshSnapshot(requester.subject(), shareId);
+        Snapshot snapshot = readFreshSnapshot(requester, shareId);
         authorize(requester, snapshot.context());
         DocumentSourceConnector connector = sourceConnectorRegistry.getConnector(snapshot.sourceType())
                 .orElseThrow(() -> new SharedFileDownloadException(SharedFileDownloadException.Reason.NOT_AVAILABLE));
@@ -136,14 +136,17 @@ public class SharedFileDownloadService {
                 || !lease.verifiedSourceVersion().equals(live.sourceVersion())) {
             throw new SharedFileDownloadException(SharedFileDownloadException.Reason.DOCUMENT_CHANGED);
         }
-        Snapshot current = readFreshSnapshot(requester.subject(), before.snapshot().context().shareId());
+        Snapshot current = readFreshSnapshot(requester, before.snapshot().context().shareId());
         if (!sameBinding(before.snapshot(), current)) {
             throw new SharedFileDownloadException(SharedFileDownloadException.Reason.NOT_AUTHORIZED);
         }
         authorize(requester, current.context());
     }
 
-    private Snapshot readFreshSnapshot(String requesterSubject, Long shareId) {
+    private Snapshot readFreshSnapshot(UserContext requester, Long shareId) {
+        long authorizationRevision = effectivePermissionService.currentSharedAuthorization(requester)
+                .map(com.sdv.identity.domain.UserAuthorizationSnapshot::authorizationRevision)
+                .orElseThrow(() -> new SharedFileDownloadException(SharedFileDownloadException.Reason.NOT_AUTHORIZED));
         Snapshot snapshot = freshRead.execute(status -> {
             DocumentShareEntity share = documentShareJpaRepository.findById(shareId).orElse(null);
             if (share == null) {
@@ -157,9 +160,9 @@ public class SharedFileDownloadService {
                 return null;
             }
             try {
-                return new Snapshot(new SourceAccessContext(requesterSubject, share.getPublisherSubject(), share.getSourceId(),
+                return new Snapshot(new SourceAccessContext(requester.subject(), share.getPublisherSubject(), share.getSourceId(),
                         share.getDocumentId(), share.getId(), ShareAction.DOWNLOAD, share.getGeneration(),
-                        connection.getConnectionEpoch()), com.sdv.source.domain.SourceType.valueOf(connection.getType()),
+                        connection.getConnectionEpoch(), authorizationRevision), com.sdv.source.domain.SourceType.valueOf(connection.getType()),
                         document.getSourceDocumentId());
             } catch (IllegalArgumentException ignored) {
                 return null;

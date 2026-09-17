@@ -8,6 +8,7 @@ import type { AuthState } from '../../auth/AuthContext'
 import { createShare, listMyShares, updateShare } from '../../api/shares'
 import type { ShareResponse } from '../../api/shares'
 import { ApiError } from '../../api/client'
+import { searchDirectory } from '../../api/users'
 
 vi.mock('../../auth/AuthContext')
 vi.mock('../../api/useApiClient', () => {
@@ -18,11 +19,13 @@ vi.mock('../../api/shares', async () => {
   const actual = await vi.importActual<typeof import('../../api/shares')>('../../api/shares')
   return { ...actual, createShare: vi.fn(), updateShare: vi.fn(), listMyShares: vi.fn() }
 })
+vi.mock('../../api/users', () => ({ searchDirectory: vi.fn() }))
 
 const mockedUseAuth = vi.mocked(useAuth)
 const mockedCreateShare = vi.mocked(createShare)
 const mockedUpdateShare = vi.mocked(updateShare)
 const mockedListMyShares = vi.mocked(listMyShares)
+const mockedSearchDirectory = vi.mocked(searchDirectory)
 
 function asAuth(partial: Partial<AuthState>): AuthState {
   return partial as unknown as AuthState
@@ -37,9 +40,10 @@ function share(overrides: Partial<ShareResponse> = {}): ShareResponse {
     id: 5,
     sourceId: 1,
     documentId: 100,
+    audience: 'NAMED_USERS',
     classification: 'INTERNAL',
     allowedActions: ['VIEW'],
-    recipients: ['recipient-b'],
+    recipients: [{ id: 20, loginId: 'recipient-b', displayName: 'Recipient B' }],
     adminBlocked: false,
     adminBlockReason: null,
     generation: 3,
@@ -57,19 +61,27 @@ beforeEach(() => {
 })
 
 describe('ShareSettingsDialog validation', () => {
-  it('blocks submission with no recipients and never calls the create API', async () => {
+  it('defaults to all eligible authenticated users without requiring recipients', async () => {
+    mockedCreateShare.mockResolvedValue(share({ audience: 'ALL_AUTHENTICATED', recipients: [] }))
     render(<ShareSettingsDialog mode="create" files={[target()]} onClose={vi.fn()} />)
 
     await userEvent.setup().click(screen.getByRole('button', { name: '공유하기' }))
 
-    expect(screen.getByText(/수신자를 한 명 이상 입력해 주세요/)).toBeInTheDocument()
-    expect(mockedCreateShare).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(mockedCreateShare).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          audience: 'ALL_AUTHENTICATED',
+          recipientUserIds: [],
+        }),
+        expect.any(AbortSignal),
+      ),
+    )
   })
 
   it('blocks submission with no actions selected', async () => {
     render(<ShareSettingsDialog mode="create" files={[target()]} onClose={vi.fn()} />)
     const user = userEvent.setup()
-    await user.type(screen.getByLabelText(/수신자/), 'recipient-b')
     await user.click(screen.getByLabelText(/찾기\(VIEW\)/)) // 기본으로 켜져 있던 VIEW를 끈다.
 
     await user.click(screen.getByRole('button', { name: '공유하기' }))
@@ -78,15 +90,48 @@ describe('ShareSettingsDialog validation', () => {
     expect(mockedCreateShare).not.toHaveBeenCalled()
   })
 
-  it('rejects more than the maximum recipient count client-side', async () => {
+  it('blocks named mode until a directory candidate is selected', async () => {
     render(<ShareSettingsDialog mode="create" files={[target()]} onClose={vi.fn()} />)
-    const many = Array.from({ length: 21 }, (_, i) => `recipient-${i}`).join('\n')
     const user = userEvent.setup()
-    await user.type(screen.getByLabelText(/수신자/), many)
+    await user.click(screen.getByLabelText('특정 사용자만'))
     await user.click(screen.getByRole('button', { name: '공유하기' }))
 
-    expect(screen.getByText(/최대 20명까지/)).toBeInTheDocument()
+    expect(screen.getByText(/검색 결과에서 한 명 이상 선택/)).toBeInTheDocument()
     expect(mockedCreateShare).not.toHaveBeenCalled()
+  })
+
+  it('stores only a confirmed directory selection in named mode', async () => {
+    mockedSearchDirectory.mockResolvedValue([{ id: 20, loginId: 'sdv-user-b', displayName: 'User B' }])
+    mockedCreateShare.mockResolvedValue(share())
+    render(<ShareSettingsDialog mode="create" files={[target()]} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByLabelText('특정 사용자만'))
+    await user.type(screen.getByLabelText(/사용자 찾기/), 'sdv-us')
+    const option = await screen.findByRole('option', { name: /sdv-user-b/ })
+    await user.tab()
+    expect(option).toHaveFocus()
+    await user.keyboard('{Enter}')
+    const remove = screen.getByRole('button', { name: 'sdv-user-b 선택 제거' })
+    remove.focus()
+    await user.keyboard('{Enter}')
+    expect(screen.queryByRole('button', { name: 'sdv-user-b 선택 제거' })).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText(/사용자 찾기/), 'sdv-us')
+    const secondOption = await screen.findByRole('option', { name: /sdv-user-b/ })
+    await user.tab()
+    expect(secondOption).toHaveFocus()
+    await user.keyboard('{Enter}')
+    await user.click(screen.getByRole('button', { name: '공유하기' }))
+
+    await waitFor(() =>
+      expect(mockedCreateShare).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          audience: 'NAMED_USERS',
+          recipientUserIds: [20],
+        }),
+        expect.any(AbortSignal),
+      ),
+    )
   })
 })
 
@@ -98,7 +143,6 @@ describe('ShareSettingsDialog bounded per-file create', () => {
     const user = userEvent.setup()
     await user.selectOptions(screen.getByLabelText('보안 등급'), 'CONFIDENTIAL')
     await user.click(screen.getByLabelText(/다운로드\(DOWNLOAD\)/))
-    await user.type(screen.getByLabelText(/수신자/), 'recipient-b, recipient-c')
     await user.click(screen.getByRole('button', { name: '공유하기' }))
 
     await waitFor(() =>
@@ -109,7 +153,8 @@ describe('ShareSettingsDialog bounded per-file create', () => {
           documentId: 42,
           classification: 'CONFIDENTIAL',
           actions: ['VIEW', 'DOWNLOAD'],
-          recipients: ['recipient-b', 'recipient-c'],
+          audience: 'ALL_AUTHENTICATED',
+          recipientUserIds: [],
         },
         expect.any(AbortSignal),
       ),
@@ -130,7 +175,6 @@ describe('ShareSettingsDialog bounded per-file create', () => {
       />,
     )
     const user = userEvent.setup()
-    await user.type(screen.getByLabelText(/수신자/), 'recipient-b')
     await user.click(screen.getByRole('button', { name: '공유하기' }))
 
     await waitFor(() => expect(screen.getByText('성공.pdf - 공유 완료')).toBeInTheDocument())
@@ -154,7 +198,6 @@ describe('ShareSettingsDialog bounded per-file create', () => {
       />,
     )
     const user = userEvent.setup()
-    await user.type(screen.getByLabelText(/수신자/), 'recipient-b')
     await user.click(screen.getByRole('button', { name: '공유하기' }))
     await waitFor(() => expect(screen.getByText(/실패\.pdf - /)).toBeInTheDocument())
 
@@ -171,7 +214,6 @@ describe('ShareSettingsDialog bounded per-file create', () => {
 
     render(<ShareSettingsDialog mode="create" files={[target({ documentId: 1, sourceId: 1 })]} onClose={vi.fn()} />)
     const user = userEvent.setup()
-    await user.type(screen.getByLabelText(/수신자/), 'recipient-b')
     await user.click(screen.getByRole('button', { name: '공유하기' }))
     await waitFor(() => expect(screen.getByText(/서버 응답을 확인하지 못했습니다/)).toBeInTheDocument())
 
@@ -209,9 +251,10 @@ describe('ShareSettingsDialog edit mode', () => {
         9,
         {
           expectedGeneration: 3,
+          audience: 'NAMED_USERS',
           classification: 'INTERNAL',
           actions: ['VIEW'],
-          recipients: ['recipient-b'],
+          recipientUserIds: [20],
         },
         expect.any(AbortSignal),
       ),
@@ -224,12 +267,25 @@ describe('ShareSettingsDialog edit mode', () => {
       new ApiError(409, { code: 'SHARE_GENERATION_CONFLICT', message: 'x', traceId: null }),
     )
     mockedListMyShares.mockResolvedValue([
-      share({ id: 9, generation: 4, classification: 'CONFIDENTIAL', recipients: ['recipient-b', 'recipient-c'] }),
+      share({
+        id: 9,
+        generation: 4,
+        classification: 'CONFIDENTIAL',
+        recipients: [
+          { id: 20, loginId: 'recipient-b', displayName: null },
+          { id: 21, loginId: 'recipient-c', displayName: null },
+        ],
+      }),
     ])
     const onClose = vi.fn()
 
     render(
-      <ShareSettingsDialog mode="edit" share={share({ id: 9, generation: 3 })} fileLabel="보고서.pdf" onClose={onClose} />,
+      <ShareSettingsDialog
+        mode="edit"
+        share={share({ id: 9, generation: 3 })}
+        fileLabel="보고서.pdf"
+        onClose={onClose}
+      />,
     )
     await userEvent.setup().click(screen.getByRole('button', { name: '저장' }))
 
@@ -261,7 +317,6 @@ describe('ShareSettingsDialog lifecycle/session invalidation (M16C 후속 교정
       />,
     )
     const user = userEvent.setup()
-    await user.type(screen.getByLabelText(/수신자/), 'recipient-b')
     await user.click(screen.getByRole('button', { name: '공유하기' }))
     await waitFor(() => expect(mockedCreateShare).toHaveBeenCalledTimes(1))
 
@@ -291,7 +346,6 @@ describe('ShareSettingsDialog lifecycle/session invalidation (M16C 후속 교정
       />,
     )
     const user = userEvent.setup()
-    await user.type(screen.getByLabelText(/수신자/), 'recipient-b')
     await user.click(screen.getByRole('button', { name: '공유하기' }))
     await waitFor(() => expect(mockedCreateShare).toHaveBeenCalledTimes(1))
 
@@ -331,7 +385,6 @@ describe('ShareSettingsDialog lifecycle/session invalidation (M16C 후속 교정
       />,
     )
     const user = userEvent.setup()
-    await user.type(screen.getByLabelText(/수신자/), 'recipient-b')
     await user.click(screen.getByRole('button', { name: '공유하기' }))
     await waitFor(() => expect(mockedCreateShare).toHaveBeenCalledTimes(1))
 
@@ -369,7 +422,6 @@ describe('ShareSettingsDialog lifecycle/session invalidation (M16C 후속 교정
       />,
     )
     const user = userEvent.setup()
-    await user.type(screen.getByLabelText(/수신자/), 'recipient-b')
     await user.click(screen.getByRole('button', { name: '공유하기' }))
     await waitFor(() => expect(mockedCreateShare).toHaveBeenCalledTimes(1))
 
@@ -395,7 +447,6 @@ describe('ShareSettingsDialog lifecycle/session invalidation (M16C 후속 교정
 
     render(<ShareSettingsDialog mode="create" files={[target()]} onClose={onClose} />)
     const user = userEvent.setup()
-    await user.type(screen.getByLabelText(/수신자/), 'recipient-b')
     await user.click(screen.getByRole('button', { name: '공유하기' }))
     await waitFor(() => expect(screen.getByRole('button', { name: '닫기' })).toBeDisabled())
 
@@ -417,8 +468,6 @@ describe('ShareSettingsDialog lifecycle/session invalidation (M16C 후속 교정
     mockedCreateShare.mockImplementation(() => new Promise<ShareResponse>(() => {}))
 
     render(<ShareSettingsDialog mode="create" files={[target()]} onClose={vi.fn()} />)
-    const user = userEvent.setup()
-    await user.type(screen.getByLabelText(/수신자/), 'recipient-b')
     const submitButton = screen.getByRole('button', { name: '공유하기' })
     // 동기적으로 두 번 Click(React가 아직 disabled를 반영하기 전의 경쟁을 흉내낸다).
     fireEvent.click(submitButton)

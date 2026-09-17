@@ -4,6 +4,8 @@ import com.sdv.common.model.Role;
 import com.sdv.common.model.UserContext;
 import com.sdv.common.security.CurrentUserProvider;
 import com.sdv.policy.application.EffectivePermissionService;
+import com.sdv.identity.application.IdentityRegistryService;
+import com.sdv.identity.api.dto.AdminUserResponse;
 import com.sdv.source.api.SharedFileDownloadController;
 import com.sdv.source.application.SharedFileDownloadException;
 import com.sdv.source.application.SharedFileDownloadProperties;
@@ -22,6 +24,8 @@ import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRep
 import com.sdv.testsupport.TestcontainersConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
@@ -65,11 +69,13 @@ import static org.mockito.Mockito.when;
         "sdv.shared-download.request-timeout-ms=10000"
 })
 class SharedDownloadE2ETest {
+    private static final String ISSUER = "http://localhost:8180/realms/sdv";
     @Autowired private SourceSharingService sourceSharingService;
     @Autowired private EffectivePermissionService effectivePermissionService;
     @Autowired private SourceConnectionJpaRepository sourceConnectionJpaRepository;
     @Autowired private SourceDocumentJpaRepository sourceDocumentJpaRepository;
     @Autowired private PlatformTransactionManager transactionManager;
+    @Autowired private IdentityRegistryService identities;
 
     private DocumentSourceConnector connector;
     private SharedFileDownloadService downloadService;
@@ -133,6 +139,23 @@ class SharedDownloadE2ETest {
         }
         verify(connector, never()).verifyDownload(any(), anyLong());
         verify(connector, never()).fetchDownload(any(), any(), anyLong(), anyLong());
+    }
+
+    @Test
+    void incompleteRequesterIdentityCannotUseTheSharedDownloadCompatibilityConstructor() {
+        String a = "publisher-" + unique();
+        String b = "recipient-" + unique();
+        ensureAccess(b, "INTERNAL", true);
+        Doc doc = createDocument(createSource(a), "Incomplete.bin", "application/octet-stream", "v1");
+        DocumentShare share = sourceSharingService.createShare(a, doc.sourceId(), doc.documentId(), "INTERNAL",
+                Set.of("DOWNLOAD"), Set.of(b));
+        UserContext incomplete = new UserContext(b, b + "@example.test", Set.of(Role.USER), Set.of());
+
+        assertThatThrownBy(() -> downloadService.download(incomplete, share.getId()))
+                .isInstanceOf(SharedFileDownloadException.class)
+                .extracting(failure -> ((SharedFileDownloadException) failure).reason())
+                .isEqualTo(SharedFileDownloadException.Reason.NOT_AUTHORIZED);
+        verify(connector, never()).verifyDownload(any(), anyLong());
     }
 
     @Test
@@ -233,6 +256,96 @@ class SharedDownloadE2ETest {
         }
     }
 
+    @ParameterizedTest
+    @EnumSource(AuthorizationMutation.class)
+    void committedRequesterAuthorizationChangeDuringFinalCheckReleasesNoBytes(
+            AuthorizationMutation mutation) throws Exception {
+        String a = "publisher-" + unique();
+        String b = "recipient-" + unique();
+        AdminUserResponse recipient = ensureAccess(b, "INTERNAL", true);
+        Doc doc = createDocument(createSource(a), "Clearance-race.bin", "application/octet-stream", "v1");
+        DocumentShare share = sourceSharingService.createShare(a, doc.sourceId(), doc.documentId(), "INTERNAL",
+                Set.of("DOWNLOAD"), Set.of(b));
+        CountDownLatch finalProviderCheck = new CountDownLatch(1);
+        CountDownLatch resume = new CountDownLatch(1);
+        AtomicInteger checks = new AtomicInteger();
+        when(connector.verifyDownload(any(), anyLong())).thenAnswer(invocation -> {
+            if (checks.incrementAndGet() == 2) {
+                finalProviderCheck.countDown();
+                assertThat(resume.await(2, TimeUnit.SECONDS)).isTrue();
+            }
+            return SourceMetadataVerificationResult.verified("Clearance-race.bin", "application/octet-stream",
+                    "live-v1", Instant.now(), true);
+        });
+        when(connector.fetchDownload(any(), eq("live-v1"), eq(32L), anyLong()))
+                .thenReturn(SourceDownloadResult.verified(new byte[] { 1, 2, 3 }, "Clearance-race.bin",
+                        "application/octet-stream", "live-v1", false));
+        UserContext requester = identifiedUser(b);
+        CurrentUserProvider current = mock(CurrentUserProvider.class);
+        when(current.getCurrentUser()).thenReturn(requester);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+            Future<?> future = executor.submit(() -> {
+                try {
+                    new SharedFileDownloadController(downloadService, current).download(share.getId(), response);
+                } catch (IOException failure) {
+                    throw new RuntimeException(failure);
+                }
+            });
+            assertThat(finalProviderCheck.await(2, TimeUnit.SECONDS)).isTrue();
+            mutate(recipient, mutation);
+            resume.countDown();
+            assertThatThrownBy(future::get).hasCauseInstanceOf(SharedFileDownloadException.class);
+        }
+        assertThat(response.getContentAsByteArray()).isEmpty();
+        assertThat(response.getHeader("Content-Disposition")).isNull();
+    }
+
+    @Test
+    void anotherUsersAuthorizationChangeDoesNotBlockAnOtherwiseValidDownload() throws Exception {
+        String a = "publisher-" + unique();
+        String b = "recipient-" + unique();
+        ensureAccess(b, "INTERNAL", true);
+        AdminUserResponse other = ensureAccess("other-" + unique(), "INTERNAL", true);
+        Doc doc = createDocument(createSource(a), "Unaffected.bin", "application/octet-stream", "v1");
+        DocumentShare share = sourceSharingService.createShare(a, doc.sourceId(), doc.documentId(), "INTERNAL",
+                Set.of("DOWNLOAD"), Set.of(b));
+        CountDownLatch finalProviderCheck = new CountDownLatch(1);
+        CountDownLatch resume = new CountDownLatch(1);
+        AtomicInteger checks = new AtomicInteger();
+        when(connector.verifyDownload(any(), anyLong())).thenAnswer(invocation -> {
+            if (checks.incrementAndGet() == 2) {
+                finalProviderCheck.countDown();
+                assertThat(resume.await(2, TimeUnit.SECONDS)).isTrue();
+            }
+            return SourceMetadataVerificationResult.verified("Unaffected.bin", "application/octet-stream",
+                    "live-v1", Instant.now(), true);
+        });
+        when(connector.fetchDownload(any(), eq("live-v1"), eq(32L), anyLong()))
+                .thenReturn(SourceDownloadResult.verified(new byte[] { 8 }, "Unaffected.bin",
+                        "application/octet-stream", "live-v1", false));
+        CurrentUserProvider current = mock(CurrentUserProvider.class);
+        when(current.getCurrentUser()).thenReturn(identifiedUser(b));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+            Future<?> future = executor.submit(() -> {
+                try {
+                    new SharedFileDownloadController(downloadService, current).download(share.getId(), response);
+                } catch (IOException failure) {
+                    throw new RuntimeException(failure);
+                }
+            });
+            assertThat(finalProviderCheck.await(2, TimeUnit.SECONDS)).isTrue();
+            identities.updateAccess("admin-test", other.id(), other.version(), "PUBLIC", true);
+            resume.countDown();
+            future.get(3, TimeUnit.SECONDS);
+        }
+        assertThat(response.getContentAsByteArray()).containsExactly(8);
+        assertThat(response.getHeader("Content-Disposition")).contains("attachment");
+    }
+
     @Test
     void binaryDownloadDoesNotInvokeAiContentTransport() throws Exception {
         String a = "publisher-" + unique();
@@ -290,10 +403,40 @@ class SharedDownloadE2ETest {
         return new Doc(sourceId, document.getId(), document.getSourceDocumentId());
     }
 
-    private static UserContext user(String subject) {
-        return new UserContext(subject, subject + "@example.test", Set.of(Role.USER), Set.of());
+    private UserContext user(String subject) {
+        if (identities.currentAuthorization(ISSUER, subject).isEmpty()) {
+            ensureAccess(subject, "SECRET", true);
+        }
+        return identifiedUser(subject);
+    }
+
+    private static UserContext identifiedUser(String subject) {
+        return new UserContext(subject, subject + "@example.test", Set.of(Role.USER), Set.of(), ISSUER, subject);
+    }
+
+    private AdminUserResponse ensureAccess(String subject, String classification, boolean active) {
+        identities.observeValidatedLogin(ISSUER, subject, subject, subject);
+        String query = subject.substring(0, Math.min(subject.length(), 50));
+        AdminUserResponse row = identities.adminSearch(query, 0, 50).items().stream()
+                .filter(item -> item.loginId().equals(subject)).findFirst().orElseThrow();
+        if (classification.equals(row.maximumClassification()) && active == row.active()) return row;
+        return identities.updateAccess("admin-test", row.id(), row.version(), classification, active);
+    }
+
+    private void mutate(AdminUserResponse user, AuthorizationMutation mutation) {
+        switch (mutation) {
+            case DOWNGRADE -> identities.updateAccess("admin-test", user.id(), user.version(), "PUBLIC", true);
+            case RESET -> identities.updateAccess("admin-test", user.id(), user.version(), null, true);
+            case DISABLE -> identities.updateAccess("admin-test", user.id(), user.version(), "INTERNAL", false);
+            case ABA -> {
+                AdminUserResponse changed = identities.updateAccess("admin-test", user.id(), user.version(),
+                        "PUBLIC", true);
+                identities.updateAccess("admin-test", changed.id(), changed.version(), "INTERNAL", true);
+            }
+        }
     }
 
     private static String unique() { return UUID.randomUUID().toString(); }
     private record Doc(long sourceId, long documentId, String sourceDocumentId) { }
+    private enum AuthorizationMutation { DOWNGRADE, RESET, DISABLE, ABA }
 }

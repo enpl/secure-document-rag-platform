@@ -10,6 +10,13 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+dist-e2e
+e2e/.report
+# Vitest's own default --reporter=json output location when no --outputFile
+# is given (the harness's own Gate 07 always passes an explicit outside-repo
+# --outputFile and never creates this, but a manual `npm test -- --reporter
+# json` without it would).
+.vitest
 *.local
 
 # Editor directories and files

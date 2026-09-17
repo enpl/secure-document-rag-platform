@@ -12,7 +12,14 @@ import java.util.Objects;
  * {@code requesterSubject}와 함께 결합될 때만 의미가 있다.
  */
 public record EvidenceKey(String requesterSubject, String conversationId, Long sourceId, Long documentId,
-        Long shareId, long shareGeneration, long connectionGeneration, String sourceVersion) {
+        Long shareId, long shareGeneration, long connectionGeneration, long requesterAuthorizationRevision,
+        String sourceVersion) {
+
+    public EvidenceKey(String requesterSubject, String conversationId, Long sourceId, Long documentId,
+            Long shareId, long shareGeneration, long connectionGeneration, String sourceVersion) {
+        this(requesterSubject, conversationId, sourceId, documentId, shareId, shareGeneration,
+                connectionGeneration, -1L, sourceVersion);
+    }
 
     public EvidenceKey {
         requireNonBlank(requesterSubject, "requesterSubject");

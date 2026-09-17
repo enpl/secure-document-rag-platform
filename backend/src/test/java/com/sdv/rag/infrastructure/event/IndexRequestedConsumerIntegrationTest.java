@@ -252,8 +252,8 @@ class IndexRequestedConsumerIntegrationTest {
     }
 
     private void createActiveShare(long sourceId, long documentId) {
-        DocumentShareEntity share = new DocumentShareEntity("owner", sourceId, documentId, "INTERNAL", "VIEW",
-                Instant.now());
+        DocumentShareEntity share = new DocumentShareEntity("owner", sourceId, documentId, "ALL_AUTHENTICATED",
+                "INTERNAL", "VIEW", Instant.now());
         documentShareJpaRepository.saveAndFlush(share);
     }
 

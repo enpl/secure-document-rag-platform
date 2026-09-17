@@ -10,6 +10,8 @@ import com.sdv.ai.application.PromptComposer;
 import com.sdv.ai.application.port.LlmPort;
 import com.sdv.audit.application.RagAuditRecorder;
 import com.sdv.common.model.UserContext;
+import com.sdv.identity.domain.UserAuthorizationSnapshot;
+import com.sdv.policy.application.EffectivePermissionService;
 import com.sdv.rag.api.dto.RagAnswerResponse;
 import com.sdv.rag.api.dto.RagCitation;
 import com.sdv.rag.domain.CandidateSelectionResult;
@@ -30,6 +32,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.Optional;
 
 /** M13/M14 guided, read-only answer orchestration over M12 verified ephemeral evidence. */
 @Service
@@ -43,12 +46,13 @@ public class RagAnswerService {
     private final CitationAssembler citationAssembler;
     private final AssistantProperties properties;
     private final RagAuditRecorder audit;
+    private final EffectivePermissionService effectivePermissionService;
 
     @Autowired
     public RagAnswerService(AssistantRouter router, NaturalLanguageFileQueryParser fileQueryParser,
             FileMetadataDiscoveryService fileDiscovery, RagRetrievalService retrieval, PromptComposer promptComposer,
             PolicyEnforcedLlmGateway llm, CitationAssembler citationAssembler, AssistantProperties properties,
-            RagAuditRecorder audit) {
+            RagAuditRecorder audit, EffectivePermissionService effectivePermissionService) {
         this.router = router;
         this.fileQueryParser = fileQueryParser;
         this.fileDiscovery = fileDiscovery;
@@ -58,21 +62,37 @@ public class RagAnswerService {
         this.citationAssembler = citationAssembler;
         this.properties = properties;
         this.audit = audit;
-    }
-
-    public RagAnswerService(AssistantRouter router, NaturalLanguageFileQueryParser fileQueryParser,
-            FileMetadataDiscoveryService fileDiscovery, RagRetrievalService retrieval, PromptComposer promptComposer,
-            PolicyEnforcedLlmGateway llm, CitationAssembler citationAssembler, AssistantProperties properties) {
-        this(router, fileQueryParser, fileDiscovery, retrieval, promptComposer, llm, citationAssembler, properties,
-                RagAuditRecorder.noop());
+        this.effectivePermissionService = effectivePermissionService;
     }
 
     public RagAnswerResponse ask(UserContext requester, String question, List<Long> selectedDocumentIds) {
+        Optional<UserAuthorizationSnapshot> authorization = effectivePermissionService.currentSharedAuthorization(requester);
         audit.stage(requester, "REQUEST", "STARTED", "OK", Map.of(
                 "selectedCount", selectedDocumentIds == null ? 0 : selectedDocumentIds.size()));
-        RagAnswerResponse response = doAsk(requester, question, selectedDocumentIds);
+        RagAnswerResponse response;
+        try {
+            response = doAsk(requester, question, selectedDocumentIds);
+        } catch (RequesterAuthorizationChangedException changed) {
+            response = RagAnswerResponse.failed("FAILED", "NOT_AUTHORIZED");
+        }
+        response = fenceSharedResponse(requester, authorization, response);
         audit.finalOutcome(requester, response);
+        return fenceSharedResponse(requester, authorization, response);
+    }
+
+    private RagAnswerResponse fenceSharedResponse(UserContext requester,
+            Optional<UserAuthorizationSnapshot> original, RagAnswerResponse response) {
+        if (!containsSharedContent(response)) return response;
+        Optional<UserAuthorizationSnapshot> current = effectivePermissionService.currentSharedAuthorization(requester);
+        if (original.isEmpty() || current.isEmpty() || !original.get().equals(current.get())) {
+            return RagAnswerResponse.failed("FAILED", "NOT_AUTHORIZED");
+        }
         return response;
+    }
+
+    private static boolean containsSharedContent(RagAnswerResponse response) {
+        return response.files() != null || response.answer() != null || response.generatedAnalysis() != null
+                || !response.citations().isEmpty();
     }
 
     private RagAnswerResponse doAsk(UserContext requester, String question, List<Long> selectedDocumentIds) {
@@ -233,7 +253,9 @@ public class RagAnswerService {
     private static boolean sameBinding(EvidenceProvenance a, EvidenceProvenance b) {
         return a.documentId().equals(b.documentId()) && a.sourceId().equals(b.sourceId())
                 && a.shareId().equals(b.shareId()) && a.shareGeneration() == b.shareGeneration()
-                && a.connectionGeneration() == b.connectionGeneration() && a.sourceVersion().equals(b.sourceVersion())
+                && a.connectionGeneration() == b.connectionGeneration()
+                && a.requesterAuthorizationRevision() == b.requesterAuthorizationRevision()
+                && a.sourceVersion().equals(b.sourceVersion())
                 && a.locatorType() == b.locatorType() && a.locatorValue().equals(b.locatorValue())
                 && a.createdAt().equals(b.createdAt()) && a.expiresAt().equals(b.expiresAt());
     }

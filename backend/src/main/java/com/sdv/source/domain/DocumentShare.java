@@ -26,6 +26,7 @@ public final class DocumentShare {
     private final String publisherSubject;
     private final Long sourceId;
     private final Long documentId;
+    private final ShareAudience audience;
     private final SecurityLevel classification;
     private final Set<ShareAction> allowedActions;
     private final Set<String> recipients;
@@ -36,7 +37,7 @@ public final class DocumentShare {
     private final Instant updatedAt;
     private final Instant revokedAt;
 
-    public DocumentShare(Long id, String publisherSubject, Long sourceId, Long documentId,
+    public DocumentShare(Long id, String publisherSubject, Long sourceId, Long documentId, ShareAudience audience,
             SecurityLevel classification, Set<ShareAction> allowedActions, Set<String> recipients,
             boolean adminBlocked, String adminBlockReason, long generation, Instant createdAt, Instant updatedAt,
             Instant revokedAt) {
@@ -44,6 +45,7 @@ public final class DocumentShare {
         this.publisherSubject = requireNonBlank(publisherSubject, "publisherSubject");
         this.sourceId = Objects.requireNonNull(sourceId, "sourceId must not be null");
         this.documentId = Objects.requireNonNull(documentId, "documentId must not be null");
+        this.audience = Objects.requireNonNull(audience, "audience must not be null");
         // 누락/미확정 등급은 이 생성자 자체가 거부한다(Fail Closed) - CORE_SPEC
         // §2A.13 "Missing/unmapped classification means safe denial", 다섯 번째
         // 값을 지어내지 않는다.
@@ -52,10 +54,10 @@ public final class DocumentShare {
             throw new IllegalArgumentException("allowedActions must not be empty");
         }
         this.allowedActions = EnumSet.copyOf(allowedActions);
-        if (recipients == null || recipients.isEmpty()) {
-            // 빈 수신자는 "전체 공개"로 해석되지 않는다 - 이 생성자 자체가 그런 공유의
-            // 존재를 허용하지 않는다(CORE_SPEC §2A.13).
-            throw new IllegalArgumentException("recipients must not be empty");
+        if (recipients == null
+                || (audience == ShareAudience.NAMED_USERS && recipients.isEmpty())
+                || (audience == ShareAudience.ALL_AUTHENTICATED && !recipients.isEmpty())) {
+            throw new IllegalArgumentException("audience and recipients are inconsistent");
         }
         this.recipients = Set.copyOf(recipients);
         this.adminBlocked = adminBlocked;
@@ -64,6 +66,16 @@ public final class DocumentShare {
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
         this.revokedAt = revokedAt;
+    }
+
+    /** Legacy named-share compatibility; absence never becomes all-authenticated. */
+    public DocumentShare(Long id, String publisherSubject, Long sourceId, Long documentId,
+            SecurityLevel classification, Set<ShareAction> allowedActions, Set<String> recipients,
+            boolean adminBlocked, String adminBlockReason, long generation, Instant createdAt, Instant updatedAt,
+            Instant revokedAt) {
+        this(id, publisherSubject, sourceId, documentId, ShareAudience.NAMED_USERS, classification,
+                allowedActions, recipients, adminBlocked, adminBlockReason, generation, createdAt, updatedAt,
+                revokedAt);
     }
 
     private static String requireNonBlank(String value, String field) {
@@ -85,7 +97,8 @@ public final class DocumentShare {
      * EffectivePermissionService.evaluateSharedAccess}).
      */
     public boolean grants(String recipientSubject, ShareAction action) {
-        return isActive() && !adminBlocked && recipientSubject != null && recipients.contains(recipientSubject)
+        return isActive() && !adminBlocked && recipientSubject != null
+                && (audience == ShareAudience.ALL_AUTHENTICATED || recipients.contains(recipientSubject))
                 && allowedActions.contains(action);
     }
 
@@ -103,6 +116,10 @@ public final class DocumentShare {
 
     public Long getDocumentId() {
         return documentId;
+    }
+
+    public ShareAudience getAudience() {
+        return audience;
     }
 
     public SecurityLevel getClassification() {
