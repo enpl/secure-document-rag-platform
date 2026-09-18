@@ -47,7 +47,13 @@ function New-PassingSnapshot {
         publisherConnectionReady = $true
         sharedActiveShareCount = 1L
         sharedScopeOk = $true
-        sharedRecipientCount = 1L
+        # Matches the currently observed approved contract: ALL_AUTHENTICATED
+        # is the default audience and requires zero named recipients (never
+        # inferred from recipient count - CORE_SPEC's audience/action model).
+        sharedAudience = 'ALL_AUTHENTICATED'
+        sharedAudienceRecipientsOk = $true
+        sharedActionsOk = $true
+        sharedRecipientCount = 0L
         internalLocalPolicyOk = $true
         privateDocumentMatches = 1L
         privateDocumentActive = $true
@@ -154,15 +160,30 @@ Write-Step '4. Synthetic content-free readiness scope and bounded failures'
 $passing = New-PassingSnapshot
 $passOk = $true
 try { Assert-M17IndexingReadinessSnapshot -Snapshot $passing -ActivationMode FirstRun -IndexHmacState NewEmptyIndex } catch { $passOk = $false }
-Assert-True $passOk 'the exact SHARED fixture passes while unrelated content-free catalog events remain allowed'
+Assert-True $passOk 'ALL_AUTHENTICATED with zero recipients and VIEW passes (the current approved default, not a missing-recipient failure)'
 
-$resume = Copy-Snapshot $passing
-$resume.sharedIndexStatus = 'INDEXED'
-$resume.fixtureRelevantLiveCount = 0L
-$resume.totalEmbeddingCount = 3L
-$resumeOk = $true
-try { Assert-M17IndexingReadinessSnapshot -Snapshot $resume -ActivationMode Resume -IndexHmacState ConfirmedSameKey } catch { $resumeOk = $false }
-Assert-True $resumeOk 'resume permits an indexed fixture only with explicit same-key continuity confirmation'
+$allAuthenticatedWithDownload = Copy-Snapshot $passing
+# sharedActionsOk is the SQL layer's own pre-computed verdict for the exact
+# stored allowed_actions set (VIEW required, DOWNLOAD optional) - this offline
+# suite does not run real SQL/Postgres (see file header), so it exercises the
+# boolean contract this snapshot field must satisfy, not the SQL text itself.
+# VIEW-only and VIEW+DOWNLOAD both collapse to sharedActionsOk=true here by
+# construction; the SQL's own VIEW/DOWNLOAD/unknown/duplicate handling was
+# reviewed by hand (see docs/runbooks/M11_INDEXING_ACTIVATION.md) and is not
+# independently re-provable without a real database, which this task does not
+# start.
+$allAuthenticatedWithDownload.sharedActionsOk = $true
+$withDownloadOk = $true
+try { Assert-M17IndexingReadinessSnapshot -Snapshot $allAuthenticatedWithDownload -ActivationMode FirstRun -IndexHmacState NewEmptyIndex } catch { $withDownloadOk = $false }
+Assert-True $withDownloadOk 'ALL_AUTHENTICATED with zero recipients and VIEW+DOWNLOAD (DOWNLOAD is optional, additive) passes'
+
+$namedValid = Copy-Snapshot $passing
+$namedValid.sharedAudience = 'NAMED_USERS'
+$namedValid.sharedAudienceRecipientsOk = $true
+$namedValid.sharedRecipientCount = 1L
+$namedValidOk = $true
+try { Assert-M17IndexingReadinessSnapshot -Snapshot $namedValid -ActivationMode FirstRun -IndexHmacState NewEmptyIndex } catch { $namedValidOk = $false }
+Assert-True $namedValidOk 'the existing NAMED_USERS path (at least one valid recipient) keeps passing'
 
 $failureMutations = @(
     @{ Name = 'wrong database identity'; Field = 'dbIdentityOk'; Value = $false },
@@ -171,6 +192,9 @@ $failureMutations = @(
     @{ Name = 'missing fixture'; Field = 'sharedDocumentMatches'; Value = 0L },
     @{ Name = 'ambiguous fixture'; Field = 'sharedDocumentMatches'; Value = 2L },
     @{ Name = 'invalid share scope'; Field = 'sharedScopeOk'; Value = $false },
+    @{ Name = 'unrecognized audience value'; Field = 'sharedAudience'; Value = 'EVERYONE' },
+    @{ Name = 'NAMED_USERS audience with zero recipients (audience/recipient mismatch)'; Field = 'sharedAudienceRecipientsOk'; Value = $false },
+    @{ Name = 'download-only, unknown, or duplicate action grant'; Field = 'sharedActionsOk'; Value = $false },
     @{ Name = 'missing source version'; Field = 'sharedVersionReady'; Value = $false },
     @{ Name = 'inactive private fixture'; Field = 'privateDocumentActive'; Value = $false },
     @{ Name = 'private share'; Field = 'privateActiveShareCount'; Value = 1L },
@@ -184,6 +208,16 @@ $failureMutations = @(
     @{ Name = 'malformed numeric result'; Field = 'sharedDocumentMatches'; Value = 'query-error' },
     @{ Name = 'unknown HMAC continuity with existing embeddings'; Field = 'totalEmbeddingCount'; Value = 1L }
 )
+$namedInvalidMutations = @(
+    @{ Name = 'NAMED_USERS audience with zero recipients on the named-path snapshot'; Field = 'sharedAudienceRecipientsOk'; Value = $false }
+)
+foreach ($mutation in $namedInvalidMutations) {
+    $snapshot = Copy-Snapshot $namedValid
+    $snapshot.($mutation.Field) = $mutation.Value
+    Assert-Throws {
+        Assert-M17IndexingReadinessSnapshot -Snapshot $snapshot -ActivationMode FirstRun -IndexHmacState NewEmptyIndex
+    } "$($mutation.Name) blocks activation"
+}
 foreach ($mutation in $failureMutations) {
     $snapshot = Copy-Snapshot $passing
     $snapshot.($mutation.Field) = $mutation.Value

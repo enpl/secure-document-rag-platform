@@ -127,9 +127,16 @@ function Get-M17IndexingReadinessBlockers {
     if ($Snapshot.sharedDocumentActive -ne $true) { $blockers.Add('The approved SHARED fixture is not ACTIVE.') }
     if ($Snapshot.sharedVersionReady -ne $true) { $blockers.Add('The approved SHARED fixture has no source version to fence.') }
     if ($Snapshot.publisherConnectionReady -ne $true) { $blockers.Add('The publisher connection/token binding is not active and complete.') }
-    if ([long]$Snapshot.sharedActiveShareCount -ne 1 -or $Snapshot.sharedScopeOk -ne $true -or
-            [long]$Snapshot.sharedRecipientCount -ne 1) {
-        $blockers.Add('The SHARED fixture must have exactly one active, unblocked INTERNAL/VIEW share and one nonblank recipient.')
+    if ([long]$Snapshot.sharedActiveShareCount -ne 1 -or $Snapshot.sharedScopeOk -ne $true) {
+        $blockers.Add('The SHARED fixture must have exactly one active, unblocked INTERNAL share owned by the publisher on source 2.')
+    }
+    if ($Snapshot.sharedAudience -notin @('ALL_AUTHENTICATED', 'NAMED_USERS')) {
+        $blockers.Add('The SHARED fixture audience is missing or not one of the recognized values.')
+    } elseif ($Snapshot.sharedAudienceRecipientsOk -ne $true) {
+        $blockers.Add('The SHARED fixture audience and its recipients are inconsistent (ALL_AUTHENTICATED must have zero recipients; NAMED_USERS must have at least one non-blank recipient).')
+    }
+    if ($Snapshot.sharedActionsOk -ne $true) {
+        $blockers.Add('The SHARED fixture must grant VIEW (DOWNLOAD is optional) with no unknown or duplicate actions.')
     }
     if ($Snapshot.internalLocalPolicyOk -ne $true) { $blockers.Add('INTERNAL must remain LOCAL_ONLY with external_provider_allowed=false.') }
     if ([long]$Snapshot.privateDocumentMatches -ne 1) { $blockers.Add('The approved PRIVATE fixture is missing or ambiguous under source 2.') }
@@ -235,6 +242,23 @@ private_fixture AS (
 shared_id AS (
     SELECT CASE WHEN COUNT(*) = 1 THEN MIN(id) END AS id FROM shared_fixture
 ),
+shared_share AS (
+    SELECT s.id, s.classification, s.allowed_actions, s.admin_blocked, s.audience,
+           s.publisher_subject, s.source_id
+    FROM document_shares s
+    JOIN shared_id f ON f.id = s.document_id
+    WHERE s.revoked_at IS NULL
+),
+shared_share_actions AS (
+    SELECT sh.id AS share_id, btrim(a.action) AS action
+    FROM shared_share sh
+    CROSS JOIN LATERAL unnest(string_to_array(sh.allowed_actions, ',')) AS a(action)
+),
+shared_share_recipients AS (
+    SELECT sh.id AS share_id, r.recipient_subject
+    FROM shared_share sh
+    JOIN document_share_recipients r ON r.share_id = sh.id
+),
 eligible_documents AS (
     SELECT d.id
     FROM source_documents d
@@ -277,16 +301,52 @@ SELECT json_build_object(
           AND btrim(COALESCE(c.provider_account_id, '')) <> ''
           AND c.token_ref = t.token_ref::text
     ),
-    'sharedActiveShareCount', (SELECT COUNT(*) FROM document_shares s JOIN shared_id f ON f.id = s.document_id WHERE s.revoked_at IS NULL),
+    'sharedActiveShareCount', (SELECT COUNT(*) FROM shared_share),
+    -- Classification/ownership/admin-block scope only - audience/recipient
+    -- correlation and the allowed-action set are separate booleans below, so
+    -- each kind of mismatch gets its own reason instead of one combined
+    -- catch-all (docs/spec/SDV_v3.2_CORE_SPEC.md audience/action contract -
+    -- ALL_AUTHENTICATED with zero recipients is a normal, expected state,
+    -- never a missing-recipient failure).
     'sharedScopeOk', COALESCE((
-        SELECT bool_and(s.classification = 'INTERNAL' AND s.allowed_actions = 'VIEW' AND s.admin_blocked = FALSE
-                        AND s.publisher_subject = c.owner_subject AND s.source_id = $script:M17SourceId
-                        AND NOT EXISTS (SELECT 1 FROM document_share_recipients r WHERE r.share_id = s.id AND btrim(r.recipient_subject) = ''))
-        FROM document_shares s JOIN shared_id f ON f.id = s.document_id
-        JOIN source_connections c ON c.id = s.source_id
-        WHERE s.revoked_at IS NULL
+        SELECT bool_and(sh.classification = 'INTERNAL' AND sh.admin_blocked = FALSE
+                        AND sh.publisher_subject = c.owner_subject AND sh.source_id = $script:M17SourceId)
+        FROM shared_share sh JOIN source_connections c ON c.id = sh.source_id
     ), FALSE),
-    'sharedRecipientCount', (SELECT COUNT(*) FROM document_share_recipients r JOIN document_shares s ON s.id = r.share_id JOIN shared_id f ON f.id = s.document_id WHERE s.revoked_at IS NULL),
+    -- VIEW is mandatory; DOWNLOAD is optional and independent (SHR-001/M10C).
+    -- Any action outside {VIEW, DOWNLOAD}, a duplicate, or a download-only
+    -- grant (no VIEW) fails this - never inferred from a substring match on
+    -- the raw stored string.
+    'sharedActionsOk', COALESCE((
+        SELECT bool_and(
+            EXISTS (SELECT 1 FROM shared_share_actions a WHERE a.share_id = sh.id AND a.action = 'VIEW')
+            AND NOT EXISTS (SELECT 1 FROM shared_share_actions a WHERE a.share_id = sh.id AND a.action NOT IN ('VIEW', 'DOWNLOAD'))
+            AND (SELECT COUNT(*) FROM shared_share_actions a WHERE a.share_id = sh.id)
+                = (SELECT COUNT(DISTINCT a.action) FROM shared_share_actions a WHERE a.share_id = sh.id)
+        )
+        FROM shared_share sh
+    ), FALSE),
+    -- Read the persisted audience directly - never guessed from recipient
+    -- count. ALL_AUTHENTICATED requires exactly zero recipients; NAMED_USERS
+    -- requires at least one recipient with a non-blank subject (the same
+    -- correlation SourceSharingService.validateAudienceRecipients and
+    -- DocumentShare's constructor already enforce at write time - this is a
+    -- read-time re-check of that same contract, not a new one).
+    'sharedAudience', COALESCE((SELECT MIN(audience) FROM shared_share), 'UNKNOWN'),
+    'sharedAudienceRecipientsOk', COALESCE((
+        SELECT bool_and(
+            CASE sh.audience
+                WHEN 'ALL_AUTHENTICATED' THEN
+                    (SELECT COUNT(*) FROM shared_share_recipients r WHERE r.share_id = sh.id) = 0
+                WHEN 'NAMED_USERS' THEN
+                    (SELECT COUNT(*) FROM shared_share_recipients r WHERE r.share_id = sh.id) >= 1
+                    AND NOT EXISTS (SELECT 1 FROM shared_share_recipients r WHERE r.share_id = sh.id AND btrim(r.recipient_subject) = '')
+                ELSE FALSE
+            END
+        )
+        FROM shared_share sh
+    ), FALSE),
+    'sharedRecipientCount', (SELECT COUNT(*) FROM shared_share_recipients),
     'internalLocalPolicyOk', EXISTS (SELECT 1 FROM ai_usage_policies WHERE security_level = 'INTERNAL' AND mode = 'LOCAL_ONLY' AND external_provider_allowed = FALSE),
     'privateDocumentMatches', (SELECT COUNT(*) FROM private_fixture),
     'privateDocumentActive', COALESCE((SELECT bool_and(state = 'ACTIVE') FROM private_fixture), FALSE),

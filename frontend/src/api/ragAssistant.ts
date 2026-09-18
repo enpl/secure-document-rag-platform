@@ -48,6 +48,10 @@ export function describeRagOutcome(status: string, reasonCode: string | null): s
     FILE_QUERY_TOO_LONG: '파일 검색어가 너무 깁니다.',
     NOT_AUTHORIZED: '현재 이 자료를 사용할 권한을 확인하지 못했습니다.',
     PROVIDER_UNAVAILABLE: '원본 제공자 확인이 일시적으로 불가능합니다.',
+    // M17 진단 교정 - 이전에는 이 경우도 위 PROVIDER_UNAVAILABLE(Google 등 원본
+    // 제공자)로 잘못 표시됐다. 실제로는 로컬 문서 임베딩(의미 검색) 서비스 호출
+    // 실패이며 원본 제공자와 무관하다 - 별도 안내로 구분한다.
+    EMBEDDING_PROVIDER_UNAVAILABLE: '문서 검색(임베딩) 서비스에 일시적으로 연결할 수 없습니다.',
     NO_RELEVANT_EVIDENCE: '현재 권한과 범위에서 관련 근거를 찾지 못했습니다.',
     COMPARISON_INPUT_INCOMPLETE: '비교 대상 모두의 근거를 확인하지 못해 비교 답변을 만들지 않았습니다.',
     PARTIAL_EVIDENCE_COVERAGE: '확인 가능한 범위의 일부 근거만 사용했습니다.',

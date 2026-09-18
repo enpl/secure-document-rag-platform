@@ -33,17 +33,23 @@ param(
     [string]$IndexingGroupId,
     [string]$AiServiceUrl,
     [ValidateSet('NewEmptyIndex', 'ConfirmedSameKey')][string]$IndexHmacState,
-    [switch]$PrepareNewIndexingTopics
+    [switch]$PrepareNewIndexingTopics,
+    [switch]$EnableAssistant,
+    [string]$AssistantModel,
+    [string]$AssistantOllamaUrl
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_lib.ps1')
 . (Join-Path $PSScriptRoot '_indexing-activation.ps1')
+. (Join-Path $PSScriptRoot '_assistant-activation.ps1')
 
 Assert-M17IndexingParameters -Enabled $EnableIndexing.IsPresent `
     -ActivationMode $IndexingActivationMode -KafkaBootstrapServers $KafkaBootstrapServers `
     -Topic $IndexingTopic -GroupId $IndexingGroupId -AiServiceUrl $AiServiceUrl `
     -IndexHmacState $IndexHmacState -PrepareNewTopics $PrepareNewIndexingTopics.IsPresent
+Assert-M17AssistantParameters -Enabled $EnableAssistant.IsPresent -AssistantModel $AssistantModel `
+    -AssistantOllamaUrl $AssistantOllamaUrl
 
 $paths = Get-TestbedPaths
 $KeycloakRealm = 'sdv-testbed'
@@ -64,6 +70,9 @@ if ($existingBackend -or $existingFrontend) {
     if ($existingFrontend) { Write-Host "  frontend PID $($existingFrontend.Id), started $($existingFrontend.StartTime)" }
     if ($EnableIndexing) {
         Invoke-Fail 'Indexing was requested but an existing baseline/testbed process is already running. It is not indexing-enabled merely because this invocation included a switch. Run the normal testbed stop yourself, then restart with the explicit activation settings.'
+    }
+    if ($EnableAssistant) {
+        Invoke-Fail 'Assistant activation was requested but an existing baseline/testbed process is already running. It is not Assistant-enabled merely because this invocation included a switch. Run the normal testbed stop yourself, then restart with the explicit activation settings.'
     }
     Write-Host "Run scripts\testbed\status-testbed.ps1 to check readiness, or scripts\testbed\stop-testbed.ps1 first if you want a clean restart."
     exit 0
@@ -247,6 +256,20 @@ if ($EnableIndexing) {
 }
 
 # ------------------------------------------------------------------
+# 4.6 Optional M17 Assistant (local generation) activation gate - a
+#     completely separate switch from indexing. Requires only a reachable
+#     loopback Ollama with the approved model already installed - no
+#     Postgres/Kafka/AI-service dependency of its own, but it is checked
+#     here (also before the backend is spawned) for the same "fail closed
+#     before launch, not after" reason as the indexing gate above.
+# ------------------------------------------------------------------
+if ($EnableAssistant) {
+    Write-Step 'M17 explicit Assistant activation gate (content-free, fail closed, no download)'
+    Invoke-M17AssistantActivationPreflight -AssistantModel $AssistantModel -AssistantOllamaUrl $AssistantOllamaUrl
+    Write-Ok 'Assistant activation prerequisites confirmed before backend launch'
+}
+
+# ------------------------------------------------------------------
 # 5. Build and start the backend (host process, testbed profile)
 #    Built once via `gradlew bootJar`, then run directly as `java -jar` -
 #    NOT `gradlew bootRun`, whose actual application process can end up
@@ -305,9 +328,22 @@ $indexingOverrides = Get-M17IndexingBackendOverrides -Enabled $EnableIndexing.Is
 foreach ($key in $indexingOverrides.Keys) {
     $backendOverrides[$key] = $indexingOverrides[$key]
 }
+# Applied after $indexingOverrides on purpose - Get-M17IndexingBackendOverrides
+# always forces SDV_RAG_ASSISTANT_ENABLED=false (it predates this gate and
+# does not know about it), so an explicit -EnableAssistant choice (and, as of
+# this correction, its own AI_SERVICE_URL - see Get-M17AssistantBackendOverrides's
+# Notes for why Assistant-only runs need this too) must be layered on top to
+# actually take effect.
+$assistantOverrides = Get-M17AssistantBackendOverrides -Enabled $EnableAssistant.IsPresent `
+    -AssistantModel $AssistantModel -AssistantOllamaUrl $AssistantOllamaUrl
+foreach ($key in $assistantOverrides.Keys) {
+    $backendOverrides[$key] = $assistantOverrides[$key]
+}
 $backendEnv = New-IsolatedEnvironment -Overrides $backendOverrides
 
-$backendMode = if ($EnableIndexing) { 'indexing enabled; Assistant disabled' } else { 'publisher/consumer/Assistant disabled' }
+$indexingLabel = if ($EnableIndexing) { 'indexing enabled' } else { 'publisher/consumer disabled' }
+$assistantLabel = if ($EnableAssistant) { 'Assistant enabled' } else { 'Assistant disabled' }
+$backendMode = "$indexingLabel; $assistantLabel"
 Write-Step "Starting backend (testbed profile, hidden, isolated environment; $backendMode)"
 $backendProcess = Start-TrackedProcess -Name 'backend' -FilePath 'java' `
     -ArgumentList @('-jar', $bootJar.FullName) `

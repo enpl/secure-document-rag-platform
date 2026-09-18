@@ -44,7 +44,7 @@ import java.util.Set;
  * -> isolated parse/chunk/embed -> fresh checks -> atomic generation publication ->
  * cleanup"을 담당하는 RAG Ingestion Orchestration Application Service(이 작업
  * 지시사항의 4번). {@code IndexRequestedConsumer}가 Kafka Listener Thread에서
- * 문서 하나당 한 번 {@link #process(Long)}을 호출한다 - Google/Python 호출 도중
+ * 문서 하나당 한 번 {@link #processWithReasonCode(Long)}을 호출한다 - Google/Python 호출 도중
  * 어떤 DB Transaction/Lock도 열어두지 않는다({@link com.sdv.source.application.SharedFileDownloadService}
  * (M10C)와 동일한 원칙, "Do not hold database locks across Google/Python/model
  * calls").
@@ -167,29 +167,44 @@ public class IndexOrchestrator {
      * 문서 하나에 대한 색인 시도 전체. 정상적으로 끝나면(재시도가 필요 없는
      * 경우) {@link IndexProcessingOutcome}을 반환한다 - 재시도가 필요하면
      * {@link TransientIndexingException}을 던진다(호출자가 Bounded Retry/DLQ로
-     * 넘긴다).
+     * 넘긴다). 사유 코드까지 필요한 호출자는 {@link #processWithReasonCode}를 쓴다.
      */
     public IndexProcessingOutcome process(Long documentId) {
+        return processWithReasonCode(documentId).outcome();
+    }
+
+    /**
+     * M17 진단 교정(이 작업 지시사항 2번) - {@link #process}와 정확히 같은 판단
+     * 로직이지만, {@code SKIPPED_INELIGIBLE}이 자격 검사/자격증명·원본 읽기/버전
+     * 검증/최종 세대 검증 중 정확히 어느 단계에서 나왔는지 {@link IndexProcessingResult#reasonCode()}로
+     * 함께 반환한다({@link IneligibilityStage} 참고). {@link
+     * com.sdv.rag.infrastructure.event.IndexRequestedConsumer}가 이 값을 그대로
+     * {@code processed_events.reason_code}에 옮겨 적는다 - 사후에 DB를 다시
+     * 조회해 추측하지 않고, 이 판정을 내리는 그 자리에서 채운 값이다.
+     */
+    public IndexProcessingResult processWithReasonCode(Long documentId) {
         Eligibility eligibility = resolveEligibility(documentId);
         if (eligibility == null) {
-            return IndexProcessingOutcome.SKIPPED_INELIGIBLE;
+            return ineligible(IneligibilityStage.ELIGIBILITY_CHECK);
         }
         SourceDocumentEntity document = eligibility.document();
         String capturedSourceVersion = document.getSourceVersion();
         if (isPreClassifiedUnsupported(document.getMimeType())) {
+            String reasonCode = "mime type is not eligible for indexing";
             boolean applied = finalizeNonSuccess(documentId, eligibility, capturedSourceVersion, SKIPPED_UNSUPPORTED,
-                    "mime type is not eligible for indexing");
-            return applied ? IndexProcessingOutcome.SKIPPED_UNSUPPORTED : IndexProcessingOutcome.SKIPPED_INELIGIBLE;
+                    reasonCode);
+            return applied ? new IndexProcessingResult(IndexProcessingOutcome.SKIPPED_UNSUPPORTED, reasonCode)
+                    : ineligible(IneligibilityStage.FINAL_GENERATION_FENCE);
         }
         SourceType sourceType;
         try {
             sourceType = SourceType.valueOf(eligibility.connection().getType());
         } catch (IllegalArgumentException e) {
-            return IndexProcessingOutcome.SKIPPED_INELIGIBLE;
+            return ineligibleSourceAccess("UNRECOGNIZED_SOURCE_TYPE");
         }
         DocumentSourceConnector connector = sourceConnectorRegistry.getConnector(sourceType).orElse(null);
         if (connector == null) {
-            return IndexProcessingOutcome.SKIPPED_INELIGIBLE;
+            return ineligibleSourceAccess("CONNECTOR_UNAVAILABLE");
         }
 
         UserContext ownerContext = new UserContext(eligibility.connection().getOwnerSubject(), null, Set.of(),
@@ -213,14 +228,18 @@ public class IndexOrchestrator {
                 case SUCCESS -> publishGenerationAfterRecheck(documentId, eligibility, connector, ownerContext,
                         content.verifiedSourceVersion(), indexOutcome);
                 case UNSUPPORTED_FORMAT -> {
+                    String reasonCode = reasonCodeFor(indexOutcome.kind());
                     boolean applied = finalizeNonSuccess(documentId, eligibility, content.verifiedSourceVersion(),
-                            SKIPPED_UNSUPPORTED, reasonCodeFor(indexOutcome.kind()));
-                    yield applied ? IndexProcessingOutcome.SKIPPED_UNSUPPORTED : IndexProcessingOutcome.SKIPPED_INELIGIBLE;
+                            SKIPPED_UNSUPPORTED, reasonCode);
+                    yield applied ? new IndexProcessingResult(IndexProcessingOutcome.SKIPPED_UNSUPPORTED, reasonCode)
+                            : ineligible(IneligibilityStage.FINAL_GENERATION_FENCE);
                 }
                 case NO_TEXT -> {
+                    String reasonCode = reasonCodeFor(indexOutcome.kind());
                     boolean applied = finalizeNonSuccess(documentId, eligibility, content.verifiedSourceVersion(),
-                            SKIPPED_NO_TEXT, reasonCodeFor(indexOutcome.kind()));
-                    yield applied ? IndexProcessingOutcome.SKIPPED_NO_TEXT : IndexProcessingOutcome.SKIPPED_INELIGIBLE;
+                            SKIPPED_NO_TEXT, reasonCode);
+                    yield applied ? new IndexProcessingResult(IndexProcessingOutcome.SKIPPED_NO_TEXT, reasonCode)
+                            : ineligible(IneligibilityStage.FINAL_GENERATION_FENCE);
                 }
                 // 원본 AI 서비스 사유 문자열은 절대 옮기지 않는다(임의 텍스트 - Content 안전
                 // 규칙 위반 가능성) - 고정 허용 사유 코드만 예외 메시지에 담는다.
@@ -234,24 +253,62 @@ public class IndexOrchestrator {
         }
     }
 
-    private IndexProcessingOutcome handleUnverifiedContent(Eligibility eligibility, SourceContentOutcome outcome) {
+    /**
+     * M17 진단 세분화(2차 교정, 이 작업 지시사항 1번) - 이전에는 여기 도달하는 11개
+     * {@link SourceContentOutcome} 값 전부가 {@code INELIGIBLE_AT_SOURCE_ACCESS} 하나로
+     * 뭉개졌다(Version 문제/삭제·휴지통/Export 상한/Credential 문제/권한 거부/판단 불가를
+     * 구분할 수 없었다). 이제 각 값을 {@link #ineligibleSourceAccess}로 1:1 매핑한다 -
+     * 새 값도, 임의 문자열도 아니고, 이미 이 Enum에 정의된 상수 이름 그대로만 고정
+     * 접미사로 붙인다(명시적 허용 목록 - Google 응답/토큰/파일명/버전 원문은 여전히
+     * 전혀 담기지 않는다). {@code UNSUPPORTED_FORMAT}은 여전히 별도 outcome({@code
+     * SKIPPED_UNSUPPORTED})이라 이 매핑 대상이 아니다. {@code default} 분기(현재
+     * 도달 가능한 값: {@code NOT_DOWNLOADABLE}/{@code TIMEOUT}/{@code FAILED})는
+     * 기존 재시도 분류를 그대로 보존한다 - 이번 교정 대상이 아니다.
+     */
+    private IndexProcessingResult handleUnverifiedContent(Eligibility eligibility, SourceContentOutcome outcome) {
         Long documentId = eligibility.document().getId();
         String capturedSourceVersion = eligibility.document().getSourceVersion();
         return switch (outcome) {
             case UNSUPPORTED_FORMAT -> {
+                String reasonCode = "source format is not indexable";
                 boolean applied = finalizeNonSuccess(documentId, eligibility, capturedSourceVersion,
-                        SKIPPED_UNSUPPORTED, "source format is not indexable");
-                yield applied ? IndexProcessingOutcome.SKIPPED_UNSUPPORTED : IndexProcessingOutcome.SKIPPED_INELIGIBLE;
+                        SKIPPED_UNSUPPORTED, reasonCode);
+                yield applied ? new IndexProcessingResult(IndexProcessingOutcome.SKIPPED_UNSUPPORTED, reasonCode)
+                        : ineligible(IneligibilityStage.FINAL_GENERATION_FENCE);
             }
             // 삭제/휴지통/Version 경합/Export 상한 - 다음 관련 Catalog Sync/Share 이벤트가 다시 판단한다.
-            case NOT_FOUND, TRASHED, DOCUMENT_CHANGED, VERSION_MISMATCH, EXPORT_LIMIT_EXCEEDED ->
-                    IndexProcessingOutcome.SKIPPED_INELIGIBLE;
+            case NOT_FOUND -> ineligibleSourceAccess("NOT_FOUND");
+            case TRASHED -> ineligibleSourceAccess("TRASHED");
+            case DOCUMENT_CHANGED -> ineligibleSourceAccess("DOCUMENT_CHANGED");
+            case VERSION_MISMATCH -> ineligibleSourceAccess("VERSION_MISMATCH");
+            case EXPORT_LIMIT_EXCEEDED -> ineligibleSourceAccess("EXPORT_LIMIT_EXCEEDED");
             // Credential/권한 문제 - 재연결/재공유 같은 새 이벤트가 있어야 다시 시도할 이유가 생긴다.
             // 지금 당장 재시도해도 결과가 달라질 근거가 없으므로 Bounded Retry 대상으로 삼지 않는다.
-            case MISSING_CREDENTIAL, CREDENTIAL_NOT_BOUND_TO_USER, CREDENTIAL_UNREADABLE, INSUFFICIENT_SCOPE,
-                    ACCESS_DENIED, ACCESS_UNKNOWN -> IndexProcessingOutcome.SKIPPED_INELIGIBLE;
+            case MISSING_CREDENTIAL -> ineligibleSourceAccess("MISSING_CREDENTIAL");
+            case CREDENTIAL_NOT_BOUND_TO_USER -> ineligibleSourceAccess("CREDENTIAL_NOT_BOUND_TO_USER");
+            case CREDENTIAL_UNREADABLE -> ineligibleSourceAccess("CREDENTIAL_UNREADABLE");
+            case INSUFFICIENT_SCOPE -> ineligibleSourceAccess("INSUFFICIENT_SCOPE");
+            case ACCESS_DENIED -> ineligibleSourceAccess("ACCESS_DENIED");
+            case ACCESS_UNKNOWN -> ineligibleSourceAccess("ACCESS_UNKNOWN");
             default -> throw new TransientIndexingException("source content fetch failed: " + outcome.name());
         };
+    }
+
+    /** {@code SKIPPED_INELIGIBLE} + 고정 단계 사유 코드 쌍을 만드는 최소 도우미. */
+    private static IndexProcessingResult ineligible(IneligibilityStage stage) {
+        return new IndexProcessingResult(IndexProcessingOutcome.SKIPPED_INELIGIBLE, stage.reasonCode());
+    }
+
+    /**
+     * M17 진단 세분화(2차) - {@code SOURCE_ACCESS} 단계 안에서, 실제로 어느 typed
+     * 원인이었는지 고정 접미사로 구분한다. {@code detail}은 항상 호출부의 문자열
+     * 리터럴(이미 {@link SourceContentOutcome} 상수 이름 또는 이 Class 안에서 정의한
+     * Connector 해석 실패 두 가지 고정값 중 하나)이라 결과 문자열 집합은 유한하고
+     * 코드 리뷰로 전부 열거 가능하다 - 호출자 입력이나 런타임 값에서 파생되지 않는다.
+     */
+    private static IndexProcessingResult ineligibleSourceAccess(String detail) {
+        return new IndexProcessingResult(IndexProcessingOutcome.SKIPPED_INELIGIBLE,
+                IneligibilityStage.SOURCE_ACCESS.reasonCode() + "_" + detail);
     }
 
     /**
@@ -266,7 +323,7 @@ public class IndexOrchestrator {
      * 판단하게 한다. Google/Python 호출 자체는 이 지점 전체가 어떤 DB Lock도 쥐지
      * 않은 채로 이뤄진다(Class Javadoc 원칙 유지).
      */
-    private IndexProcessingOutcome publishGenerationAfterRecheck(Long documentId, Eligibility eligibility,
+    private IndexProcessingResult publishGenerationAfterRecheck(Long documentId, Eligibility eligibility,
             DocumentSourceConnector connector, UserContext ownerContext, String fetchedSourceVersion,
             IndexOutcome indexOutcome) {
         SourceDocumentEntity document = eligibility.document();
@@ -283,7 +340,7 @@ public class IndexOrchestrator {
             // Provider 접근/Version이 Parsing 도중 바뀌었다 - 이 오래된 결과를 발행하지
             // 않는다("provider version/access changes during embedding before catalog
             // sync catches up").
-            return IndexProcessingOutcome.SKIPPED_INELIGIBLE;
+            return ineligible(IneligibilityStage.VERSION_RECHECK);
         }
         return publishGeneration(documentId, eligibility, fetchedSourceVersion, indexOutcome);
     }
@@ -312,7 +369,7 @@ public class IndexOrchestrator {
      * concurrent changes is insufficient"). Lock 순서는 항상 {@code
      * source_connections} → {@code source_documents} → {@code document_shares}다.</p>
      */
-    private IndexProcessingOutcome publishGeneration(Long documentId, Eligibility eligibility,
+    private IndexProcessingResult publishGeneration(Long documentId, Eligibility eligibility,
             String verifiedSourceVersion, IndexOutcome indexOutcome) {
         if (!isWellFormed(indexOutcome)) {
             throw new TransientIndexingException("malformed index response from ai service");
@@ -345,7 +402,8 @@ public class IndexOrchestrator {
             return true;
         });
 
-        return Boolean.TRUE.equals(published) ? IndexProcessingOutcome.INDEXED : IndexProcessingOutcome.SKIPPED_INELIGIBLE;
+        return Boolean.TRUE.equals(published) ? new IndexProcessingResult(IndexProcessingOutcome.INDEXED, null)
+                : ineligible(IneligibilityStage.FINAL_GENERATION_FENCE);
     }
 
     /**

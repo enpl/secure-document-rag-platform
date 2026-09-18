@@ -81,14 +81,38 @@ public class DocumentParsingClient {
         this.boundedHttpClient = null;
     }
 
-    /** M12 uses a request-scoped transport; the shared indexing client remains unchanged. */
+    /**
+     * M12 uses a request-scoped transport; the shared indexing client remains unchanged.
+     *
+     * <h2>M17 진단 교정 - HTTP/2 업그레이드 시도가 실제 AI 서비스에서 422를 유발한다</h2>
+     * <p>실제 비교 호출로 확인된 사실(추정이 아니다): 동일한 합성 요청을 이 Client와
+     * 같은 기본 설정(버전 미지정, 기본값 {@link HttpClient.Version#HTTP_2})의
+     * {@link HttpClient}로 {@code http://127.0.0.1:8000/embed-query}에 보내면
+     * HTTP 422가 돌아온다({@code EMBEDDING_SUCCESS=false}) - 반면 {@link
+     * HttpClient.Builder#version(HttpClient.Version)}을 {@link
+     * HttpClient.Version#HTTP_1_1}로 명시하면 같은 요청이 HTTP 200으로 성공한다
+     * ({@code EMBEDDING_SUCCESS=true}). 두 호출 모두 실제로 HTTP/1.1로
+     * 응답받았다({@code response.version() == HTTP_1_1}) - 그런데도 결과가
+     * 다르다는 것은 클라이언트가 요청 단계에서 보내는 무언가(HTTP/2 협상 관련
+     * 요청 자체의 형태 - 정확한 내부 원인은 확인하지 않았다)가 이 AI 서비스
+     * 쪽에서 다르게 처리된다는 뜻이다. 원인의 정확한 내부 동작(h2c Upgrade
+     * 헤더 처리 여부 등)은 확인하지 않았다 - 이 재현 가능한 실제 차이만 근거로
+     * 삼아, 이 Client가 실제로 호출하는 두 Bounded 경로({@link #embedQuery(String,
+     * long)}, {@link #invokeBoundedParse}) 모두가 쓰는 이 하나의 {@link
+     * #boundedHttpClient}에 {@code HTTP_1_1}을 명시적으로 고정한다. Spring
+     * {@link RestClient}(색인 {@code /parse}/{@code /index} 경로), {@code
+     * OllamaLlmAdapter}, JVM 전역 네트워크 설정(System Property 등)은 전혀
+     * 건드리지 않는다 - 이 Client 안의 이 한 {@link HttpClient} 인스턴스에만
+     * 적용된다.</p>
+     */
     @Autowired
     public DocumentParsingClient(@Qualifier("aiServiceRestClient") RestClient restClient, ObjectMapper objectMapper,
             @Value("${sdv.ai-service.url:http://localhost:8000}") String serviceUrl) {
         this.restClient = restClient;
         this.objectMapper = objectMapper;
         this.serviceUri = URI.create(serviceUrl);
-        this.boundedHttpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+        this.boundedHttpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
+                .version(HttpClient.Version.HTTP_1_1).build();
     }
 
     /**

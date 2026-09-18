@@ -45,6 +45,16 @@ sdv:
     issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:18180/realms/sdv-testbed}
     audience: ${KEYCLOAK_AUDIENCE:sdv-backend}
 
+  # M17 진단 교정 - 이 Profile은 지금까지 sdv.ai-service.url을 전혀 바인딩하지
+  # 않았다(application-local.yml/application-compose.yml에는 이미 있었다) -
+  # start-testbed.ps1의 -AiServiceUrl(항상 정확히 http://127.0.0.1:8000으로
+  # 검증됨)이 실제로는 이 Profile에서 조용히 무시되고, DocumentParsingClient/
+  # AiServiceRestClientConfig의 하드코딩된 기본값(http://localhost:8000, 명시적
+  # 127.0.0.1이 아니다)으로 되돌아갔다 - 운영자가 명시적으로 선택한 loopback
+  # 주소가 실제 애플리케이션에 전혀 전달되지 않는 조용한 배선 공백이었다.
+  ai-service:
+    url: ${AI_SERVICE_URL:http://localhost:8000}
+
   # M08 MVP OAuth secrets - identical shape to application-local.yml. Blank
   # values keep the existing fail-closed-at-use (not at startup) behavior, so
   # the BASELINE testbed stage works with no Google configuration at all.

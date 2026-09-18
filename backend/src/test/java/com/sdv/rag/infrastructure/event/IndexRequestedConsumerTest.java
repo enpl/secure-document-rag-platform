@@ -3,6 +3,7 @@ package com.sdv.rag.infrastructure.event;
 import com.sdv.audit.application.AuditService;
 import com.sdv.rag.application.IndexOrchestrator;
 import com.sdv.rag.application.IndexProcessingOutcome;
+import com.sdv.rag.application.IndexProcessingResult;
 import com.sdv.rag.infrastructure.persistence.entity.ProcessedEventEntity;
 import com.sdv.rag.infrastructure.persistence.repository.ProcessedEventJpaRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +22,7 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -96,8 +98,9 @@ class IndexRequestedConsumerTest {
 
     /**
      * M11 후속 교정 - "complete incremental indexing": {@code SOURCE_DOCUMENT_CHANGED}
-     * (통상적인 Content Version 변경)도 이제 이 Consumer가 {@link IndexOrchestrator#process}로
-     * 넘긴다. 이 Test 자체는 Mockito 단위 Test라 실제 자격 판단은 검증하지 않는다(그건
+     * (통상적인 Content Version 변경)도 이제 이 Consumer가 {@link
+     * IndexOrchestrator#processWithReasonCode}로 넘긴다. 이 Test 자체는 Mockito 단위
+     * Test라 실제 자격 판단은 검증하지 않는다(그건
      * {@code IndexOrchestratorTest}/{@code IndexRequestedConsumerIntegrationTest} 몫이다) -
      * 여기서는 오직 "이 이벤트 타입이 더 이상 조용히 무시되지 않는다"만 확인한다.
      */
@@ -105,13 +108,14 @@ class IndexRequestedConsumerTest {
     void aSourceDocumentChangedEventIsProcessedJustLikeAnIndexRequestedEvent() {
         UUID changedEventId = UUID.fromString("22222222-2222-2222-2222-222222222222");
         when(processedEventJpaRepository.existsById(any())).thenReturn(false);
-        when(indexOrchestrator.process(DOCUMENT_ID)).thenReturn(IndexProcessingOutcome.INDEXED);
+        when(indexOrchestrator.processWithReasonCode(DOCUMENT_ID))
+                .thenReturn(new IndexProcessingResult(IndexProcessingOutcome.INDEXED, null));
 
         consumer.onMessage(catalogSyncPayload(changedEventId));
 
-        verify(indexOrchestrator).process(DOCUMENT_ID);
+        verify(indexOrchestrator).processWithReasonCode(DOCUMENT_ID);
         verify(processedEventJpaRepository).insertIfAbsent(eq(changedEventId), eq(IndexRequestedConsumer.CONSUMER_NAME),
-                eq("INDEXED"), any(), eq(DOCUMENT_ID), any());
+                eq("INDEXED"), isNull(), eq(DOCUMENT_ID), any());
     }
 
     @Test
@@ -128,24 +132,48 @@ class IndexRequestedConsumerTest {
     @Test
     void aFreshIndexRequestedEventIsProcessedAndRecordedWithTheMatchingOutcomeCode() {
         when(processedEventJpaRepository.existsById(any())).thenReturn(false);
-        when(indexOrchestrator.process(DOCUMENT_ID)).thenReturn(IndexProcessingOutcome.INDEXED);
+        when(indexOrchestrator.processWithReasonCode(DOCUMENT_ID))
+                .thenReturn(new IndexProcessingResult(IndexProcessingOutcome.INDEXED, null));
 
         consumer.onMessage(indexRequestedPayload());
 
-        verify(indexOrchestrator).process(DOCUMENT_ID);
+        verify(indexOrchestrator).processWithReasonCode(DOCUMENT_ID);
         verify(processedEventJpaRepository).insertIfAbsent(eq(EVENT_ID), eq(IndexRequestedConsumer.CONSUMER_NAME),
-                eq("INDEXED"), any(), eq(DOCUMENT_ID), any());
+                eq("INDEXED"), isNull(), eq(DOCUMENT_ID), any());
     }
 
     @Test
     void aSkippedUnsupportedOutcomeIsRecordedWithItsOwnCode() {
         when(processedEventJpaRepository.existsById(any())).thenReturn(false);
-        when(indexOrchestrator.process(DOCUMENT_ID)).thenReturn(IndexProcessingOutcome.SKIPPED_UNSUPPORTED);
+        when(indexOrchestrator.processWithReasonCode(DOCUMENT_ID))
+                .thenReturn(new IndexProcessingResult(IndexProcessingOutcome.SKIPPED_UNSUPPORTED,
+                        "AI_SERVICE_UNSUPPORTED_FORMAT"));
 
         consumer.onMessage(indexRequestedPayload());
 
         verify(processedEventJpaRepository).insertIfAbsent(eq(EVENT_ID), eq(IndexRequestedConsumer.CONSUMER_NAME),
-                eq("SKIPPED_UNSUPPORTED"), any(), eq(DOCUMENT_ID), any());
+                eq("SKIPPED_UNSUPPORTED"), eq("AI_SERVICE_UNSUPPORTED_FORMAT"), eq(DOCUMENT_ID), any());
+    }
+
+    /**
+     * M17 진단 교정 - 이전에는 {@code reason_code}를 이 자리에서 항상 {@code null}로
+     * 고정해 기록했다({@code IndexOrchestrator}가 어떤 값을 판정했든 무시됐다). 이제
+     * {@link IndexOrchestrator#processWithReasonCode}가 돌려준 고정 단계 사유 코드가
+     * 그대로 원장에 옮겨진다는 것을 확인한다 - 이 Test는 순수 단위 Test라 실제
+     * {@code IndexOrchestrator}의 판정 로직 자체는 검증하지 않는다(그건 {@code
+     * IndexOrchestratorTest} 몫이다).
+     */
+    @Test
+    void aSkippedIneligibleOutcomeIsRecordedWithItsStageReasonCode() {
+        when(processedEventJpaRepository.existsById(any())).thenReturn(false);
+        when(indexOrchestrator.processWithReasonCode(DOCUMENT_ID))
+                .thenReturn(new IndexProcessingResult(IndexProcessingOutcome.SKIPPED_INELIGIBLE,
+                        "INELIGIBLE_AT_ELIGIBILITY_CHECK"));
+
+        consumer.onMessage(indexRequestedPayload());
+
+        verify(processedEventJpaRepository).insertIfAbsent(eq(EVENT_ID), eq(IndexRequestedConsumer.CONSUMER_NAME),
+                eq("SKIPPED_INELIGIBLE"), eq("INELIGIBLE_AT_ELIGIBILITY_CHECK"), eq(DOCUMENT_ID), any());
     }
 
     private static String indexRequestedPayload() {

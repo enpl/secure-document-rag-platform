@@ -3,6 +3,7 @@ package com.sdv.rag.application;
 import com.sdv.common.model.UserContext;
 import com.sdv.policy.application.EffectivePermissionService;
 import com.sdv.rag.api.dto.RagFileItem;
+import com.sdv.rag.api.dto.RagFileNameMatch;
 import com.sdv.rag.api.dto.RagFileSearchQuery;
 import com.sdv.rag.api.dto.RagFileSearchResponse;
 import com.sdv.rag.api.dto.RagFileSortKey;
@@ -325,7 +326,7 @@ public class FileMetadataDiscoveryService {
         return documentShareJpaRepository.searchSharedDiscoverable(user.subject(), clearanceRank,
                 query.sourceId() != null, query.sourceId() != null ? query.sourceId() : NO_SOURCE_ID_SENTINEL,
                 query.mimeType() != null, query.mimeType() != null ? query.mimeType() : NO_FILTER_SENTINEL,
-                query.q() != null, query.q() != null ? toLikePattern(query.q()) : NO_FILTER_SENTINEL,
+                query.q() != null, query.q() != null ? toLikePattern(query.q(), query.nameMatch()) : NO_FILTER_SENTINEL,
                 query.modifiedFrom() != null, query.modifiedFrom() != null ? query.modifiedFrom() : Instant.EPOCH,
                 query.modifiedTo() != null, query.modifiedTo() != null ? query.modifiedTo() : Instant.EPOCH,
                 pageable);
@@ -336,7 +337,7 @@ public class FileMetadataDiscoveryService {
     }
 
     private static boolean matchesLiveFilters(RagFileSearchQuery query, SourceMetadataVerificationResult live) {
-        if (query.q() != null && !live.name().toLowerCase(Locale.ROOT).contains(query.q().toLowerCase(Locale.ROOT))) {
+        if (query.q() != null && !matchesName(live.name(), query.q(), query.nameMatch())) {
             return false;
         }
         if (query.mimeType() != null && !query.mimeType().equals(live.mimeType())) {
@@ -383,13 +384,25 @@ public class FileMetadataDiscoveryService {
      * 대소문자 기준을 맞추기 위해 컬럼이 아니라 여기(Java)에서 미리 소문자로 바꾼다
      * (Null 파라미터에 {@code LOWER(:namePattern)}을 직접 씌우면 Hibernate가 Postgres
      * Parameter Type을 잘못 추론하는 문제를 피한다).
+     *
+     * <h2>M17 자연어 파일 검색 교정 - PREFIX는 CONTAINS로 조용히 대체하지 않는다</h2>
+     * <p>Wildcard {@code %}는 오직 이 자리에서만(escape 이후) 붙인다 - {@link
+     * RagFileNameMatch#PREFIX}는 뒤쪽 {@code %}만, {@link RagFileNameMatch#CONTAINS}는
+     * 양쪽 {@code %}를 붙인다. 리터럴 이스케이프는 두 모드가 완전히 동일하다.</p>
      */
-    private static String toLikePattern(String q) {
+    private static String toLikePattern(String q, RagFileNameMatch mode) {
         if (q == null) {
             return null;
         }
         String escaped = q.toLowerCase(Locale.ROOT).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
-        return "%" + escaped + "%";
+        return mode == RagFileNameMatch.PREFIX ? escaped + "%" : "%" + escaped + "%";
+    }
+
+    /** {@link #matchesLiveFilters}의 이름 조건 - DB 쪽 {@link #toLikePattern}과 정확히 같은 의미로 재확인한다. */
+    private static boolean matchesName(String liveName, String q, RagFileNameMatch mode) {
+        String name = liveName.toLowerCase(Locale.ROOT);
+        String needle = q.toLowerCase(Locale.ROOT);
+        return mode == RagFileNameMatch.PREFIX ? name.startsWith(needle) : name.contains(needle);
     }
 
     /** {@link #search}의 연속 Scan이 멈춘 이유 - {@link #buildResponse}가 공개 계약으로 번역한다. */

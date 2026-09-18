@@ -17,6 +17,9 @@ import com.sdv.identity.domain.UserAuthorizationSnapshot;
 import com.sdv.policy.application.EffectivePermissionService;
 import com.sdv.policy.domain.PolicyDecision;
 import com.sdv.policy.domain.SecurityLevel;
+import com.sdv.rag.api.dto.RagFileNameMatch;
+import com.sdv.rag.api.dto.RagFileSearchQuery;
+import com.sdv.rag.api.dto.RagFileSearchResponse;
 import com.sdv.rag.domain.CandidateSelectionResult;
 import com.sdv.rag.domain.EvidenceBatchResult;
 import com.sdv.rag.domain.EvidenceHandle;
@@ -24,9 +27,11 @@ import com.sdv.rag.domain.EvidenceProvenance;
 import com.sdv.rag.domain.EvidenceReleaseResult;
 import com.sdv.rag.domain.EvidenceReleaseStatus;
 import com.sdv.rag.domain.LiveRetrievalResult;
+import com.sdv.rag.domain.LiveRetrievalStatus;
 import com.sdv.rag.domain.LocatorType;
 import com.sdv.rag.domain.VectorCandidate;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -309,6 +314,29 @@ class RagAnswerServiceTest {
         assertThat(response.files()).isNull();
     }
 
+    /**
+     * M17 자연어 파일 검색 교정 - 실제 사용자가 겪은 실패(정확히 이 문장 "sdv로
+     * 시작하는 문서 찾아줘"가 기대대로 동작하지 않음)를 이 Class의 실제 배선
+     * (진짜 {@link AssistantRouter} + 진짜 {@link NaturalLanguageFileQueryParser},
+     * 둘 다 Mock 아님)으로 재현/해결한다 - {@code fileDiscovery.search}에 실제로
+     * 전달되는 조건이 PREFIX "sdv"인지(CONTAINS로 조용히 대체되지 않는지) 확인한다.
+     */
+    @Test
+    void clearPrefixFileSearchRequestReachesDiscoveryWithAStructuredPrefixConditionNotAJoinedLiteralPhrase() {
+        Fixture f = fixture(new ScriptedPort(new LlmPort.GenerationResult(LlmPort.GenerationResult.Kind.SUCCESS,
+                List.of(), null)));
+        when(f.fileDiscovery.search(any(), any()))
+                .thenReturn(new RagFileSearchResponse(List.of(), Boolean.FALSE, false));
+
+        var response = f.service.ask(USER, "sdv로 시작하는 문서 찾아줘", List.of());
+
+        assertThat(response.status()).isEqualTo("SUCCESS");
+        ArgumentCaptor<RagFileSearchQuery> captor = ArgumentCaptor.forClass(RagFileSearchQuery.class);
+        verify(f.fileDiscovery).search(any(), captor.capture());
+        assertThat(captor.getValue().q()).isEqualTo("sdv");
+        assertThat(captor.getValue().nameMatch()).isEqualTo(RagFileNameMatch.PREFIX);
+    }
+
     @Test
     void unauthorizedSelectedIdStopsBeforeLiveFetchAndBusinessGeneration() {
         ScriptedPort port = new ScriptedPort(new LlmPort.GenerationResult(LlmPort.GenerationResult.Kind.SUCCESS,
@@ -364,6 +392,81 @@ class RagAnswerServiceTest {
         assertThat(port.classifications).hasValue(1);
         assertThat(port.generations).hasValue(0);
         verify(f.retrieval, never()).openEvidenceConversation(any());
+    }
+
+    /**
+     * M17 라우팅 교정 - 실제 사용자가 겪은 실패(정확히 이 문장으로 선택 문서
+     * 요약 요청 후 약 3초 뒤 REQUEST_TIMEOUT)를 이 Class의 실제 배선(진짜
+     * {@link AssistantRouter}, Mock 아님)으로 재현/해결한다. 분류 호출은 건너뛰되,
+     * 그 뒤의 실제 근거 검색/검증/생성/재검증 전체 Pipeline은 하나도 생략되지
+     * 않는다는 것까지 함께 확인한다("실제 답변 생성과 근거 검증은 생략되지
+     * 않음").
+     */
+    @Test
+    void clearSummarizeRequestWithSelectedDocumentSkipsClassificationButStillGeneratesAndVerifiesEvidence() {
+        ScriptedPort port = new ScriptedPort(new LlmPort.GenerationResult(LlmPort.GenerationResult.Kind.SUCCESS,
+                List.of(new LlmPort.Claim("정답", List.of("E1"), List.of("정답"))), null));
+        Fixture f = fixture(port);
+        LiveRetrievalResult evidence = live(11L, "section", false);
+        stubOneDocument(f, evidence, "정답");
+
+        var response = f.service.ask(USER, "선택한 문서의 핵심 내용을 세 문장으로 요약하고 근거를 제시해줘",
+                List.of(11L));
+
+        assertThat(response.status()).isEqualTo("SUCCESS");
+        assertThat(port.classifications)
+                .as("a clear summarize request with a selected document must never reach the 3s-budget classifier")
+                .hasValue(0);
+        assertThat(port.generations).as("the full evidence retrieval/verification/generation pipeline still runs")
+                .hasValue(1);
+        assertThat(response.citations()).isNotEmpty();
+        verify(f.retrieval).openEvidenceConversation(any());
+        verify(f.retrieval).retrieveVerifiedEvidenceCandidates(any(), anyString(), anyList(), anyLong());
+    }
+
+    /**
+     * M17 재현 회귀 - 실제 감사(SUMMARIZE 분류 성공 -> RAG_CANDIDATE_RETRIEVAL
+     * FAILURE/NOT_AVAILABLE -> PROVIDER_UNAVAILABLE)와 정확히 같은 경로를
+     * 재현한다. {@link CandidateSelectionResult.Status#NOT_AVAILABLE}은
+     * {@code documentParsingClient.embedQuery} 실패(로컬 Embedding 서비스) 한
+     * 곳에서만 나오는데도 이전에는 실제 Google Provider 장애와 똑같은
+     * {@code "PROVIDER_UNAVAILABLE"}로 보고됐다 - 이제 전용 코드로 구분된다.
+     */
+    @Test
+    void embeddingProviderFailureDuringCandidateRetrievalGetsItsOwnDistinctReasonCode() {
+        ScriptedPort port = new ScriptedPort(new LlmPort.GenerationResult(LlmPort.GenerationResult.Kind.SUCCESS,
+                List.of(), null));
+        Fixture f = fixture(port);
+        when(f.retrieval.retrieveCandidatesForDocuments(any(), anyString(), anyList(), anyInt(), anyLong()))
+                .thenReturn(CandidateSelectionResult.failed(CandidateSelectionResult.Status.NOT_AVAILABLE));
+
+        var response = f.service.ask(USER, "선택한 문서의 핵심 내용을 세 문장으로 요약하고 근거를 제시해줘",
+                List.of(11L));
+
+        assertThat(response.status()).isEqualTo("FAILED");
+        assertThat(response.reasonCode())
+                .as("an embedding-service failure must not be reported as if the Google provider were down")
+                .isEqualTo("EMBEDDING_PROVIDER_UNAVAILABLE");
+    }
+
+    /** 실제 Google/Live Retrieval Provider 장애는 여전히 자신만의 기존 코드를 그대로 유지한다(회귀 없음). */
+    @Test
+    void googleProviderFailureDuringLiveVerificationKeepsItsOwnPreExistingReasonCode() {
+        ScriptedPort port = new ScriptedPort(new LlmPort.GenerationResult(LlmPort.GenerationResult.Kind.SUCCESS,
+                List.of(), null));
+        Fixture f = fixture(port);
+        LiveRetrievalResult notAvailable = LiveRetrievalResult.failed(11L, LiveRetrievalStatus.NOT_AVAILABLE);
+        when(f.retrieval.retrieveCandidatesForDocuments(any(), anyString(), anyList(), anyInt(), anyLong()))
+                .thenReturn(CandidateSelectionResult.success(List.of(candidate(11L, 1, "a"))));
+        when(f.retrieval.retrieveVerifiedEvidenceCandidates(any(), anyString(), anyList(), anyLong()))
+                .thenReturn(new EvidenceBatchResult(List.of(notAvailable), false));
+
+        var response = f.service.ask(USER, "정책을 요약해줘", List.of(11L));
+
+        assertThat(response.status()).isEqualTo("FAILED");
+        assertThat(response.reasonCode())
+                .as("the actual Google/live-retrieval provider failure keeps its own distinct reason code")
+                .isEqualTo("PROVIDER_UNAVAILABLE");
     }
 
     @Test
