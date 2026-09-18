@@ -65,6 +65,18 @@ sdv:
     run:
       max-duration-ms: ${SDV_SYNC_RUN_MAX_DURATION_MS:1800000}
       max-pages-per-run: ${SDV_SYNC_RUN_MAX_PAGES_PER_RUN:2000}
+    # M17 신규 - 자동 증분 동기화 Scheduler(AutoIncrementalSyncScheduler). enabled는
+    # 모든 Profile에서 기본 false다(이 값 자체가 "자동 기능은 기본 OFF이며 명시적
+    # 운영자 설정으로만 활성화" 요구사항을 만족시킨다) - 켜져도 이미 초기 동기화를
+    # 마친(Cursor 존재 + 최초 FULL Sync가 COMPLETED) 활성 Google 연결만 대상이며,
+    # Outbox Publisher/Index Consumer/Assistant는 이 값과 무관하게 각자 별도로
+    # 켜야 한다(연쇄 활성화 없음).
+    auto-incremental:
+      enabled: ${SDV_SYNC_AUTO_INCREMENTAL_ENABLED:false}
+      poll-interval-ms: ${SDV_SYNC_AUTO_INCREMENTAL_POLL_INTERVAL_MS:30000}
+      batch-size: ${SDV_SYNC_AUTO_INCREMENTAL_BATCH_SIZE:20}
+      max-concurrent: ${SDV_SYNC_AUTO_INCREMENTAL_MAX_CONCURRENT:3}
+      max-backoff-seconds: ${SDV_SYNC_AUTO_INCREMENTAL_MAX_BACKOFF_SECONDS:1800}
   # M10 (RAG-011 File Metadata Discovery) - GET /api/rag/files의 Page 크기/개수
   # 상한과 Live(Google) 재검증 전체에 허용되는 벽시계 시간 예산.
   rag:

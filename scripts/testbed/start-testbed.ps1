@@ -36,13 +36,15 @@ param(
     [switch]$PrepareNewIndexingTopics,
     [switch]$EnableAssistant,
     [string]$AssistantModel,
-    [string]$AssistantOllamaUrl
+    [string]$AssistantOllamaUrl,
+    [switch]$EnableAutoSync
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_lib.ps1')
 . (Join-Path $PSScriptRoot '_indexing-activation.ps1')
 . (Join-Path $PSScriptRoot '_assistant-activation.ps1')
+. (Join-Path $PSScriptRoot '_auto-sync-activation.ps1')
 
 Assert-M17IndexingParameters -Enabled $EnableIndexing.IsPresent `
     -ActivationMode $IndexingActivationMode -KafkaBootstrapServers $KafkaBootstrapServers `
@@ -73,6 +75,9 @@ if ($existingBackend -or $existingFrontend) {
     }
     if ($EnableAssistant) {
         Invoke-Fail 'Assistant activation was requested but an existing baseline/testbed process is already running. It is not Assistant-enabled merely because this invocation included a switch. Run the normal testbed stop yourself, then restart with the explicit activation settings.'
+    }
+    if ($EnableAutoSync) {
+        Invoke-Fail 'Automatic incremental sync was requested but an existing baseline/testbed process is already running. It is not auto-sync-enabled merely because this invocation included a switch. Run the normal testbed stop yourself, then restart with the explicit activation settings.'
     }
     Write-Host "Run scripts\testbed\status-testbed.ps1 to check readiness, or scripts\testbed\stop-testbed.ps1 first if you want a clean restart."
     exit 0
@@ -339,11 +344,20 @@ $assistantOverrides = Get-M17AssistantBackendOverrides -Enabled $EnableAssistant
 foreach ($key in $assistantOverrides.Keys) {
     $backendOverrides[$key] = $assistantOverrides[$key]
 }
+# 다중 사용자 환경을 고려한 자동 증분 동기화(이번 작업 지시, M17 신규) - 독립 Switch다.
+# 색인(-EnableIndexing)/Assistant(-EnableAssistant)와 서로 연쇄 활성화하지 않는다 -
+# AutoIncrementalSyncScheduler는 기존 IncrementalSyncService.syncChanges만 그대로
+# 호출하고, Outbox Publisher/Index Consumer/Assistant는 각자의 Switch가 필요하다.
+$autoSyncOverrides = Get-M17AutoSyncBackendOverrides -Enabled $EnableAutoSync.IsPresent
+foreach ($key in $autoSyncOverrides.Keys) {
+    $backendOverrides[$key] = $autoSyncOverrides[$key]
+}
 $backendEnv = New-IsolatedEnvironment -Overrides $backendOverrides
 
 $indexingLabel = if ($EnableIndexing) { 'indexing enabled' } else { 'publisher/consumer disabled' }
 $assistantLabel = if ($EnableAssistant) { 'Assistant enabled' } else { 'Assistant disabled' }
-$backendMode = "$indexingLabel; $assistantLabel"
+$autoSyncLabel = if ($EnableAutoSync) { 'auto-incremental sync enabled' } else { 'auto-incremental sync disabled' }
+$backendMode = "$indexingLabel; $assistantLabel; $autoSyncLabel"
 Write-Step "Starting backend (testbed profile, hidden, isolated environment; $backendMode)"
 $backendProcess = Start-TrackedProcess -Name 'backend' -FilePath 'java' `
     -ArgumentList @('-jar', $bootJar.FullName) `
