@@ -293,11 +293,22 @@ public class RagAnswerService {
         return terms;
     }
 
+    /**
+     * M17 진단 교정 - {@link CandidateSelectionResult.Status#NOT_AVAILABLE}은
+     * {@code RagRetrievalService.retrieveCandidatesForDocuments}에서 오직
+     * {@code documentParsingClient.embedQuery}(Local Embedding Service) 호출
+     * 실패 한 곳에서만 만들어진다({@code LiveEvidenceRetrievalService}의 Google
+     * Provider 실패는 완전히 별도인 {@link LiveRetrievalStatus#NOT_AVAILABLE}이다,
+     * {@link #reason(LiveRetrievalStatus)} 참고). 이전에는 두 서로 다른 원인이
+     * 똑같은 {@code "PROVIDER_UNAVAILABLE"} 문자열로 나가 "Google Provider가
+     * 죽었다"는 오해를 만들었다 - 이제 Embedding 단계 전용 코드로 구분한다(분류/
+     * 검색/원본 검증/생성 실패를 같은 원인으로 설명하지 않는다).
+     */
     private static RagAnswerResponse fromCandidateFailure(CandidateSelectionResult.Status status) {
         return switch (status) {
             case NOT_AUTHORIZED -> RagAnswerResponse.failed("FAILED", "NOT_AUTHORIZED");
             case REQUEST_TIMEOUT -> RagAnswerResponse.failed("FAILED", "REQUEST_TIMEOUT");
-            case NOT_AVAILABLE -> RagAnswerResponse.failed("FAILED", "PROVIDER_UNAVAILABLE");
+            case NOT_AVAILABLE -> RagAnswerResponse.failed("FAILED", "EMBEDDING_PROVIDER_UNAVAILABLE");
             case NO_EVIDENCE -> RagAnswerResponse.failed("NO_EVIDENCE", "NO_RELEVANT_EVIDENCE");
             case SUCCESS -> throw new IllegalArgumentException("success is not a failure");
         };

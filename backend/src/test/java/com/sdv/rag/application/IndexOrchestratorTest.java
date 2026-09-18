@@ -28,6 +28,8 @@ import com.sdv.source.infrastructure.persistence.repository.SourceDocumentJpaRep
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -388,6 +390,139 @@ class IndexOrchestratorTest {
 
         assertThatThrownBy(() -> orchestrator.process(DOCUMENT_ID)).isInstanceOf(TransientIndexingException.class);
         verify(documentEmbeddingJpaRepository, never()).replaceGeneration(anyLong(), any());
+    }
+
+    /**
+     * M17 진단 교정 - {@code SKIPPED_INELIGIBLE}이 자격 검사/자격증명·원본 읽기/버전
+     * 검증/최종 세대 검증 중 정확히 어느 단계에서 나왔는지 {@link
+     * IndexProcessingResult#reasonCode()}로 구분되는지, 그리고 그 값이 항상 이 4개
+     * 고정 문자열 중 하나뿐(원시 예외/Google 응답/파일명/토큰/원문이 전혀 섞이지
+     * 않음)인지 검증한다. 각 Test는 이미 위에 있는 대응 시나리오의 자격/Mock
+     * 설정을 그대로 재사용한다.
+     */
+    @Test
+    void skippedIneligibleAtTheEligibilityCheckStageCarriesThatStagesFixedReasonCode() {
+        givenActiveDocument("text/plain");
+        when(documentShareJpaRepository.findByDocumentIdAndRevokedAtIsNull(DOCUMENT_ID)).thenReturn(Optional.empty());
+
+        IndexProcessingResult result = orchestrator.processWithReasonCode(DOCUMENT_ID);
+
+        assertThat(result.outcome()).isEqualTo(IndexProcessingOutcome.SKIPPED_INELIGIBLE);
+        assertThat(result.reasonCode()).isEqualTo("INELIGIBLE_AT_ELIGIBILITY_CHECK");
+    }
+
+    /**
+     * M17 SOURCE_ACCESS 진단 세분화(2차 교정) - 이 11개 {@link SourceContentOutcome}
+     * 값 각각이 더 이상 {@code INELIGIBLE_AT_SOURCE_ACCESS} 하나로 뭉개지지 않고,
+     * 그 typed 원인 그대로 고정 접미사를 얻는지 확인한다(원시 reason 문자열
+     * "synthetic"은 절대 반영되지 않는다). {@code IndexRequestedConsumer}를 거쳐
+     * 실제 DB {@code reason_code}까지 도달하는지는 {@code
+     * SourceAccessReasonCodeConsumerTest}(Testcontainers)가 별도로 확인한다 - 이
+     * Test는 순수 단위 Test로 {@link IndexOrchestrator} 자신의 판정만 좁게 본다.
+     */
+    @ParameterizedTest
+    @EnumSource(value = SourceContentOutcome.class, names = { "NOT_FOUND",
+            "TRASHED", "DOCUMENT_CHANGED", "VERSION_MISMATCH", "EXPORT_LIMIT_EXCEEDED", "MISSING_CREDENTIAL",
+            "CREDENTIAL_NOT_BOUND_TO_USER", "CREDENTIAL_UNREADABLE", "INSUFFICIENT_SCOPE", "ACCESS_DENIED",
+            "ACCESS_UNKNOWN" })
+    void skippedIneligibleAtTheSourceAccessStageCarriesTheTypedOutcomesOwnFixedReasonCode(
+            SourceContentOutcome outcome) {
+        givenActiveDocument("application/pdf");
+        givenEligibleShareAndConnection(SecurityLevel.INTERNAL);
+        when(googleDriveConnector.fetchContent(any(), eq(SOURCE_ID), any(), eq(SOURCE_VERSION)))
+                .thenReturn(SourceContentResult.failed(outcome, "synthetic"));
+
+        IndexProcessingResult result = orchestrator.processWithReasonCode(DOCUMENT_ID);
+
+        assertThat(result.outcome()).isEqualTo(IndexProcessingOutcome.SKIPPED_INELIGIBLE);
+        assertThat(result.reasonCode()).isEqualTo("INELIGIBLE_AT_SOURCE_ACCESS_" + outcome.name());
+    }
+
+    /**
+     * M17 진단 세분화 - Connector가 아예 등록돼 있지 않은 경우도(알 수 없는 Source
+     * Type이 아니라 "알려진 Type이지만 등록된 Connector가 없음") SOURCE_ACCESS
+     * 단계 중 자신만의 고정 코드를 얻는다 - Google 호출 자체가 시도되지 않는다.
+     */
+    @Test
+    void skippedIneligibleWhenNoConnectorIsRegisteredForTheKnownSourceTypeCarriesItsOwnFixedReasonCode() {
+        givenActiveDocument("application/pdf");
+        givenEligibleShareAndConnection(SecurityLevel.INTERNAL);
+        SourceConnectorRegistry emptyRegistry = new SourceConnectorRegistry(List.of());
+        IndexOrchestrator orchestratorWithoutConnector = new IndexOrchestrator(sourceDocumentJpaRepository,
+                sourceConnectionJpaRepository, documentShareJpaRepository, documentEmbeddingJpaRepository,
+                emptyRegistry, aiUsagePolicyService, documentParsingClient, transactionManager,
+                Clock.fixed(Instant.parse("2026-09-16T00:00:00Z"), ZoneOffset.UTC));
+
+        IndexProcessingResult result = orchestratorWithoutConnector.processWithReasonCode(DOCUMENT_ID);
+
+        assertThat(result.outcome()).isEqualTo(IndexProcessingOutcome.SKIPPED_INELIGIBLE);
+        assertThat(result.reasonCode()).isEqualTo("INELIGIBLE_AT_SOURCE_ACCESS_CONNECTOR_UNAVAILABLE");
+        verifyNoInteractions(documentParsingClient);
+    }
+
+    @Test
+    void skippedIneligibleAtTheVersionRecheckStageCarriesThatStagesFixedReasonCode() {
+        givenActiveDocument("application/pdf");
+        givenEligibleShareAndConnection(SecurityLevel.INTERNAL);
+        byte[] bytes = "pdf bytes".getBytes();
+        when(googleDriveConnector.fetchContent(any(), eq(SOURCE_ID), any(), eq(SOURCE_VERSION)))
+                .thenReturn(SourceContentResult.verified(bytes, "application/pdf", SOURCE_VERSION, false));
+        when(googleDriveConnector.verifyCurrentMetadata(any(), eq(SOURCE_ID), any()))
+                .thenReturn(SourceMetadataVerificationResult.verified("Doc.pdf", "application/pdf", "v2-changed",
+                        Instant.now(), false));
+        when(documentParsingClient.index(any(), any(), any()))
+                .thenReturn(IndexOutcome.success("pdfminer-1", "1", IndexOrchestrator.EXPECTED_EMBEDDING_MODEL,
+                        List.of(validChunk(0))));
+
+        IndexProcessingResult result = orchestrator.processWithReasonCode(DOCUMENT_ID);
+
+        assertThat(result.outcome()).isEqualTo(IndexProcessingOutcome.SKIPPED_INELIGIBLE);
+        assertThat(result.reasonCode()).isEqualTo("INELIGIBLE_AT_VERSION_RECHECK");
+    }
+
+    @Test
+    void skippedIneligibleAtTheFinalGenerationFenceStageCarriesThatStagesFixedReasonCode() {
+        givenActiveDocument("application/pdf");
+        givenEligibleShareAndConnection(SecurityLevel.INTERNAL);
+        byte[] bytes = "pdf bytes".getBytes();
+        when(googleDriveConnector.fetchContent(any(), eq(SOURCE_ID), any(), eq(SOURCE_VERSION)))
+                .thenReturn(SourceContentResult.verified(bytes, "application/pdf", SOURCE_VERSION, false));
+        givenSuccessfulPostParseRecheck(SOURCE_VERSION);
+        when(documentParsingClient.index(any(), any(), any()))
+                .thenReturn(IndexOutcome.success("pdfminer-1", "1", IndexOrchestrator.EXPECTED_EMBEDDING_MODEL,
+                        List.of(validChunk(0))));
+        SourceConnectionEntity advancedEpochConnection = activeConnection();
+        advancedEpochConnection.bumpConnectionEpoch();
+        when(sourceConnectionJpaRepository.findByIdForUpdate(SOURCE_ID))
+                .thenReturn(Optional.of(advancedEpochConnection));
+
+        IndexProcessingResult result = orchestrator.processWithReasonCode(DOCUMENT_ID);
+
+        assertThat(result.outcome()).isEqualTo(IndexProcessingOutcome.SKIPPED_INELIGIBLE);
+        assertThat(result.reasonCode()).isEqualTo("INELIGIBLE_AT_FINAL_GENERATION_FENCE");
+    }
+
+    @Test
+    void indexedOutcomeCarriesNoAdditionalReasonCode() {
+        givenActiveDocument("application/pdf");
+        givenEligibleShareAndConnection(SecurityLevel.INTERNAL);
+        byte[] bytes = "pdf bytes".getBytes();
+        when(googleDriveConnector.fetchContent(any(), eq(SOURCE_ID), any(), eq(SOURCE_VERSION)))
+                .thenReturn(SourceContentResult.verified(bytes, "application/pdf", SOURCE_VERSION, false));
+        givenSuccessfulPostParseRecheck(SOURCE_VERSION);
+        when(documentParsingClient.index(any(), any(), any()))
+                .thenReturn(IndexOutcome.success("pdfminer-1", "1", IndexOrchestrator.EXPECTED_EMBEDDING_MODEL,
+                        List.of(validChunk(0))));
+        when(sourceConnectionJpaRepository.findByIdForUpdate(SOURCE_ID)).thenReturn(Optional.of(activeConnection()));
+        when(sourceDocumentJpaRepository.findByIdForUpdate(DOCUMENT_ID))
+                .thenReturn(Optional.of(activeDocument("application/pdf")));
+        when(documentShareJpaRepository.findByIdForUpdate(SHARE_ID))
+                .thenReturn(Optional.of(activeShare(SecurityLevel.INTERNAL)));
+
+        IndexProcessingResult result = orchestrator.processWithReasonCode(DOCUMENT_ID);
+
+        assertThat(result.outcome()).isEqualTo(IndexProcessingOutcome.INDEXED);
+        assertThat(result.reasonCode()).isNull();
     }
 
     private void givenActiveDocument(String mimeType) {

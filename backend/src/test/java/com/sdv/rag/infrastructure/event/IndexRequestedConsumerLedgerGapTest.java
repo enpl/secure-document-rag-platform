@@ -161,6 +161,11 @@ class IndexRequestedConsumerLedgerGapTest {
                 .findById(new ProcessedEventEntity.Key(redeliveryEventId, IndexRequestedConsumer.CONSUMER_NAME))
                 .orElseThrow();
         assertThat(ledgerRow.getOutcome()).isEqualTo("SKIPPED_INELIGIBLE");
+        // M17 진단 교정 - 공유가 이미 철회된 뒤라 resolveEligibility() 자체가 Google을
+        // 호출하기도 전에 null을 반환한다("자격 검사" 단계) - reason_code가 더 이상
+        // null이 아니라 이 고정 단계 코드를 담아야 한다(이전에는 이 자리가 항상
+        // null이었다는 것이 이번 진단 공백 교정의 대상이었다).
+        assertThat(ledgerRow.getReasonCode()).isEqualTo("INELIGIBLE_AT_ELIGIBILITY_CHECK");
     }
 
     private void stubSuccessfulFetchParseAndRecheck(Fixture fixture) {

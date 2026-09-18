@@ -7,6 +7,7 @@ import com.sdv.identity.api.dto.AdminUserResponse;
 import com.sdv.identity.application.IdentityRegistryService;
 import com.sdv.policy.application.EffectivePermissionService;
 import com.sdv.rag.api.dto.RagFileItem;
+import com.sdv.rag.api.dto.RagFileNameMatch;
 import com.sdv.rag.api.dto.RagFileSearchQuery;
 import com.sdv.rag.api.dto.RagFileSearchResponse;
 import com.sdv.rag.api.dto.RagFileSortKey;
@@ -355,6 +356,90 @@ class FileMetadataDiscoveryServiceTest {
         assertThat(response.items())
                 .as("a rename discovered only during the live check must not surface under the stale filter match")
                 .isEmpty();
+    }
+
+    /**
+     * M17 자연어 파일 검색 교정 - PREFIX는 CONTAINS로 조용히 대체되지 않는다.
+     * "sdv"로 시작하는 것과 어디엔가 "sdv"를 포함하는 것은 서로 다른 결과 집합을
+     * 내야 한다 - 두 검사(Catalog LIKE + Live 재확인의 {@code matchesLiveFilters})
+     * 모두 대상이다.
+     */
+    @Test
+    void prefixMatchOnlyReturnsNamesStartingWithTheValueNotMerelyContainingIt() {
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        stubVisible(publisher, recipient, "sdv_report.pdf");
+        stubVisible(publisher, recipient, "SDV_Other.pdf");
+        stubVisible(publisher, recipient, "old_sdv_report.pdf");
+
+        RagFileSearchQuery prefixQuery = new RagFileSearchQuery("sdv", RagFileNameMatch.PREFIX, null, null, null,
+                null, RagFileSortKey.NAME_ASC, 0, 20);
+        RagFileSearchResponse prefixResponse = search(recipient, prefixQuery);
+        assertThat(prefixResponse.items()).extracting(RagFileItem::name)
+                .as("PREFIX excludes a name that merely contains the value later in the string")
+                .containsExactlyInAnyOrder("SDV_Other.pdf", "sdv_report.pdf");
+
+        RagFileSearchQuery containsQuery = new RagFileSearchQuery("sdv", RagFileNameMatch.CONTAINS, null, null, null,
+                null, RagFileSortKey.NAME_ASC, 0, 20);
+        RagFileSearchResponse containsResponse = search(recipient, containsQuery);
+        assertThat(containsResponse.items()).extracting(RagFileItem::name)
+                .as("CONTAINS (unchanged, existing meaning) still matches all three")
+                .containsExactlyInAnyOrder("SDV_Other.pdf", "sdv_report.pdf", "old_sdv_report.pdf");
+    }
+
+    /**
+     * 검색 조건은 허용된 구조화 값으로만 전달된다 - parameter binding과 SQL LIKE
+     * Wildcard({@code %}/{@code _}) 및 이스케이프 문자({@code \}) 자체의 리터럴
+     * escaping은 PREFIX/CONTAINS 두 모드 모두 동일하게 유지된다(둘 다 같은
+     * {@code toLikePattern}을 거친다 - Wildcard 배치 위치만 다르다).
+     */
+    @Test
+    void literalWildcardCharactersInTheQueryAreEscapedForBothMatchModes() {
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        stubVisible(publisher, recipient, "100%_done.pdf");
+        stubVisible(publisher, recipient, "100X done.pdf");
+
+        RagFileSearchQuery containsLiteral = new RagFileSearchQuery("100%_done", RagFileNameMatch.CONTAINS, null,
+                null, null, null, RagFileSortKey.NAME_ASC, 0, 20);
+        assertThat(search(recipient, containsLiteral).items()).extracting(RagFileItem::name)
+                .as("% and _ must be treated as literal characters, not SQL LIKE wildcards")
+                .containsExactly("100%_done.pdf");
+
+        RagFileSearchQuery prefixLiteral = new RagFileSearchQuery("100%_done", RagFileNameMatch.PREFIX, null, null,
+                null, null, RagFileSortKey.NAME_ASC, 0, 20);
+        assertThat(search(recipient, prefixLiteral).items()).extracting(RagFileItem::name)
+                .containsExactly("100%_done.pdf");
+    }
+
+    /**
+     * 결과를 가져온 뒤 현재 Page에서만 PREFIX를 적용하지 않는다 - 인가된 전체
+     * 검색 범위(연속 Scan)에서 조건을 먼저 적용한 뒤에도 Page 경계를 넘어
+     * 안정적으로 이어진다({@code size=1}로 강제해 여러 Page를 거치게 한다).
+     */
+    @Test
+    void prefixFilterAppliesAcrossTheFullAuthorizedScanNotJustTheCurrentPage() {
+        String publisher = "publisher-" + unique();
+        String recipient = recipient();
+        stubVisible(publisher, recipient, "sdv_a.pdf");
+        stubVisible(publisher, recipient, "not_matching_b.pdf");
+        stubVisible(publisher, recipient, "sdv_c.pdf");
+        stubVisible(publisher, recipient, "also_not_matching_d.pdf");
+        stubVisible(publisher, recipient, "sdv_e.pdf");
+
+        List<String> collected = new ArrayList<>();
+        int page = 0;
+        while (true) {
+            RagFileSearchQuery query = new RagFileSearchQuery("sdv", RagFileNameMatch.PREFIX, null, null, null, null,
+                    RagFileSortKey.NAME_ASC, page, 1);
+            RagFileSearchResponse response = search(recipient, query);
+            response.items().forEach(item -> collected.add(item.name()));
+            if (!Boolean.TRUE.equals(response.hasMore())) {
+                break;
+            }
+            page++;
+        }
+        assertThat(collected).containsExactlyInAnyOrder("sdv_a.pdf", "sdv_c.pdf", "sdv_e.pdf");
     }
 
     @Test

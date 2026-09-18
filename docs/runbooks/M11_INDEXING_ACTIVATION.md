@@ -33,7 +33,7 @@ useless — no events will ever reach it. Both are required together.
 3. **A Content HMAC key**, set as `SDV_INDEX_CONTENT_HMAC_KEY` on the
    ai-service process. There is no default — leaving it unset makes every
    `/index` call return `FAILED` with reason `"content hmac key not
-   configured"` (fail closed, not a silent insecure default). This key is
+configured"` (fail closed, not a silent insecure default). This key is
    separate from the backend's OAuth token-encryption key; it never leaves
    the ai-service process and is never logged or returned in any response.
 4. **At least one `ai_usage_policies` row per classification you expect to
@@ -115,14 +115,29 @@ another process.
 
 The content-free DB gate resolves the approved fixture by `source_id=2` plus
 the exact synthetic name; document/outbox IDs are never hard-coded. It checks
-one active INTERNAL/VIEW share with one named recipient, active publisher
-connection/token binding, INTERNAL `LOCAL_ONLY` with external use disabled,
-PRIVATE unshared/no embeddings, other currently fetch-eligible shared
-documents, and both `INDEX_REQUESTED` and `SOURCE_DOCUMENT_CHANGED` backlog.
-Malformed/unknown targets fail closed. Other catalog events and relevant
-events for currently unshared/ineligible private documents may be published
-because `IndexOrchestrator` rechecks current share authorization before any
-fetch; the launcher does not invent a per-document runtime filter.
+one active, unblocked INTERNAL share owned by the publisher on source 2,
+active publisher connection/token binding, INTERNAL `LOCAL_ONLY` with external
+use disabled, PRIVATE unshared/no embeddings, other currently fetch-eligible
+shared documents, and both `INDEX_REQUESTED` and `SOURCE_DOCUMENT_CHANGED`
+backlog. Malformed/unknown targets fail closed. Other catalog events and
+relevant events for currently unshared/ineligible private documents may be
+published because `IndexOrchestrator` rechecks current share authorization
+before any fetch; the launcher does not invent a per-document runtime filter.
+
+**2026-09-17 correction (current approved sharing contract, `docs/spec/SDV_v3.2_CORE_SPEC.md`
+§2A.13):** the gate no longer assumes exactly one recipient or an exact
+`allowed_actions = 'VIEW'` string - both were pre-audience/multi-action
+assumptions from before V013. It now reads the persisted `audience` column
+directly (never inferred from recipient count): `ALL_AUTHENTICATED` must have
+exactly zero recipients, and `NAMED_USERS` must have at least one recipient
+with a non-blank subject - the same correlation
+`SourceSharingService.validateAudienceRecipients`/`DocumentShare`'s
+constructor already enforce at write time, re-checked here at read time, not
+a new rule. `allowed_actions` (a comma-separated `ShareAction` set) is parsed
+into its individual values rather than string-matched - `VIEW` is required,
+`DOWNLOAD` is optional and independent (SHR-001/M10C), and any unknown or
+duplicate action fails the gate closed. `sharedRecipientCount` remains in the
+snapshot for diagnostics only; it no longer gates activation by itself.
 
 This is a point-in-time workload gate, not a concurrency fence. During this
 controlled run, do not create/change unrelated shares or start another
@@ -191,7 +206,12 @@ SELECT json_build_object(
   'outbox_status', (SELECT o.status FROM outbox_events o JOIN shared s ON CASE WHEN COALESCE(o.payload->>'internalDocumentId','') ~ '^[0-9]+$' THEN (o.payload->>'internalDocumentId')::bigint END = s.id WHERE o.event_type IN ('INDEX_REQUESTED','SOURCE_DOCUMENT_CHANGED') ORDER BY o.id DESC LIMIT 1),
   'outbox_attempts', (SELECT o.attempts FROM outbox_events o JOIN shared s ON CASE WHEN COALESCE(o.payload->>'internalDocumentId','') ~ '^[0-9]+$' THEN (o.payload->>'internalDocumentId')::bigint END = s.id WHERE o.event_type IN ('INDEX_REQUESTED','SOURCE_DOCUMENT_CHANGED') ORDER BY o.id DESC LIMIT 1),
   'consumer_indexed', (SELECT COUNT(*) FROM processed_events p JOIN shared s ON s.id = p.document_id WHERE p.consumer_name = 'rag-index-orchestrator' AND p.outcome = 'INDEXED'),
-  'consumer_terminal_failed', (SELECT COUNT(*) FROM processed_events p JOIN shared s ON s.id = p.document_id WHERE p.consumer_name = 'rag-index-orchestrator' AND p.outcome IN ('FAILED_TERMINAL','FAILED_TERMINAL_MALFORMED'))
+  'consumer_terminal_failed', (SELECT COUNT(*) FROM processed_events p JOIN shared s ON s.id = p.document_id WHERE p.consumer_name = 'rag-index-orchestrator' AND p.outcome IN ('FAILED_TERMINAL','FAILED_TERMINAL_MALFORMED')),
+  -- M17 진단 교정 - 이제 SKIPPED_INELIGIBLE도 자격 검사/자격증명·원본 읽기/버전 검증/
+  -- 최종 세대 검증 중 어느 단계였는지 고정 허용 코드(예: INELIGIBLE_AT_ELIGIBILITY_CHECK)를
+  -- 남긴다(IndexOrchestrator/IndexRequestedConsumer 참고) - 원시 예외/Google 응답/파일명/
+  -- 토큰/원문은 절대 담기지 않으므로 이 값 그대로 노출해도 안전하다.
+  'latest_skipped_ineligible_reason_code', (SELECT p.reason_code FROM processed_events p JOIN shared s ON s.id = p.document_id WHERE p.consumer_name = 'rag-index-orchestrator' AND p.outcome = 'SKIPPED_INELIGIBLE' ORDER BY p.processed_at DESC LIMIT 1)
 );
 '@
 $indexed = $false
@@ -249,6 +269,89 @@ done. Live activation/INDEXED remains NOT RUN until the operator supplies the
 evidence above. Assistant/grounded-answer acceptance and overall MVP remain
 separate and incomplete even after INDEXED.
 
+## M17 Assistant explicit activation (local generation)
+
+A third independent switch, following exactly the same pattern as indexing
+above: `sdv.rag.assistant.enabled` defaults to `false` in every profile
+(`application.yml`). `-EnableAssistant` is the only way to turn it on for the
+testbed, and it is completely independent of `-EnableIndexing` — enabling one
+never enables the other, and the launcher never infers Assistant activation
+from any inherited parent-shell environment variable
+(`scripts\testbed\_lib.ps1`'s `New-IsolatedEnvironment` already strips every
+`SDV_*`/`SPRING_*`/... variable from the parent process before applying this
+gate's explicit overrides, and `Assert-M17AssistantParameters` separately
+refuses any Assistant parameter without the explicit switch).
+
+When enabled, the launcher sets exactly three existing `application.yml`
+placeholders on the isolated backend child process — no new configuration key
+was added:
+
+```
+SDV_RAG_ASSISTANT_ENABLED=true
+SDV_RAG_ASSISTANT_MODEL=qwen2.5:7b-instruct-q4_K_M
+SDV_RAG_ASSISTANT_OLLAMA_URL=http://127.0.0.1:11434
+```
+
+`AssistantModel`/`AssistantOllamaUrl` must be **exactly** the
+installed/approved model and the loopback Ollama endpoint above — any other
+value is rejected before the backend is ever built or spawned, the same
+fail-closed convention `KafkaBootstrapServers`/`AiServiceUrl` already use for
+indexing. Before launch, the gate (`scripts\testbed\_assistant-activation.ps1`)
+confirms the loopback endpoint answers (`GET /api/version`) and that the
+approved model is already present (`GET /api/tags`) — it never pulls/installs
+a model, never connects to any other endpoint, and never generates, rotates,
+or inspects a key. All other `sdv.rag.assistant.*` settings (context/deadline
+budgets, etc.) keep their existing `application.yml` defaults; this change
+does not add or tune any of them.
+
+**The actual command for the current situation (existing topic/group,
+SHARED already `INDEXED`, no new share/topic/re-index needed).** The
+Assistant reads whatever is already durably persisted in
+`document_embedding_index` — it does not require the indexing
+consumer/publisher to be running at all. The minimal command that turns on
+Assistant without touching indexing, Kafka, or any share is:
+
+```powershell
+scripts\testbed\stop-testbed.ps1
+scripts\testbed\start-testbed.ps1 -EnableAssistant -AssistantModel qwen2.5:7b-instruct-q4_K_M -AssistantOllamaUrl http://127.0.0.1:11434
+```
+
+A restart (`stop-testbed.ps1` then `start-testbed.ps1`) is required either
+way — a running JVM cannot pick up new environment variables without one;
+this does not delete the testbed database, topic history, or embeddings (see
+"To disable indexing again" above — the same baseline restart already
+documented there).
+
+**If the operator also wants the indexing consumer kept on in the same run**,
+add the exact same `-EnableIndexing -IndexingActivationMode Resume
+-KafkaBootstrapServers -IndexingTopic -IndexingGroupId -AiServiceUrl
+-IndexHmacState` values already established by that operator's own prior
+Resume run (this document does not know or invent those values — they must
+match the recorded provenance under `infra/testbed/.state/`, checked by
+`Assert-M17ResumeProvenance`). Doing so does not force a re-index of the
+already-`INDEXED` SHARED document: `Invoke-M17IndexingActivationPreflight`'s
+extra "must have resumable Kafka work" check only applies when
+`sharedIndexStatus` is still `PENDING`/`STALE` — once it is `INDEXED`, Resume
+proceeds without requiring any new or resumable topic work, and the
+orchestrator's own generation fencing does not re-embed a current, unchanged
+`source_version`.
+
+**What this correction did not verify (explicit).** No Ollama call was made
+during this offline implementation session — the reachability/model-installed
+checks above run for real only when an operator actually executes
+`start-testbed.ps1 -EnableAssistant`. "The approved model is installed and
+approved" is the operator's own prior confirmation, not something this
+document or its offline tests re-derive. The 34 partial catalog-sync failures
+reported separately are unrelated to this switch and remain unresolved and
+out of scope here, as is any automatic (e.g. 30-second) sync loop, a UI
+change, or a new policy/API/dependency — none of those were added.
+
+Once enabled and confirmed reachable, the existing `POST /api/rag/ask`
+endpoint (`RagQueryController`, unchanged by this correction) starts
+returning generated, cited answers instead of a `MODEL_UNAVAILABLE` failure
+for classifications the existing `ai_usage_policies` table already allows —
+no new endpoint was added.
+
 ## Backfilling already-published shares
 
 Any `document_shares` row created **before** the consumer was ever enabled
@@ -260,7 +363,7 @@ gaps.
 
 **Correctness note (2026-09-16 correction).** This method's candidate query
 checks whether `document_embedding_index` already has a row matching the
-document's *current* `source_version` — not whether `processed_events` ever
+document's _current_ `source_version` — not whether `processed_events` ever
 once recorded an `INDEXED` outcome for it. A document that was indexed at an
 older version (content changed since) or whose embeddings were wiped by a
 later unshare/admin-block/disconnect is correctly re-offered, even though it
@@ -328,7 +431,7 @@ pick it up).
 - Dead-lettered messages land in the Kafka `<topic>.DLT` topic (Spring Kafka's
   default naming) as a best-effort secondary signal; the authoritative,
   durable disposition is always the DB write (`source_documents.index_status
-  = FAILED`, only if it is not already `INDEXED` — an obsolete retry can never
+= FAILED`, only if it is not already `INDEXED` — an obsolete retry can never
   downgrade a newer successful generation — + a `processed_events`
   `FAILED_TERMINAL` row), recorded before the DLT publish is attempted and
   never swallowed on failure (a genuine DB write failure propagates so the
@@ -349,7 +452,7 @@ pick it up).
   reconnect (even same-account), an unshare followed by a fresh republish, or
   an admin block followed by an unblock, all bump one of these values, so a
   fetch/embed cycle that began before any of those events can no longer
-  publish afterward just because *something* currently valid happens to
+  publish afterward just because _something_ currently valid happens to
   exist.
 - Live acceptance testing against a real Google account, real Ollama server,
   or the project's local testbed remains explicitly postponed, per every

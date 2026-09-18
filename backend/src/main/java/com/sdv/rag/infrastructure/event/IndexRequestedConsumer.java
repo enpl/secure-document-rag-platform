@@ -4,6 +4,7 @@ import com.sdv.event.domain.IndexRequestedEvent;
 import com.sdv.event.domain.SourceDocumentChangedEvent;
 import com.sdv.rag.application.IndexOrchestrator;
 import com.sdv.rag.application.IndexProcessingOutcome;
+import com.sdv.rag.application.IndexProcessingResult;
 import com.sdv.rag.application.TransientIndexingException;
 import com.sdv.rag.infrastructure.persistence.entity.ProcessedEventEntity;
 import com.sdv.rag.infrastructure.persistence.repository.ProcessedEventJpaRepository;
@@ -149,8 +150,8 @@ public class IndexRequestedConsumer {
             return;
         }
 
-        IndexProcessingOutcome outcome = indexOrchestrator.process(parsed.documentId());
-        recordProcessed(parsed, outcomeCode(outcome));
+        IndexProcessingResult result = indexOrchestrator.processWithReasonCode(parsed.documentId());
+        recordProcessed(parsed, outcomeCode(result.outcome()), result.reasonCode());
     }
 
     /**
@@ -160,10 +161,17 @@ public class IndexRequestedConsumer {
      * 없이 정확히 한쪽만 실제로 삽입된다(그 Method Javadoc 참고). 반환값(1=신규 기록,
      * 0=이미 기록됨)은 둘 다 "지금 이 (eventId, consumer) 조합은 durable하게 기록돼
      * 있다"는 같은 결론이라 구분해서 처리할 필요가 없다.
+     *
+     * <h2>M17 진단 교정 - reason_code가 항상 null로 기록되던 공백</h2>
+     * <p>이전에는 이 자리에서 {@code reason_code}를 항상 {@code null}로 고정해 기록했다
+     * - {@link IndexOrchestrator#processWithReasonCode}가 이미 판정 시점에 채운 고정
+     * 허용 값(자격 검사/자격증명·원본 읽기/버전 검증/최종 세대 검증 단계 코드, 또는
+     * 기존 AI 서비스/사전 분류 사유 코드)이 있는데도 옮기지 않았던 것이 공백의
+     * 원인이었다. 이제 그 값을 그대로 옮긴다 - 여기서 새로 추측/가공하지 않는다.</p>
      */
-    private void recordProcessed(ParsedEnvelope parsed, String outcomeCode) {
+    private void recordProcessed(ParsedEnvelope parsed, String outcomeCode, String reasonCode) {
         ledgerTransaction.executeWithoutResult(status -> processedEventJpaRepository.insertIfAbsent(parsed.eventId(),
-                CONSUMER_NAME, outcomeCode, null, parsed.documentId(), clock.instant()));
+                CONSUMER_NAME, outcomeCode, reasonCode, parsed.documentId(), clock.instant()));
     }
 
     private static String outcomeCode(IndexProcessingOutcome outcome) {
