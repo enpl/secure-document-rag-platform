@@ -40,8 +40,14 @@ function SyncOutcomeBanner({ outcome }: { outcome: SyncOutcome }) {
   const { run } = outcome
   // HTTP 200 자체는 "완전히 끝났다"는 증거가 아니다 - 실제 status 필드를 봐야 한다.
   const complete = run.status === 'COMPLETED'
+  // M17 프론트 고급화 - 완전 실패(FAILED/ABANDONED)와 부분 실패/응답 지연
+  // (PARTIAL_FAILURE/RUNNING)을 시각적으로 구분한다(경고 의미를 약화하지
+  // 않는다 - 둘 다 여전히 눈에 띄는 색이며, 완료만 중립으로 표시한다). 값
+  // 자체는 이미 서버가 돌려주는 run.status를 그대로 쓴다 - 새 상태를
+  // 지어내지 않는다.
+  const severity = complete ? null : run.status === 'FAILED' || run.status === 'ABANDONED' ? 'error' : 'warning'
   return (
-    <div className={complete ? 'status-banner' : 'status-banner status-banner--error'}>
+    <div className={severity ? `status-banner status-banner--${severity}` : 'status-banner'}>
       <p style={{ margin: 0 }}>
         {complete
           ? '메타데이터/권한 동기화가 완료됐습니다.'

@@ -657,13 +657,13 @@ export function ShareSettingsDialog(props: ShareSettingsDialogProps) {
 
 function ResultRow({ file, status }: { file: ShareTarget; status?: PerFileStatus }) {
   if (!status || status.kind === 'pending') {
-    return <span>{file.name} - 처리 중...</span>
+    return <span className="text-secondary">{file.name} - 처리 중...</span>
   }
   if (status.kind === 'success') {
-    return <span>{file.name} - 공유 완료</span>
+    return <span className="text-success">{file.name} - 공유 완료</span>
   }
   return (
-    <span className="text-secondary">
+    <span className="text-danger">
       {file.name} - {status.message}
     </span>
   )

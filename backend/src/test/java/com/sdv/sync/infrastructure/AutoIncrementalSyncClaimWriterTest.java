@@ -21,6 +21,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -129,7 +130,7 @@ class AutoIncrementalSyncClaimWriterTest {
         createCursor(sourceId, "cursor-1", clock.instant());
         completeInitialFullSync(sourceId);
         transactionTemplate.executeWithoutResult(status -> sourceSyncCursorJpaRepository
-                .markClaimedForAutoSync(List.of(sourceId), clock.instant().plusSeconds(3600)));
+                .markClaimedForAutoSync(List.of(sourceId), clock.instant().plusSeconds(3600), UUID.randomUUID()));
 
         List<Long> due = sourceSyncCursorJpaRepository.findDueForAutoIncrementalSync(1_000_000, clock.instant());
 
@@ -161,6 +162,30 @@ class AutoIncrementalSyncClaimWriterTest {
 
         assertThat(due).as("another RUNNING run already owns this source - do not attempt a second claim")
                 .doesNotContain(sourceId);
+    }
+
+    /**
+     * M17 후속 교정(A1) - 이전에는 Lease 만료 여부와 무관하게 RUNNING 행이 하나라도
+     * 있으면 무조건 제외했다 - 프로세스 중단으로 남은 만료 RUNNING은 어떤 수동 요청도
+     * 오지 않는 한 이 조회에서 영원히 제외되어, 기존 {@code
+     * SyncRunLifecycle.beginRun}의 회수(reapAbandoned) 경로에 도달할 기회조차 얻지
+     * 못했다. 이제 Lease가 이미 지난(만료된) RUNNING은 제외 대상이 아니다 - 실제 회수는
+     * 여전히 {@code beginRun}이 수행한다(이 조회는 그저 회수 "시도"조차 막지 않을
+     * 뿐이다).
+     */
+    @Test
+    void dueQueryIncludesASourceWithAnExpiredRunningRow() {
+        String owner = owner();
+        Long sourceId = createSource(owner, "ACTIVE", "GOOGLE_DRIVE");
+        createCursor(sourceId, "cursor-1", clock.instant().minusSeconds(120));
+        completeInitialFullSync(sourceId);
+        syncRunJpaRepository.saveAndFlush(
+                new SyncRunEntity(sourceId, "INCREMENTAL", clock.instant().minusSeconds(3600),
+                        clock.instant().minusSeconds(60))); // Lease가 60초 전에 이미 만료된 RUNNING
+
+        List<Long> due = sourceSyncCursorJpaRepository.findDueForAutoIncrementalSync(1_000_000, clock.instant());
+
+        assertThat(due).as("an expired (stale) RUNNING row must not block auto-recovery").contains(sourceId);
     }
 
     @Test
@@ -229,11 +254,12 @@ class AutoIncrementalSyncClaimWriterTest {
         Long sourceId = createSource(owner, "ACTIVE", "GOOGLE_DRIVE");
         createCursor(sourceId, "cursor-1", clock.instant().minusSeconds(120));
         completeInitialFullSync(sourceId);
-        writer.recordFailure(sourceId, 30_000L, 1800L);
+        UUID token = writer.claimDue(1_000_000, 30_000L).get(0).claimToken();
+        writer.recordFailure(sourceId, token, 30_000L, 1800L);
         assertThat(sourceSyncCursorJpaRepository.findBySourceId(sourceId).orElseThrow().getConsecutiveFailures())
                 .isEqualTo(1);
 
-        writer.recordSuccess(sourceId, 30_000L);
+        writer.recordSuccess(sourceId, token, 30_000L);
 
         SourceSyncCursorEntity reloaded = sourceSyncCursorJpaRepository.findBySourceId(sourceId).orElseThrow();
         assertThat(reloaded.getConsecutiveFailures()).isZero();
@@ -248,17 +274,71 @@ class AutoIncrementalSyncClaimWriterTest {
         completeInitialFullSync(sourceId);
         long pollIntervalMs = 30_000L; // 30초 base
         long maxBackoffSeconds = 100L; // 작게 잡아 Cap 도달을 직접 관찰한다
+        UUID token = writer.claimDue(1_000_000, pollIntervalMs).get(0).claimToken();
 
-        writer.recordFailure(sourceId, pollIntervalMs, maxBackoffSeconds); // failures=1 -> 30*2=60s
+        writer.recordFailure(sourceId, token, pollIntervalMs, maxBackoffSeconds); // failures=1 -> 30*2=60s
         assertThat(sourceSyncCursorJpaRepository.findBySourceId(sourceId).orElseThrow().getNextCheckAt())
                 .isEqualTo(clock.instant().plusSeconds(60));
 
-        writer.recordFailure(sourceId, pollIntervalMs, maxBackoffSeconds); // failures=2 -> 30*4=120s -> capped at 100
+        writer.recordFailure(sourceId, token, pollIntervalMs, maxBackoffSeconds); // failures=2 -> 30*4=120s -> capped at 100
         assertThat(sourceSyncCursorJpaRepository.findBySourceId(sourceId).orElseThrow().getNextCheckAt())
                 .as("backoff must never exceed the configured maximum")
                 .isEqualTo(clock.instant().plusSeconds(maxBackoffSeconds));
         assertThat(sourceSyncCursorJpaRepository.findBySourceId(sourceId).orElseThrow().getConsecutiveFailures())
                 .isEqualTo(2);
+    }
+
+    /**
+     * M17 후속 교정(A3) - 더 새로운 Claim(새 Token)이 이미 이 행을 재Claim한 뒤 도착한
+     * 오래된(Stale) 실행의 성공 보고는 그 새 Claim의 예약 상태를 덮어쓰지 못한다.
+     */
+    @Test
+    void staleRecordSuccessIsIgnoredWhenClaimTokenHasBeenSuperseded() {
+        String owner = owner();
+        Long sourceId = createSource(owner, "ACTIVE", "GOOGLE_DRIVE");
+        createCursor(sourceId, "cursor-1", clock.instant().minusSeconds(120));
+        completeInitialFullSync(sourceId);
+        UUID staleToken = writer.claimDue(1_000_000, 30_000L).get(0).claimToken();
+        // 더 새로운 Claim이 이미 이 행을 재Claim했다(새 Token, 다른 next_check_at) - 예를 들어
+        // 이전 Tick의 syncChanges 호출이 주기보다 오래 걸려 다음 Tick이 먼저 재Claim한 경우다.
+        Instant newerNextCheckAt = clock.instant().plusMillis(99_000L);
+        UUID newerToken = UUID.randomUUID();
+        transactionTemplate.executeWithoutResult(status -> sourceSyncCursorJpaRepository
+                .markClaimedForAutoSync(List.of(sourceId), newerNextCheckAt, newerToken));
+
+        // 오래된(Stale) 실행의 뒤늦은 성공 보고가 도착한다 - 옛 Token을 그대로 들고 있다.
+        writer.recordSuccess(sourceId, staleToken, 30_000L);
+
+        SourceSyncCursorEntity reloaded = sourceSyncCursorJpaRepository.findBySourceId(sourceId).orElseThrow();
+        assertThat(reloaded.getNextCheckAt())
+                .as("the stale success must not overwrite the newer claim's next_check_at")
+                .isEqualTo(newerNextCheckAt);
+        assertThat(reloaded.getClaimToken()).isEqualTo(newerToken);
+    }
+
+    /** M17 후속 교정(A3) - 위와 동일하되 실패 보고 경로(연속 실패 횟수 증가 포함)를 검증한다. */
+    @Test
+    void staleRecordFailureIsIgnoredWhenClaimTokenHasBeenSuperseded() {
+        String owner = owner();
+        Long sourceId = createSource(owner, "ACTIVE", "GOOGLE_DRIVE");
+        createCursor(sourceId, "cursor-1", clock.instant().minusSeconds(120));
+        completeInitialFullSync(sourceId);
+        UUID staleToken = writer.claimDue(1_000_000, 30_000L).get(0).claimToken();
+        Instant newerNextCheckAt = clock.instant().plusMillis(99_000L);
+        UUID newerToken = UUID.randomUUID();
+        transactionTemplate.executeWithoutResult(status -> sourceSyncCursorJpaRepository
+                .markClaimedForAutoSync(List.of(sourceId), newerNextCheckAt, newerToken));
+
+        writer.recordFailure(sourceId, staleToken, 30_000L, 1800L);
+
+        SourceSyncCursorEntity reloaded = sourceSyncCursorJpaRepository.findBySourceId(sourceId).orElseThrow();
+        assertThat(reloaded.getConsecutiveFailures())
+                .as("the stale failure must not increment the counter behind the newer claim's back")
+                .isZero();
+        assertThat(reloaded.getNextCheckAt())
+                .as("the stale failure must not overwrite the newer claim's next_check_at with a backoff value")
+                .isEqualTo(newerNextCheckAt);
+        assertThat(reloaded.getClaimToken()).isEqualTo(newerToken);
     }
 
     /**
@@ -273,11 +353,12 @@ class AutoIncrementalSyncClaimWriterTest {
         Long sourceId = createSource(owner, "ACTIVE", "GOOGLE_DRIVE");
         createCursor(sourceId, "cursor-1", clock.instant().minusSeconds(120));
         completeInitialFullSync(sourceId);
+        UUID token = writer.claimDue(1_000_000, 30_000L).get(0).claimToken();
 
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
-            Future<?> first = executor.submit(() -> writer.recordFailure(sourceId, 30_000L, 1800L));
-            Future<?> second = executor.submit(() -> writer.recordFailure(sourceId, 30_000L, 1800L));
+            Future<?> first = executor.submit(() -> writer.recordFailure(sourceId, token, 30_000L, 1800L));
+            Future<?> second = executor.submit(() -> writer.recordFailure(sourceId, token, 30_000L, 1800L));
             first.get(10, TimeUnit.SECONDS);
             second.get(10, TimeUnit.SECONDS);
         } finally {

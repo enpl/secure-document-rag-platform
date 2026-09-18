@@ -36,6 +36,17 @@ export function citationDownloadPath(value: string | null): string | null {
   return match ? `/shares/${match[1]}/download` : null
 }
 
+/**
+ * M17 프론트 고급화 - 답변 상태의 시각적 심각도(성공/부분/실패)를 한 곳에서
+ * 결정한다. 서버가 이미 돌려주는 `status`만 기준으로 삼는다(새 값을 지어내지
+ * 않는다) - `reasonCode`는 여전히 {@link describeRagOutcome}의 문구만 정한다.
+ */
+export function ragOutcomeSeverity(status: string): 'error' | 'warning' | 'info' {
+  if (status === 'REJECTED' || status === 'FAILED') return 'error'
+  if (status === 'PARTIAL' || status === 'NO_EVIDENCE' || status === 'CLARIFICATION_REQUIRED') return 'warning'
+  return 'info'
+}
+
 export function describeRagOutcome(status: string, reasonCode: string | null): string {
   const reasons: Record<string, string> = {
     POLICY_BYPASS: '권한이나 보안 정책을 우회하는 요청은 처리할 수 없습니다.',
