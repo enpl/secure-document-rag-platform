@@ -76,9 +76,9 @@ class RuntimeRoleGrantCallbackMissingRoleTest {
                 assertThat(rs.getBoolean("success")).isTrue();
                 versions.add(rs.getString("version"));
             }
-            // Clearance/audience 계약이 V013을 추가했다.
+            // 자동 증분 동기화 Scheduler Pacing 계약이 V014를 추가했다.
             assertThat(versions).containsExactly("001", "002", "003", "004", "005", "006", "007", "008", "009",
-                    "010", "011", "012", "013");
+                    "010", "011", "012", "013", "014");
 
             assertThat(st.executeQuery(
                             "SELECT count(*) FROM pg_roles WHERE rolname = 'sdv'").next())

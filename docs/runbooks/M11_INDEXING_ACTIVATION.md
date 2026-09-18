@@ -352,6 +352,62 @@ returning generated, cited answers instead of a `MODEL_UNAVAILABLE` failure
 for classifications the existing `ai_usage_policies` table already allows —
 no new endpoint was added.
 
+## M17 automatic incremental sync (multi-user-safe scheduler)
+
+A fourth independent switch, following exactly the same pattern as indexing
+and Assistant above. The 30-second automatic sync loop the Assistant section
+above explicitly said was **not** added is now implemented as
+`AutoIncrementalSyncScheduler` (`sdv.sync.auto-incremental.enabled`, default
+`false` in every profile). `-EnableAutoSync` is the only way to turn it on
+for the testbed, and it is completely independent of `-EnableIndexing`/
+`-EnableAssistant` — enabling one never enables another, and the launcher
+never infers activation from any inherited parent-shell environment variable
+(same `New-IsolatedEnvironment` stripping + explicit-switch-only convention
+as the other two gates, `scripts\testbed\_auto-sync-activation.ps1`).
+
+When enabled, the launcher sets exactly one existing `application.yml`
+placeholder on the isolated backend child process — no new configuration key
+was added, and no CLI-tunable poll interval/batch size/concurrency/backoff
+was exposed (those keep their existing `application.yml` defaults: 30s poll,
+batch 20, max-concurrent 3, max backoff 1800s):
+
+```
+SDV_SYNC_AUTO_INCREMENTAL_ENABLED=true
+```
+
+The scheduler only ever calls the existing, unchanged
+`IncrementalSyncService.syncChanges(sourceId, ownerSubject)` entry point — the
+same one `POST /api/sources/{id}/sync` already uses — for Google connections
+that are (1) `ACTIVE`, (2) already have a `source_sync_cursors` row, and (3)
+whose initial `FULL` sync actually ended `COMPLETED` (not `PARTIAL_FAILURE` or
+still-running). A connection whose first sync is incomplete, missing a
+cursor, or ended `PARTIAL_FAILURE` is never auto-promoted to eligible — it
+still needs an operator-triggered manual sync first. Enabling this switch
+does **not** enable the Outbox Publisher or Index Consumer (`-EnableIndexing`)
+or the Assistant (`-EnableAssistant`) — each stays its own explicit switch;
+without `-EnableIndexing`, the auto-synced metadata/permission changes still
+reach `outbox_events` (unchanged existing write path) but are never published
+to Kafka or indexed until that separate gate is also turned on.
+
+```powershell
+scripts\testbed\stop-testbed.ps1
+scripts\testbed\start-testbed.ps1 -EnableAutoSync
+```
+
+A restart is required either way — a running JVM cannot pick up new
+environment variables without one; this does not delete the testbed
+database, topic history, or embeddings.
+
+**What this correction did not verify (explicit).** No real Google Drive
+account, backend restart, or live 30-second cycle was executed during this
+offline implementation session — the behavior above runs for real only when
+an operator actually executes `start-testbed.ps1 -EnableAutoSync` against a
+connection that already has a genuinely `COMPLETED` initial sync. Whether any
+particular already-connected source (for example, one previously left in a
+`PARTIAL_FAILURE` state) is currently eligible is not asserted here — the
+operator should confirm the specific connection's own history before
+expecting it to start auto-syncing.
+
 ## Backfilling already-published shares
 
 Any `document_shares` row created **before** the consumer was ever enabled
