@@ -2,6 +2,7 @@ package com.sdv.sync.infrastructure;
 
 import com.sdv.sync.application.IncrementalSyncService;
 import com.sdv.sync.application.SyncAlreadyRunningException;
+import com.sdv.sync.infrastructure.persistence.entity.SyncRunEntity;
 import com.sdv.source.application.port.SourceSyncException;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -115,11 +116,33 @@ public class AutoIncrementalSyncScheduler {
         }
     }
 
-    /** 패키지 전용 - Test가 개별 Source 처리(SyncAlreadyRunningException/NOT_FOUND/일반 실패 분기)를 직접 통제해 검증하기 위함. */
+    /**
+     * 패키지 전용 - Test가 개별 Source 처리(SyncAlreadyRunningException/NOT_FOUND/일반
+     * 실패/부분 실패 분기)를 직접 통제해 검증하기 위함.
+     *
+     * <h2>M17 후속 교정 - Run의 실제 종결 상태를 확인한다</h2>
+     * <p>{@code syncChanges}는 예외 없이도 {@code PARTIAL_FAILURE}나 {@code
+     * ABANDONED}(자신의 Lease가 실행 도중 만료됨, {@code
+     * SyncRunLifecycle#finishRun} 참고)로 끝난 {@link SyncRunEntity}를 반환할 수
+     * 있다 - 이전에는 예외만 없으면 무조건 {@link
+     * AutoIncrementalSyncClaimWriter#recordSuccess}를 불러 연속 실패 횟수를
+     * 0으로 재설정했다. 이제 반환된 Run의 실제 {@code status}를 확인해 {@code
+     * COMPLETED}일 때만 성공으로 기록하고, 그 밖({@code PARTIAL_FAILURE}/{@code
+     * ABANDONED})은 예외 경로와 동일한 상한 있는 지수 Backoff로 처리한다 -
+     * 지속적인 부분 실패가 정상 성공으로 기록되거나 빠른 고정 주기로 무한
+     * 반복되지 않는다.</p>
+     */
     void processOne(AutoIncrementalSyncClaimWriter.ClaimedSource source) {
         try {
-            incrementalSyncService.syncChanges(source.sourceId(), source.ownerSubject());
-            writer.recordSuccess(source.sourceId(), properties.pollIntervalMs());
+            SyncRunEntity run = incrementalSyncService.syncChanges(source.sourceId(), source.ownerSubject());
+            if (SyncRunEntity.STATUS_COMPLETED.equals(run.getStatus())) {
+                writer.recordSuccess(source.sourceId(), source.claimToken(), properties.pollIntervalMs());
+            } else {
+                log.info("auto-incremental sync did not complete cleanly, sourceId={}, status={}", source.sourceId(),
+                        run.getStatus());
+                writer.recordFailure(source.sourceId(), source.claimToken(), properties.pollIntervalMs(),
+                        properties.maxBackoffSeconds());
+            }
         } catch (SyncAlreadyRunningException alreadyRunning) {
             // 다른 실행(수동/ACL/다른 Instance)이 이미 이 Source의 실행권을 쥐고 있다 - 무해하다,
             // 이미 Claim 시점에 다음 주기로 밀어 둔 next_check_at을 그대로 둔다(Backoff 아님).
@@ -133,11 +156,13 @@ public class AutoIncrementalSyncScheduler {
             }
             log.warn("auto-incremental sync failed, sourceId={}, reason={}", source.sourceId(),
                     syncFailure.getReason());
-            writer.recordFailure(source.sourceId(), properties.pollIntervalMs(), properties.maxBackoffSeconds());
+            writer.recordFailure(source.sourceId(), source.claimToken(), properties.pollIntervalMs(),
+                    properties.maxBackoffSeconds());
         } catch (RuntimeException unexpected) {
             log.warn("auto-incremental sync failed, sourceId={}, class={}", source.sourceId(),
                     unexpected.getClass().getSimpleName());
-            writer.recordFailure(source.sourceId(), properties.pollIntervalMs(), properties.maxBackoffSeconds());
+            writer.recordFailure(source.sourceId(), source.claimToken(), properties.pollIntervalMs(),
+                    properties.maxBackoffSeconds());
         }
     }
 

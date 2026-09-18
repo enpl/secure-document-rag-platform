@@ -1,0 +1,21 @@
+-- M17 후속 교정(다중 사용자 환경 안전성 결함 3건) - 자동 증분 동기화 Scheduler
+-- 완료 기록(next_check_at/consecutive_failures)의 Claim 소유권 Fencing.
+--
+-- V001~V014는 Immutable이다 - 이 Migration은 새 Column만 추가한다(CLAUDE.md
+-- Flyway Migration Immutability). V014(source_sync_cursors.next_check_at/
+-- consecutive_failures)는 이 Migration 이전에 이미 이 작업 트리에 존재하는
+-- 것으로 취급한다 - 다시 고치지 않는다.
+--
+-- ============================================================
+-- source_sync_cursors: Claim 소유권 Fencing Token
+--
+-- AutoIncrementalSyncClaimWriter.claimDue 한 번의 호출로 함께 Claim된 모든
+-- 행은 같은 claim_token(UUID)을 받는다. 이후 recordSuccess/recordFailure는
+-- source_id뿐 아니라 이 claim_token까지 정확히 일치해야만 적용된다 - 오래
+-- 걸린(느린) 이전 Tick의 syncChanges 호출이 그 사이 새로 Claim(새 Token)된
+-- 뒤늦게 도착해도, 그 완료 결과가 새 Claim의 next_check_at/consecutive_failures
+-- 를 덮어쓰지 못한다(0행 영향, 조용한 No-op) - 기존 outbox_events.claim_token
+-- (V009)과 정확히 같은 근거·같은 패턴이다.
+-- ============================================================
+ALTER TABLE source_sync_cursors
+    ADD COLUMN claim_token UUID;

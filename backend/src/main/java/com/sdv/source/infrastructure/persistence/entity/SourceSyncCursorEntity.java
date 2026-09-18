@@ -6,6 +6,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * F-BE-034 (M09A 신규). {@code source_sync_cursors}(V001)의 JPA Persistence
@@ -46,6 +47,13 @@ public class SourceSyncCursorEntity {
     @Column(name = "consecutive_failures", nullable = false)
     private int consecutiveFailures;
 
+    // M17 후속 교정(V015) - AutoIncrementalSyncClaimWriter.claimDue가 매 Claim마다 새로
+    // 부여하는 소유권 Fencing Token. recordSuccess/recordFailure는 이 값이 정확히
+    // 일치할 때만 적용된다 - 뒤늦게 도착한 이전 Claim의 완료 결과가 새 Claim의 상태를
+    // 덮어쓰지 못하게 한다(outbox_events.claim_token과 동일한 근거).
+    @Column(name = "claim_token")
+    private UUID claimToken;
+
     protected SourceSyncCursorEntity() {
         // JPA
     }
@@ -76,6 +84,10 @@ public class SourceSyncCursorEntity {
 
     public int getConsecutiveFailures() {
         return consecutiveFailures;
+    }
+
+    public UUID getClaimToken() {
+        return claimToken;
     }
 
     /** 같은 Row(Source)를 새 Page Token/시각으로 전진시킨다 - 새 행을 만들지 않는다. */

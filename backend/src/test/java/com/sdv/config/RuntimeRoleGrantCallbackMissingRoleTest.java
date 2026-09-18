@@ -76,9 +76,9 @@ class RuntimeRoleGrantCallbackMissingRoleTest {
                 assertThat(rs.getBoolean("success")).isTrue();
                 versions.add(rs.getString("version"));
             }
-            // 자동 증분 동기화 Scheduler Pacing 계약이 V014를 추가했다.
+            // 자동 증분 동기화 Scheduler Claim Fencing 계약이 V015를 추가했다.
             assertThat(versions).containsExactly("001", "002", "003", "004", "005", "006", "007", "008", "009",
-                    "010", "011", "012", "013", "014");
+                    "010", "011", "012", "013", "014", "015");
 
             assertThat(st.executeQuery(
                             "SELECT count(*) FROM pg_roles WHERE rolname = 'sdv'").next())

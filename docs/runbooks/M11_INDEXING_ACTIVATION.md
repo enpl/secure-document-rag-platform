@@ -378,11 +378,30 @@ SDV_SYNC_AUTO_INCREMENTAL_ENABLED=true
 The scheduler only ever calls the existing, unchanged
 `IncrementalSyncService.syncChanges(sourceId, ownerSubject)` entry point — the
 same one `POST /api/sources/{id}/sync` already uses — for Google connections
-that are (1) `ACTIVE`, (2) already have a `source_sync_cursors` row, and (3)
-whose initial `FULL` sync actually ended `COMPLETED` (not `PARTIAL_FAILURE` or
-still-running). A connection whose first sync is incomplete, missing a
-cursor, or ended `PARTIAL_FAILURE` is never auto-promoted to eligible — it
-still needs an operator-triggered manual sync first. Enabling this switch
+that are (1) `ACTIVE`, (2) already have a `source_sync_cursors` row, (3) whose
+initial `FULL` sync actually ended `COMPLETED` (not `PARTIAL_FAILURE` or
+still-running), and (4) whose current `RUNNING` row (if any) still holds a
+healthy, unexpired lease — a `RUNNING` row left behind by a crashed process
+(lease already expired) does **not** block eligibility; the existing
+`SyncRunLifecycle.beginRun` recovery path (`reapAbandoned`) still runs the
+first time anything (manual, ACL-only, or this scheduler) actually attempts
+that source again. A connection whose first sync is incomplete, missing a
+cursor, or ended `PARTIAL_FAILURE` is never auto-promoted to eligible.
+
+**A connection whose only `FULL` run ended `PARTIAL_FAILURE` currently has no
+supported recovery path once a cursor already exists.** `POST
+/api/sources/{id}/sync` (`SourceSyncService.sync`) always picks `INCREMENTAL`
+whenever a `source_sync_cursors` row exists, regardless of the FULL run's own
+status — it never re-attempts a fresh `FULL` scan. The only method that starts
+a `FULL` run (`SourceSyncService.startInitialSync`) is not wired to any
+controller endpoint. Do not tell an operator that "running manual sync once"
+will turn a `PARTIAL_FAILURE` initial sync into `COMPLETED` — it will not; it
+only resumes the existing (already-partial) incremental catch-up from
+wherever the cursor last safely committed. A dedicated resync/recovery
+endpoint was out of scope for this correction and was not added; this gap is
+recorded in `docs/plan/SDV_MVP_DEFERRED.md`.
+
+Enabling this switch
 does **not** enable the Outbox Publisher or Index Consumer (`-EnableIndexing`)
 or the Assistant (`-EnableAssistant`) — each stays its own explicit switch;
 without `-EnableIndexing`, the auto-synced metadata/permission changes still
@@ -397,6 +416,23 @@ scripts\testbed\start-testbed.ps1 -EnableAutoSync
 A restart is required either way — a running JVM cannot pick up new
 environment variables without one; this does not delete the testbed
 database, topic history, or embeddings.
+
+**2026-09-18 후속 교정(다중 사용자 환경 안전성 결함 3건, Migration V015).** 세 가지 결함을
+최소 수정했다: (1) 대상 조회가 건강한 `RUNNING`만 제외하도록 좁혀, 프로세스 중단으로 남은
+만료 `RUNNING` 행이 기존 `beginRun`의 회수(`reapAbandoned`) 경로에 도달하지 못하고 영원히
+막히던 문제를 해소했다(새 회수 로직을 만들지 않음, 기존 V008/V009를 그대로 재사용). (2)
+`AutoIncrementalSyncScheduler.processOne`이 이제 `syncChanges`가 반환한 실제 `SyncRunEntity`의
+상태를 확인해 `COMPLETED`일 때만 성공으로 기록하고, `PARTIAL_FAILURE`/`ABANDONED`는 예외
+경로와 동일한 상한 있는 지수 Backoff로 처리한다(이전에는 예외만 없으면 무조건 성공으로
+기록해 지속적인 부분 실패가 연속 실패 횟수를 계속 0으로 재설정했다). (3) `source_sync_cursors`에
+`claim_token`(V015, UUID)을 추가해, 매 Claim마다 새 Token을 부여하고 완료 기록
+(`recordSuccess`/`recordFailure`)이 그 Token과 정확히 일치할 때만 적용되게 했다 - 오래
+걸린 이전 Tick의 뒤늦은 완료 보고가 그 사이 새로 Claim된 상태(`next_check_at`/
+`consecutive_failures`)를 덮어쓰지 못한다(기존 `outbox_events.claim_token`과 동일한 패턴
+재사용). 실제 Testcontainers PostgreSQL 기준 6개 신규 테스트(만료 RUNNING 포함/제외, 회수된
+Run에 대한 실제 동시 두 번째 시도 거부, PARTIAL_FAILURE의 Backoff 처리, 오래된 성공/실패
+보고 무시 2건)로 검증했다. 자동 동기화는 여전히 기본 OFF이며 이 교정 세션에서 live 활성화는
+하지 않았다.
 
 **What this correction did not verify (explicit).** No real Google Drive
 account, backend restart, or live 30-second cycle was executed during this

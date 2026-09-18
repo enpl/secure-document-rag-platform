@@ -74,8 +74,8 @@ class RuntimeRoleGrantCallbackTest {
                 .locations("classpath:db/migration")
                 .load();
         MigrateResult firstResult = migrationOnly.migrate();
-        // 자동 증분 동기화 Scheduler Pacing 계약이 V014를 추가했다 - V001~V014 = 14개.
-        assertThat(firstResult.migrationsExecuted).isEqualTo(14);
+        // 자동 증분 동기화 Scheduler Claim Fencing 계약이 V015를 추가했다 - V001~V015 = 15개.
+        assertThat(firstResult.migrationsExecuted).isEqualTo(15);
 
         // 2. sdv 역할 생성 (기존 DB에 대한 수동 Reconciliation 단계).
         try (Connection root = rootConnection(); Statement st = root.createStatement()) {
